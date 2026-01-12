@@ -46,7 +46,3 @@ See instructions in the [project folder](barlow_track/barlow_project_template/RE
 This is organized via the sibling repository: [wbfm](https://github.com/Zimmer-lab/wbfm).
 
 The main instructions are found here: [Running the full pipeline](https://github.com/Zimmer-lab/wbfm/blob/main/docs/running_the_pipeline.md).
-
-
-# Citation
-

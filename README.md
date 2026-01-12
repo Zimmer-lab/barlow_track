@@ -1,5 +1,18 @@
 # BarlowTrack
-Using a modification of Barlow Twins (self-supervised learning) to track single-cell resolution microscopy data, specifically designed for C. elegans neurons.
+Using a modification of Barlow Twins (self-supervised learning) to track single-cell resolution microscopy data, specifically designed for _C. elegans_ neurons.
+Please cite the preprint if you use this work:
+
+```
+@article{fieseler2025barlowtrack,
+  title={BarlowTrack: A Self-Supervised Framework for Zero-Shot Multi-Object Cell Tracking},
+  author={Fieseler, Charles and Lev, Itamar and Madhusudhanan, Jalaja and Zhai, Zihao and Schwartz, Siegfried and Zimmer, Manuel},
+  journal={bioRxiv},
+  pages={2025--11},
+  year={2025},
+  publisher={Cold Spring Harbor Laboratory}
+}
+```
+
 
 ## Installation
 
@@ -37,4 +50,3 @@ The main instructions are found here: [Running the full pipeline](https://github
 
 # Citation
 
-Coming soon!

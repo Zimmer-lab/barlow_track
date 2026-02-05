@@ -11,7 +11,7 @@ from wbfm.utils.projects.finished_project_data import ProjectData
 
 @pytest.fixture
 def barlow_model_path():
-    return "/lisc/scratch/neurobiology/zimmer/wbfm/TrainedBarlow/barlow_ZIM2165_Gcamp7b_worm1-2022_11_28_from_search/trial_13/resnet50.pth"
+    return "/lisc/data/scratch/neurobiology/zimmer/wbfm/TrainedBarlow/barlow_ZIM2165_Gcamp7b_worm1-2022_11_28_from_search/trial_13/resnet50.pth"
 
 # Load a real dataset for testing
 @pytest.fixture

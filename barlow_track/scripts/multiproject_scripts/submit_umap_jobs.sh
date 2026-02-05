@@ -1,7 +1,7 @@
 #!/bin/bash
 
-ZARR_PATH="/lisc/scratch/neurobiology/zimmer/schwartz/traces_harvard_flip/2025_07_30trial_8/3-tracking/barlow_tracker/embedding.zarr"
-OUT_DIR="/lisc/scratch/neurobiology/zimmer/schwartz/traces_harvard_flip/2025_07_30trial_8/"
+ZARR_PATH="/lisc/data/scratch/neurobiology/zimmer/schwartz/traces_harvard_flip/2025_07_30trial_8/3-tracking/barlow_tracker/embedding.zarr"
+OUT_DIR="/lisc/data/scratch/neurobiology/zimmer/schwartz/traces_harvard_flip/2025_07_30trial_8/"
 
 for n_neighbors in 5 15 30
 do

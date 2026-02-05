@@ -63,7 +63,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     with open(fname, 'r') as f:
         baseline_params = yaml.safe_load(f)
     if DEBUG:
-        experiment_parent_folder = '/lisc/scratch/neurobiology/zimmer/wbfm/TrainedBarlow/hyperparameter_search_debug'
+        experiment_parent_folder = '/lisc/data/scratch/neurobiology/zimmer/wbfm/TrainedBarlow/hyperparameter_search_debug'
         baseline_params['wandb_name'] = 'barlow-hyperparameter-search-debug'
         baseline_params['num_frames'] = 20
         baseline_params['epochs'] = 2

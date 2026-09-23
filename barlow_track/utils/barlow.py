@@ -389,6 +389,9 @@ def load_barlow_model(model_fname):
     if model_type == 'superglue':
         from barlow_track.utils.barlow_superglue import BarlowSuperGlue
         model = BarlowSuperGlue(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
+    elif model_type == 'attention':
+        from barlow_track.utils.barlow_superglue import BarlowVolumeAttention
+        model = BarlowVolumeAttention(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
     elif model_type == 'position':
         from barlow_track.utils.barlow_superglue import BarlowWithPosition
         model = BarlowWithPosition(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)

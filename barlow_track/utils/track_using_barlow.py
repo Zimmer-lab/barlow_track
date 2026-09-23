@@ -479,7 +479,7 @@ def embed_volumes_with_position(gpu, model, project_data, frame_indices, target_
 
     Uses the VolumeCoordsDataset plumbing (centroids + direct crop extraction,
     no augmentation) and a position-aware model (BarlowWithPosition or
-    BarlowSuperGlue). Returns (embeddings_by_frame, seg_ids_by_frame):
+    BarlowVolumeAttention). Returns (embeddings_by_frame, seg_ids_by_frame):
     {t: (N_t, D) array} and {t: (N_t,) raw segmentation ids}.
 
     For legacy BarlowTwins3d checkpoints use embed_using_barlow() instead.

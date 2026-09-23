@@ -14,7 +14,7 @@ from ruamel.yaml import YAML
 
 from barlow_track.utils.barlow import BarlowTwins3d, load_barlow_model
 from barlow_track.utils.barlow_lightning import NeuronCropImageDataModule
-from barlow_track.utils.barlow_superglue import BarlowSuperGlue, BarlowWithPosition
+from barlow_track.utils.barlow_superglue import BarlowVolumeAttention, BarlowWithPosition
 from barlow_track.utils.barlow_visualize import visualize_model_performance
 from barlow_track.utils.siamese import ResidualEncoder3D
 
@@ -32,7 +32,12 @@ def train_barlow_network(args):
     print("Preparing cropped volumes...")
     target_sz = np.array([args.target_sz_z, args.target_sz_xy, args.target_sz_xy])
     use_position = getattr(args, 'use_position', False)
-    use_gnn = getattr(args, 'use_gnn', False)
+    use_attention = getattr(args, 'use_attention', False)
+    if getattr(args, 'use_gnn', False):
+        raise ValueError("use_gnn was removed: pair-only matching has no inference path. "
+                         "Use use_attention (BarlowVolumeAttention) instead.")
+    # Attention models need coordinates even if use_position was left false
+    use_position = use_position or use_attention
     if use_position:
         from barlow_track.utils.volume_data import VolumeCoordsDataModule
         data_module = VolumeCoordsDataModule(
@@ -71,9 +76,9 @@ def train_barlow_network(args):
         except TypeError:
             user_args = dict()
         backbone_kwargs = dict(in_channels=1, num_levels=user_args.get('num_levels', 2), f_maps=user_args.get('f_maps', 4), crop_sz=target_sz)
-        if use_gnn:
-            args.model_type = 'superglue'
-            model = BarlowSuperGlue(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
+        if use_attention:
+            args.model_type = 'attention'
+            model = BarlowVolumeAttention(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
         elif use_position:
             args.model_type = 'position'
             model = BarlowWithPosition(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)

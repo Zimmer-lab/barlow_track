@@ -29,6 +29,6 @@ hyperparameters:
     type: choice
     values: [true]
 
-  - name: use_gnn
+  - name: use_attention
     type: choice
     values: [true]

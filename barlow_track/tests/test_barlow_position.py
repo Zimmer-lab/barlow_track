@@ -1,4 +1,6 @@
-"""Unit tests for BarlowWithPosition (Step 2) and BarlowSuperGlue (Step 3).
+"""Unit tests for BarlowWithPosition (fusion+norm) and BarlowVolumeAttention
+(intra-volume self-attention). BarlowSuperGlue is a stub (pair-only matching
+has no inference path) and is only checked for load/raise behavior.
 
 Synthetic data + tiny backbone: fast on CPU, no test project needed.
 Run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest barlow_track/tests/test_barlow_position.py -q --assert=plain
@@ -8,7 +10,12 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from barlow_track.utils.barlow_superglue import BarlowSuperGlue, BarlowWithPosition, both_correlation_matrices
+from barlow_track.utils.barlow_superglue import (
+    BarlowSuperGlue,
+    BarlowVolumeAttention,
+    BarlowWithPosition,
+    both_correlation_matrices,
+)
 from barlow_track.utils.siamese import ResidualEncoder3D
 
 
@@ -21,9 +28,6 @@ def _args(**overrides):
         lambd_obj=0.5,
         fusion='add',
         keypoint_encoder_layers=[16, 32],
-        gnn_layers=['self', 'cross'],
-        match_loss_weight=1.0,
-        sinkhorn_iterations=5,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -70,6 +74,18 @@ def test_fusion_concat_shapes(batch):
     assert torch.isfinite(loss)
 
 
+def test_encode_position_single_detection_falls_back(batch):
+    y1, _, k1, _ = batch
+    model = BarlowWithPosition(_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    model.eval()
+    with torch.no_grad():
+        z = model.encode_position(k1[:1])
+        assert z.shape == (1, 16)
+        assert torch.allclose(z, torch.zeros_like(z))  # visual-only fallback, no crash
+        fused = model.fused_descriptors(y1[:1], k1[:1])
+        assert torch.allclose(fused, model.backbone(y1[:1]))
+
+
 def test_position_changes_embedding(batch):
     y1, _, k1, _ = batch
     model = BarlowWithPosition(_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
@@ -90,23 +106,97 @@ def test_explicit_scores(batch):
     assert torch.isfinite(loss)
 
 
-def test_superglue_forward_backward(batch):
+def test_superglue_stub_loads_but_forward_raises(batch):
+    # Pair-only matching has no inference path: the class exists only so old
+    # checkpoints still load. Instantiation is fine; forward() must refuse.
     y1, y2, k1, k2 = batch
     model = BarlowSuperGlue(_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
-    total, lo, lt, lm = model(y1, y2, k1, k2)
-    for v in (total, lo, lt, lm):
-        assert torch.isfinite(v)
-    total.backward()
-    assert model.gnn.layers[0].attn.merge.weight.grad is not None
+    with pytest.raises(NotImplementedError):
+        model(y1, y2, k1, k2)
 
 
-def test_superglue_match_scores_shape(batch):
+def _attn_args(**overrides):
+    base = dict(self_layers=2)
+    base.update(overrides)
+    return _args(**base)
+
+
+def test_fusion_norm_balances_branches(batch):
     y1, _, k1, _ = batch
-    model = BarlowSuperGlue(_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    plain = BarlowWithPosition(_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    normed = BarlowWithPosition(_args(fusion_norm='layernorm'), backbone=ResidualEncoder3D,
+                                **_backbone_kwargs())
+    plain.eval()
+    normed.eval()
+    with torch.no_grad():
+        v = plain.backbone(y1)
+        p = plain.encode_position(k1)
+        gap_plain = p.std() / v.std()
+        vn = normed.norm_visual(v)
+        pn = normed.norm_pos(p)
+        gap_normed = pn.std() / vn.std()
+    assert gap_plain > 5.0  # documents the untrained scale mismatch
+    assert 0.5 < gap_normed < 2.0  # layernorm balances the streams
+
+
+def test_fusion_norm_invalid_kind(batch):
+    with pytest.raises(ValueError):
+        BarlowWithPosition(_args(fusion_norm='bogus'), backbone=ResidualEncoder3D, **_backbone_kwargs())
+
+
+def test_contextualize_is_permutation_equivariant(batch):
+    y1, _, k1, _ = batch
+    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    model.eval()
+    perm = torch.randperm(6)
+    with torch.no_grad():
+        d = model.fused_descriptors(y1, k1)
+        c1 = model.contextualize(d)
+        c2 = model.contextualize(d[perm])
+    assert torch.allclose(c2, c1[perm], atol=1e-5)
+
+
+def test_contextualize_spreads_perturbation(batch):
+    # Self-attention mixes neurons: moving one keypoint changes OTHERS' embeddings.
+    # (Plain MLP fusion also leaks slightly via InstanceNorm stats; attention mixes directly.)
+    y1, _, k1, _ = batch
+    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
     model.eval()
     with torch.no_grad():
         d = model.fused_descriptors(y1, k1)
-        scores = model.calculate_match_scores(d, d)
-    assert scores.shape == (1, 7, 7)  # N=6 + dustbin
-    idx0, _, ms0, _ = model.matches_from_scores(scores)
-    assert idx0.shape == (6,) and ms0.shape == (6,)
+        c_base = model.contextualize(d)
+        k_pert = k1.clone()
+        k_pert[0] += 1.0
+        c_pert = model.contextualize(model.fused_descriptors(y1, k_pert))
+    others_changed = ~torch.isclose(c_base[1:], c_pert[1:], atol=1e-5).all(dim=1)
+    assert others_changed.any()
+
+
+def test_contextualize_single_passthrough(batch):
+    y1, _, k1, _ = batch
+    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    model.eval()
+    with torch.no_grad():
+        d = model.fused_descriptors(y1[:1], k1[:1])
+        assert torch.allclose(model.contextualize(d), d)  # no crash, no-op
+
+
+def test_attention_forward_backward(batch):
+    y1, y2, k1, k2 = batch
+    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    loss, lo, lt = model(y1, y2, k1, k2)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert model.self_gnn.layers[0].attn.merge.weight.grad is not None
+
+
+def test_attention_zero_self_layers_is_plain_fusion(batch):
+    y1, y2, k1, k2 = batch
+    torch.manual_seed(0)
+    a = BarlowVolumeAttention(_attn_args(self_layers=0), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    torch.manual_seed(0)
+    b = BarlowWithPosition(_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    a.eval()
+    b.eval()
+    with torch.no_grad():
+        assert torch.allclose(a.embed_with_position(y1, k1), b.embed_with_position(y1, k1))

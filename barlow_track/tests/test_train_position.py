@@ -14,7 +14,7 @@ import torch
 from test_step0_embed_and_augment import PROJECT_PATH, requires_project
 
 
-def _smoke_args(project_dir, use_gnn):
+def _smoke_args(project_dir, kind):
     return SimpleNamespace(
         project_path=PROJECT_PATH,
         project_dir=str(project_dir),
@@ -28,12 +28,11 @@ def _smoke_args(project_dir, use_gnn):
         target_sz_z=4,
         target_sz_xy=16,
         use_position=True,
-        use_gnn=use_gnn,
+        use_attention=kind == 'attention',
         fusion='add',
+        fusion_norm='layernorm' if kind == 'attention' else 'none',
+        self_layers=1,
         keypoint_encoder_layers=[16, 32],
-        gnn_layers=['self', 'cross'],
-        match_loss_weight=1.0,
-        sinkhorn_iterations=5,
         global_augment=dict(p_global_affine=1.0, max_degrees_z=30.0),
         crop_photometric=dict(p_blur=0.0, p_noise=0.0),
         lambd=0.0051,
@@ -51,22 +50,23 @@ def _smoke_args(project_dir, use_gnn):
     )
 
 
-def _run_smoke(tmp_path, use_gnn):
+def _run_smoke(tmp_path, kind):
     from barlow_track.scripts.train_barlow_clusterer import train_barlow_network
 
     for sub in ('checkpoints', 'log'):
         (Path(tmp_path) / sub).mkdir(parents=True, exist_ok=True)
-    args = _smoke_args(tmp_path, use_gnn)
+    args = _smoke_args(tmp_path, kind)
     test_losses = train_barlow_network(args)
     assert np.isfinite(test_losses['test_loss'])
     assert (Path(tmp_path) / 'resnet50.pth').exists()
     assert (Path(tmp_path) / 'args.pickle').exists()
-    assert getattr(args, 'model_type') == ('superglue' if use_gnn else 'position')
+    assert getattr(args, 'model_type') == kind
 
     # Saved checkpoints reload as the right class (load_barlow_model dispatch)
     from barlow_track.utils.barlow import load_barlow_model
     _, reloaded, _ = load_barlow_model(str(Path(tmp_path) / 'resnet50.pth'))
-    expected_cls = 'BarlowSuperGlue' if use_gnn else 'BarlowWithPosition'
+    expected_cls = {'attention': 'BarlowVolumeAttention',
+                    'position': 'BarlowWithPosition'}[kind]
     assert type(reloaded).__name__ == expected_cls
     return args
 
@@ -74,13 +74,13 @@ def _run_smoke(tmp_path, use_gnn):
 @requires_project
 @pytest.mark.slow
 def test_train_position_smoke(tmp_path):
-    _run_smoke(tmp_path, use_gnn=False)
+    _run_smoke(tmp_path, kind='position')
 
 
 @requires_project
 @pytest.mark.slow
-def test_train_superglue_smoke(tmp_path):
-    _run_smoke(tmp_path, use_gnn=True)
+def test_train_attention_smoke(tmp_path):
+    _run_smoke(tmp_path, kind='attention')
 
 
 @requires_project
@@ -92,7 +92,7 @@ def test_embed_volumes_with_position(tmp_path):
     from wbfm.utils.projects.finished_project_data import ProjectData
 
     project_data = ProjectData.load_final_project_data(PROJECT_PATH, allow_hybrid_loading=True)
-    args = _smoke_args(tmp_path, use_gnn=False)
+    args = _smoke_args(tmp_path, kind='position')
     target_sz = np.array([args.target_sz_z, args.target_sz_xy, args.target_sz_xy])
     kwargs = dict(in_channels=1, num_levels=2, f_maps=2, crop_sz=target_sz)
     model = BarlowWithPosition(args, backbone=ResidualEncoder3D, **kwargs)

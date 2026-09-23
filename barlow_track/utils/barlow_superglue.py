@@ -1,21 +1,30 @@
 """Position-aware Barlow models: visual + SuperGlue-style position fusion, optional GNN matching.
 
 Step 2 - BarlowWithPosition:
-    crop --backbone--> visual desc --+
-                                     +--> fuse (add | concat+MLP) --> projector --> Barlow loss
-    kpts --KeypointEncoder--> pos desc -+
+    crop --backbone--> visual desc --norm--+
+                                           +--> fuse (add | concat+MLP) --> projector --> Barlow loss
+    kpts --KeypointEncoder--> pos desc --norm--+
 
-    Trained with the SAME two-view Barlow loss as BarlowTwins3d, except the two
-    views come from VolumeCoordsDataset (global-before-crop augmentation) and
-    carry augmentation-consistent normalized keypoints.
+    Per-branch normalization (fusion_norm: none | layernorm | l2, default none
+    for checkpoint back-compat) lets training balance the two streams instead
+    of freezing in a scale by hand. Trained with the SAME two-view Barlow loss
+    as BarlowTwins3d, except the two views come from VolumeCoordsDataset
+    (global-before-crop augmentation) with augmentation-consistent keypoints.
 
-Step 3 - BarlowSuperGlue (extends fusion):
-    fused descs --AttentionalGNN--> final_proj --> Sinkhorn scores --> NLL
-    identity-match loss (two views show the same neurons in the same order).
-    Total = barlow_loss + match_loss_weight * match_loss.
+Attention variant - BarlowVolumeAttention (extends fusion):
+    fused descs --intra-volume self-attention--> contextualized descs --> projector
+    Self-attention runs WITHIN one volume, so contextualize() yields a genuine
+    per-neuron embedding from a single frame (usable at inference), unlike the
+    cross-volume matching below which is inherently pair-dependent.
+
+Step 3 - BarlowSuperGlue: STUB, intentionally not used. Pair-only
+    cross-volume matching has no inference path (tracking embeds one volume
+    at a time), so only the intra-volume attention above is implemented for
+    real. The stub class exists so old 'superglue' checkpoints still load;
+    its forward() raises.
 
 Legacy BarlowTwins3d is untouched; all new behavior is opt-in via
-use_position / use_gnn training flags.
+use_position / use_attention training flags.
 """
 import torch
 from torch import nn
@@ -42,22 +51,51 @@ def both_correlation_matrices(z1, z2):
     return c_features, c_objects
 
 
+class L2Normalize(nn.Module):
+    """Unit-norm over the feature dim (per neuron)."""
+
+    def forward(self, x):
+        return x / x.norm(dim=1, keepdim=True).clamp_min(1e-6)
+
+
+def _make_norm(kind, dim):
+    if kind in (None, 'none'):
+        return nn.Identity()
+    if kind == 'layernorm':
+        return nn.LayerNorm(dim)
+    if kind == 'l2':
+        return L2Normalize()
+    raise ValueError(f"Unknown fusion_norm '{kind}'; use 'none', 'layernorm' or 'l2'")
+
+
 class BarlowWithPosition(BarlowTwins3d):
     """BarlowTwins3d + KeypointEncoder position fusion (Step 2)."""
 
-    def __init__(self, args, backbone=Siamese, fusion=None, keypoint_layers=None, **backbone_kwargs):
+    def __init__(self, args, backbone=Siamese, fusion=None, keypoint_layers=None,
+                 fusion_norm=None, **backbone_kwargs):
         super().__init__(args, backbone=backbone, **backbone_kwargs)
         embedding_dim = args.embedding_dim
+        self.embedding_dim = embedding_dim
         self.fusion = fusion or getattr(args, 'fusion', 'add')
+        self.fusion_norm = fusion_norm or getattr(args, 'fusion_norm', 'none')
         layers = keypoint_layers or list(getattr(args, 'keypoint_encoder_layers', [32, 64]))
         self.kenc = KeypointEncoder(embedding_dim, layers)
+        self.norm_visual = _make_norm(self.fusion_norm, embedding_dim)
+        self.norm_pos = _make_norm(self.fusion_norm, embedding_dim)
         if self.fusion == 'concat':
             self.fuse_mlp = nn.Sequential(nn.Linear(2 * embedding_dim, embedding_dim), nn.ReLU())
         elif self.fusion != 'add':
             raise ValueError(f"Unknown fusion '{self.fusion}'; use 'add' or 'concat'")
 
     def encode_position(self, kpts, scores=None):
-        """(N,3) normalized keypoints -> (N,D) position descriptors."""
+        """(N,3) normalized keypoints -> (N,D) position descriptors.
+
+        Frames with fewer than 2 detections carry no relative geometry
+        (InstanceNorm needs N > 1), so they fall back to zeros, i.e. the
+        fused embedding degrades gracefully to visual-only.
+        """
+        if kpts.shape[0] < 2:
+            return kpts.new_zeros((kpts.shape[0], self.embedding_dim))
         if scores is None:
             scores = kpts.new_ones(kpts.shape[0])
         k = kpts.reshape(1, 1, -1, 3)
@@ -65,8 +103,8 @@ class BarlowWithPosition(BarlowTwins3d):
         return self.kenc(k, s).squeeze(0).transpose(0, 1)
 
     def fused_descriptors(self, y, kpts, scores=None):
-        visual = self.backbone(y)
-        pos = self.encode_position(kpts, scores)
+        visual = self.norm_visual(self.backbone(y))
+        pos = self.norm_pos(self.encode_position(kpts, scores))
         if self.fusion == 'add':
             return visual + pos
         return self.fuse_mlp(torch.cat([visual, pos], dim=1))
@@ -90,15 +128,78 @@ class BarlowWithPosition(BarlowTwins3d):
         return loss, loss_original, loss_transpose
 
 
-class BarlowSuperGlue(BarlowWithPosition):
-    """Fusion model + AttentionalGNN identity matching (Step 3)."""
+class BarlowVolumeAttention(BarlowWithPosition):
+    """Fusion + INTRA-volume self-attention (the actual per-neuron embedding).
 
-    def __init__(self, args, backbone=Siamese, gnn_layers=None, **backbone_kwargs):
+    contextualize() runs self-attention over the neurons of ONE volume, so
+    unlike cross-volume matching it yields a standalone embedding per neuron
+    from a single frame: backbone -> fuse -> norm -> self-attend -> projector.
+    This is what inference (embed_volumes_with_position) uses.
+    """
+
+    def __init__(self, args, backbone=Siamese, self_layers=None, **backbone_kwargs):
         # Pop our own kwargs before delegating (backbone would choke on them)
         fusion = backbone_kwargs.pop('fusion', None)
         keypoint_layers = backbone_kwargs.pop('keypoint_layers', None)
+        fusion_norm = backbone_kwargs.pop('fusion_norm', None)
         super().__init__(args, backbone=backbone, fusion=fusion,
-                         keypoint_layers=keypoint_layers, **backbone_kwargs)
+                         keypoint_layers=keypoint_layers, fusion_norm=fusion_norm,
+                         **backbone_kwargs)
+        n_self = (self_layers if self_layers is not None
+                  else int(getattr(args, 'self_layers', 2)))
+        self.self_layer_names = ['self'] * n_self
+        self.self_gnn = (AttentionalGNN(args.embedding_dim, self.self_layer_names)
+                         if n_self > 0 else nn.Identity())
+
+    def contextualize(self, d):
+        """(N,D) fused descriptors -> (N,D) volume-contextualized descriptors.
+
+        Single detections bypass attention (nothing to attend to, and the
+        propagation MLP's InstanceNorm needs N > 1).
+        """
+        if d.shape[0] < 2 or isinstance(self.self_gnn, nn.Identity):
+            return d
+        batch = d.transpose(0, 1).unsqueeze(0)
+        out, _ = self.self_gnn(batch, batch)
+        return out.squeeze(0).transpose(0, 1)
+
+    def contextual_descriptors(self, y, kpts, scores=None):
+        return self.contextualize(self.fused_descriptors(y, kpts, scores))
+
+    def embed_with_position(self, y, kpts, scores=None):
+        return self.projector(self.contextual_descriptors(y, kpts, scores))
+
+    def forward(self, y1, y2, kpts1, kpts2, scores1=None, scores2=None):
+        z1 = self.embed_with_position(y1, kpts1, scores1)
+        z2 = self.embed_with_position(y2, kpts2, scores2)
+        c_features, c_objects = both_correlation_matrices(z1, z2)
+
+        loss_transpose = torch.tensor(0.0, device=y1.device)
+        loss_original = torch.tensor(0.0, device=y1.device)
+        if self.args.lambd_obj < 1:
+            loss_original = self.loss_from_correlation_matrix(c_features)
+        if self.args.lambd_obj > 0:
+            loss_transpose = self.loss_from_correlation_matrix(c_objects)
+
+        loss = (1.0 - self.args.lambd_obj) * loss_original + self.args.lambd_obj * loss_transpose
+        return loss, loss_original, loss_transpose
+
+
+class BarlowSuperGlue(BarlowVolumeAttention):
+    """STUB - pair-only cross-volume matching is intentionally NOT used.
+
+    The original SuperGlue matches two volumes with cross-attention +
+    Sinkhorn, but inference (tracking) embeds ONE volume at a time, so a
+    pair-dependent head can never feed back into an embedding. The useful
+    part - intra-volume self-attention over fused descriptors - lives in
+    BarlowVolumeAttention; use that (use_attention) instead.
+
+    Kept only so old 'superglue' checkpoints still load. Instantiating and
+    loading weights is fine, but forward() raises.
+    """
+
+    def __init__(self, args, backbone=Siamese, gnn_layers=None, **backbone_kwargs):
+        super().__init__(args, backbone=backbone, **backbone_kwargs)
         embedding_dim = args.embedding_dim
         default_gnn = ['self', 'cross'] * 3
         self.gnn_layer_names = gnn_layers or list(getattr(args, 'gnn_layers', default_gnn))
@@ -109,39 +210,8 @@ class BarlowSuperGlue(BarlowWithPosition):
         self.match_loss_weight = float(getattr(args, 'match_loss_weight', 1.0))
         self.sinkhorn_iterations = int(getattr(args, 'sinkhorn_iterations', 50))
 
-    def calculate_match_scores(self, d0, d1):
-        """(N,D) fused descriptors -> (1,N+1,N+1) log-space assignment scores."""
-        g0, g1 = self.gnn(d0.transpose(0, 1).unsqueeze(0), d1.transpose(0, 1).unsqueeze(0))
-        m0, m1 = self.final_proj(g0), self.final_proj(g1)
-        scores = torch.einsum('bdn,bdm->bnm', m0, m1) / self.args.embedding_dim ** 0.5
-        return log_optimal_transport(scores, self.bin_score, iters=self.sinkhorn_iterations)
-
-    def identity_match_loss(self, scores):
-        n = scores.shape[1] - 1
-        idx = torch.arange(n, device=scores.device)
-        return (-torch.log(scores[0, idx, idx].exp() + self.loss_epsilon)).mean()
-
-    def matches_from_scores(self, scores, match_threshold=0.2):
-        idx0, idx1, ms0, ms1 = process_scores_into_matches(scores, match_threshold)
-        return idx0[0], idx1[0], ms0[0], ms1[0]
-
-    def forward(self, y1, y2, kpts1, kpts2, scores1=None, scores2=None):
-        d1 = self.fused_descriptors(y1, kpts1, scores1)
-        d2 = self.fused_descriptors(y2, kpts2, scores2)
-
-        z1, z2 = self.projector(d1), self.projector(d2)
-        c_features, c_objects = both_correlation_matrices(z1, z2)
-        loss_transpose = torch.tensor(0.0, device=y1.device)
-        loss_original = torch.tensor(0.0, device=y1.device)
-        if self.args.lambd_obj < 1:
-            loss_original = self.loss_from_correlation_matrix(c_features)
-        if self.args.lambd_obj > 0:
-            loss_transpose = self.loss_from_correlation_matrix(c_objects)
-        barlow_loss = ((1.0 - self.args.lambd_obj) * loss_original
-                       + self.args.lambd_obj * loss_transpose)
-
-        match_scores = self.calculate_match_scores(d1, d2)
-        match_loss = self.identity_match_loss(match_scores)
-
-        total = barlow_loss + self.match_loss_weight * match_loss
-        return total, loss_original, loss_transpose, match_loss
+    def forward(self, y1, y2, kpts1=None, kpts2=None, scores1=None, scores2=None):
+        raise NotImplementedError(
+            "BarlowSuperGlue.forward is a stub: pair-only cross-volume matching "
+            "has no inference path (tracking embeds one volume at a time). "
+            "Use BarlowVolumeAttention (use_attention) instead.")

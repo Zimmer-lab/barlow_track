@@ -474,6 +474,46 @@ def embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space
     return all_embeddings
 
 
+def embed_volumes_with_position(gpu, model, project_data, frame_indices, target_sz, chunk_size=32):
+    """Fused visual+position embeddings for selected frames (Step 4).
+
+    Uses the VolumeCoordsDataset plumbing (centroids + direct crop extraction,
+    no augmentation) and a position-aware model (BarlowWithPosition or
+    BarlowSuperGlue). Returns (embeddings_by_frame, seg_ids_by_frame):
+    {t: (N_t, D) array} and {t: (N_t,) raw segmentation ids}.
+
+    For legacy BarlowTwins3d checkpoints use embed_using_barlow() instead.
+    """
+    from barlow_track.utils.volume_data import (
+        VolumeCoordsDataset, extract_crops, get_centroids_for_volume, load_volume)
+    import torchio as tio
+
+    if not hasattr(model, 'embed_with_position'):
+        raise TypeError(f"{type(model).__name__} has no position fusion; "
+                        f"use embed_using_barlow() for legacy checkpoints")
+    target_sz = np.array(target_sz)
+    normalizer = tio.RescaleIntensity(percentiles=(5, 100))
+    model.eval()
+    out, seg_out = {}, {}
+    with torch.no_grad():
+        for t in tqdm(frame_indices, desc="Embedding with position"):
+            t = int(t)
+            vol = load_volume(project_data, t)
+            zxy, seg = get_centroids_for_volume(project_data, t)
+            if len(zxy) == 0:
+                continue
+            crops = torch.from_numpy(extract_crops(vol, zxy, target_sz)).float()
+            crops = normalizer(crops).unsqueeze(1)  # tio needs 4D; model needs (N,1,Z,X,Y)
+            kpts = VolumeCoordsDataset._normalize(torch.from_numpy(zxy.astype(np.float32)), vol.shape)
+            embs = [model.embed_with_position(crops[i:i + chunk_size].to(gpu),
+                                              kpts[i:i + chunk_size].to(gpu)).cpu().numpy()
+                    for i in range(0, len(crops), chunk_size)]
+            out[t] = np.vstack(embs)
+            seg_out[t] = np.asarray(seg)
+    logging.info(f"Embedded {len(out)} frames with position")
+    return out, seg_out
+
+
 def save_intermediate_results(X, linear_ind_to_gt_ind, linear_ind_to_t_and_seg_id, project_config, project_data,
                               time_index_to_linear_feature_indices, tracker, tracker_no_svd,
                               subfolder):

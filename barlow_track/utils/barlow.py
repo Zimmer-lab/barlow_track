@@ -385,6 +385,14 @@ def load_barlow_model(model_fname):
     except AttributeError:
         target_sz = np.array(args.target_sz)
     backbone_kwargs = dict(in_channels=1, num_levels=2, f_maps=4, crop_sz=target_sz)
-    model = BarlowTwins3d(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
+    model_type = getattr(args, 'model_type', 'barlow')
+    if model_type == 'superglue':
+        from barlow_track.utils.barlow_superglue import BarlowSuperGlue
+        model = BarlowSuperGlue(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
+    elif model_type == 'position':
+        from barlow_track.utils.barlow_superglue import BarlowWithPosition
+        model = BarlowWithPosition(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
+    else:
+        model = BarlowTwins3d(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
     model.load_state_dict(state_dict)
     return gpu, model, args

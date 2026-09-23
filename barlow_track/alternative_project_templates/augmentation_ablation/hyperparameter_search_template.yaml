@@ -23,3 +23,12 @@ hyperparameters:
   - name: p_RandomNoise
     type: choice
     values: [0.0]
+
+  # Position / global-augmentation ablations (one-at-a-time sweeps)
+  - name: use_position
+    type: choice
+    values: [true]
+
+  - name: use_gnn
+    type: choice
+    values: [true]

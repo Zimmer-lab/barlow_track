@@ -58,7 +58,7 @@ class WormClusterTracker:
 
         if self.opt_db is not None:
             default_opt_db.update(self.opt_db)
-            self.opt_db = default_opt_db
+        self.opt_db = default_opt_db
         # If min_cluster_size or min_samples are floats, then multiply them by the number of frames and continue
         if self.opt_db['min_samples'] < 1:
             self.opt_db['min_samples'] = int(self.opt_db['min_samples']*self.num_frames)
@@ -74,7 +74,7 @@ class WormClusterTracker:
 
         if self.opt_umap is not None:
             default_opt_umap.update(self.opt_umap)
-            self.opt_umap = default_opt_umap
+        self.opt_umap = default_opt_umap
 
         if self.tracker_stride is None:
             self.tracker_stride = int(0.5 * self.n_volumes_per_window)

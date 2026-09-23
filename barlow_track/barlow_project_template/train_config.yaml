@@ -59,6 +59,29 @@ val_fraction: 0.1    # If > 1, interpreted as number of volumes not a fraction
 # Hyperparameters for the new (transposed) BarlowTrack loss
 lambd_obj: 0.67  # Set to 1 to only use the transposed loss; 0 means only original BarlowTwins loss
 
+####
+# Position encodings + SuperGlue-GNN options (all default off = legacy behavior)
+####
+use_position: false  # If true: global-before-crop aug + KeypointEncoder fusion
+use_gnn: false       # If true (requires use_position): AttentionalGNN + identity-match loss
+fusion: add          # 'add' (SuperGlue-style) or 'concat'
+keypoint_encoder_layers: [32, 64]
+gnn_layers: ['self', 'cross', 'self', 'cross', 'self', 'cross']
+match_loss_weight: 1.0
+sinkhorn_iterations: 50
+
+# Global-before-crop augmentation (only used when use_position is true)
+global_augment:
+  p_global_affine: 1.0
+  max_degrees_z: 180.0
+  scale_jitter: 0.1
+  max_translation: [2, 8, 8]
+  p_flip: 0.0
+crop_photometric:
+  p_blur: 0.0
+  p_noise: 0.1
+  std_noise: 0.25
+
 # Debugging and logging parameters
 print_freq: 100
 rank: 0

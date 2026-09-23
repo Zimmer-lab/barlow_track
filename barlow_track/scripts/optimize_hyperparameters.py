@@ -138,7 +138,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         executor.update_parameters(cpus_per_task=8)
         executor.update_parameters(slurm_mem="128G")
         executor.update_parameters(slurm_job_name=job_name if job_name is not None else "barlow_hyperparameter_search")
-        executor.update_parameters(slurm_gres="shard:2")
+        executor.update_parameters(slurm_gres="gpu:1")
         executor.update_parameters(slurm_constraint="l40s|a30|t4|v100|l4")
         executor.update_parameters(slurm_additional_parameters={"no-requeue": True})  # bash equivalent (no-arg flag): #SBATCH --no-requeue
 

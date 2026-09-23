@@ -65,7 +65,7 @@ lambd_obj: 0.67  # Set to 1 to only use the transposed loss; 0 means only origin
 use_position: false  # If true: global-before-crop aug + KeypointEncoder fusion
 use_attention: false # If true (requires use_position): intra-volume self-attention embeddings
 # use_gnn was removed: pair-only cross-volume matching has no inference path
-fusion: add          # 'add' (SuperGlue-style) or 'concat'
+fusion: concat       # 'concat' (default) | 'add' (SuperGlue-style) | 'position_only' (geometry benchmark)
 fusion_norm: none    # per-branch norm before fusion: 'none' | 'layernorm' | 'l2'
 self_layers: 2       # number of intra-volume self-attention layers (attention models)
 keypoint_encoder_layers: [32, 64]

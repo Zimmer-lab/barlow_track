@@ -200,3 +200,36 @@ def test_attention_zero_self_layers_is_plain_fusion(batch):
     b.eval()
     with torch.no_grad():
         assert torch.allclose(a.embed_with_position(y1, k1), b.embed_with_position(y1, k1))
+
+
+def test_default_fusion_is_concat(batch):
+    y1, y2, k1, k2 = batch
+    a = _args()
+    del a.fusion  # simulate configs predating the fusion flag
+    model = BarlowWithPosition(a, backbone=ResidualEncoder3D, **_backbone_kwargs())
+    assert model.fusion == 'concat'
+    loss, _, _ = model(y1, y2, k1, k2)
+    assert torch.isfinite(loss)
+
+
+def test_position_only_ignores_visual(batch):
+    y1, y2, k1, k2 = batch
+    model = BarlowWithPosition(_args(fusion='position_only'), backbone=ResidualEncoder3D,
+                               **_backbone_kwargs())
+    model.eval()
+    with torch.no_grad():
+        d = model.fused_descriptors(y1, k1)
+        assert torch.allclose(d, model.norm_pos(model.encode_position(k1)))
+        assert not torch.allclose(d, model.backbone(y1))  # no visual leakage
+    loss, _, _ = model(y1, y2, k1, k2)
+    assert torch.isfinite(loss)
+
+
+def test_position_only_with_attention(batch):
+    y1, y2, k1, k2 = batch
+    model = BarlowVolumeAttention(_attn_args(fusion='position_only'), backbone=ResidualEncoder3D,
+                                  **_backbone_kwargs())
+    loss, _, _ = model(y1, y2, k1, k2)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert model.self_gnn.layers[0].attn.merge.weight.grad is not None

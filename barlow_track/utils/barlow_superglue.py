@@ -76,7 +76,7 @@ class BarlowWithPosition(BarlowTwins3d):
         super().__init__(args, backbone=backbone, **backbone_kwargs)
         embedding_dim = args.embedding_dim
         self.embedding_dim = embedding_dim
-        self.fusion = fusion or getattr(args, 'fusion', 'add')
+        self.fusion = fusion or getattr(args, 'fusion', 'concat')
         self.fusion_norm = fusion_norm or getattr(args, 'fusion_norm', 'none')
         layers = keypoint_layers or list(getattr(args, 'keypoint_encoder_layers', [32, 64]))
         self.kenc = KeypointEncoder(embedding_dim, layers)
@@ -84,8 +84,10 @@ class BarlowWithPosition(BarlowTwins3d):
         self.norm_pos = _make_norm(self.fusion_norm, embedding_dim)
         if self.fusion == 'concat':
             self.fuse_mlp = nn.Sequential(nn.Linear(2 * embedding_dim, embedding_dim), nn.ReLU())
+        elif self.fusion == 'position_only':
+            pass  # visual branch unused; see fused_descriptors
         elif self.fusion != 'add':
-            raise ValueError(f"Unknown fusion '{self.fusion}'; use 'add' or 'concat'")
+            raise ValueError(f"Unknown fusion '{self.fusion}'; use 'add', 'concat' or 'position_only'")
 
     def encode_position(self, kpts, scores=None):
         """(N,3) normalized keypoints -> (N,D) position descriptors.
@@ -103,8 +105,10 @@ class BarlowWithPosition(BarlowTwins3d):
         return self.kenc(k, s).squeeze(0).transpose(0, 1)
 
     def fused_descriptors(self, y, kpts, scores=None):
-        visual = self.norm_visual(self.backbone(y))
         pos = self.norm_pos(self.encode_position(kpts, scores))
+        if self.fusion == 'position_only':
+            return pos  # visual branch unused: pure geometry benchmark
+        visual = self.norm_visual(self.backbone(y))
         if self.fusion == 'add':
             return visual + pos
         return self.fuse_mlp(torch.cat([visual, pos], dim=1))

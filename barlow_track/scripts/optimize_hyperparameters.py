@@ -90,6 +90,16 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     ax_client = AxClient(enforce_sequential_optimization=DEBUG)
     # Read parameters from yaml file
     parameters = list(hyperparameter_args['hyperparameters'])
+    for param in parameters:
+        # Silence Ax UserWarning: `is_ordered` / `sort_values` defaulting for ChoiceParameter.
+        # Explicitly preserve Ax's default (True for int) so existing searches are unaffected.
+        if param.get('type') == 'choice':
+            if param.get('value_type') == 'int':
+                param.setdefault('is_ordered', True)
+                param.setdefault('sort_values', True)
+            else:
+                param.setdefault('is_ordered', False)
+                param.setdefault('sort_values', False)
     ax_client.create_experiment(
         name="my_experiment",
         parameters=parameters,

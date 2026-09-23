@@ -7,28 +7,42 @@ hyperparameters:
   - name: p_RandomBlur_base
     type: choice
     values: [0.0]
+    is_ordered: false
+    sort_values: false
 
   - name: p_RandomAffine_both
     type: choice
     values: [0.0]
+    is_ordered: false
+    sort_values: false
 
   - name: p_RandomElasticDeformation
     type: choice
     values: [0.0]
+    is_ordered: false
+    sort_values: false
 
   - name: p_RandomAffine_flip
     type: choice
     values: [0.0]
+    is_ordered: false
+    sort_values: false
 
   - name: p_RandomNoise
     type: choice
     values: [0.0]
+    is_ordered: false
+    sort_values: false
 
   # Position / global-augmentation ablations (one-at-a-time sweeps)
   - name: use_position
     type: choice
     values: [true]
+    is_ordered: false
+    sort_values: false
 
   - name: use_attention
     type: choice
     values: [true]
+    is_ordered: false
+    sort_values: false

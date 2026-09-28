@@ -69,11 +69,13 @@ def train_barlow_network(args):
         # hyperparameters from the current config on the loaded model.
         for k, v in vars(args).items():
             setattr(model.args, k, v)
+        # Keep the class tag in sync so the re-saved args.pickle reloads correctly
+        args.model_type = getattr(pretrained_args, 'model_type', 'barlow')
     else:
-        try:
-            user_args = vars(vars(args).get('backbone_kwargs', dict()))
-        except TypeError:
-            user_args = dict()
+        # backbone_kwargs is usually a plain dict from yaml (vars() only works
+        # on namespaces); fall back to defaults field by field.
+        _bb = vars(args).get('backbone_kwargs', dict()) or dict()
+        user_args = dict(_bb) if isinstance(_bb, dict) else vars(_bb)
         backbone_kwargs = dict(in_channels=1, num_levels=user_args.get('num_levels', 2), f_maps=user_args.get('f_maps', 4), crop_sz=target_sz)
         if use_attention:
             args.model_type = 'attention'

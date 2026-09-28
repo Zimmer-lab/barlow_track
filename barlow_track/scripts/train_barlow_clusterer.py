@@ -63,11 +63,10 @@ def train_barlow_network(args):
         pretrained_model_path = None
     if pretrained_model_path is not None:
         logging.info(f"Loading model from {pretrained_model_path}")
-        gpu, model, pretrained_args = load_barlow_model(pretrained_model_path)
+        gpu, model, pretrained_args = load_barlow_model(pretrained_model_path, expected_args=args)
         logging.info(f"Loaded pretrained args: {pretrained_args}")
-        # Replace network-related values of args
-        args.embedding_dim = pretrained_args.embedding_dim
-        # Update hyperparameters with the user-passed new args
+        # Architecture already validated inside load_barlow_model; keep training
+        # hyperparameters from the current config on the loaded model.
         for k, v in vars(args).items():
             setattr(model.args, k, v)
     else:

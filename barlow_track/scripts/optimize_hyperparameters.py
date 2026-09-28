@@ -16,6 +16,7 @@ from ruamel.yaml import YAML
 from submitit import AutoExecutor, LocalJob, DebugJob
 from itertools import product
 from barlow_track.scripts.train_barlow_clusterer import train_barlow_network
+from barlow_track.utils.barlow import PretrainedArchitectureMismatchError
 from barlow_track.utils.utils_ground_truth import check_training_finished, discover_trials, extract_val_from_json
 
 
@@ -87,6 +88,10 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         try:
             test_losses = train_barlow_network(args)
             result = test_losses['test_loss'] if isinstance(test_losses, dict) else 1e6
+        except PretrainedArchitectureMismatchError:
+            # Systematic config error affecting every trial; fail fast instead of
+            # scoring 1e6 and letting Ax optimize noise.
+            raise
         except Exception as e:
             logging.warning(f"Encountered error with trial; quitting gracefully: {e}")
             result = 1e6

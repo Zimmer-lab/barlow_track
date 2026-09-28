@@ -84,9 +84,14 @@ def get_centroids_for_volume(project_data, t):
 
     Same metadata source as `get_bbox_data_for_volume_with_label`, but without
     track filtering: the new pipeline needs ALL detections plus positions.
+
+    Volumes with no detections yield empty arrays (wbfm returns ([], []));
+    callers treat these as skippable, mirroring the legacy empty-volume path.
     """
     row_data, column_names = project_data.segmentation_metadata.get_all_neuron_metadata_for_single_time(
         t, as_dataframe=False)
+    if len(column_names) == 0:
+        return np.zeros((0, 3)), np.zeros((0,), dtype=int)
     mdata = pd.DataFrame(dict(zip(column_names, row_data)))
     mdata = mdata.dropna(subset=['z', 'x', 'y'])
     zxy = mdata[['z', 'x', 'y']].to_numpy(dtype=float)
@@ -179,6 +184,15 @@ class VolumeCoordsDataset(Dataset):
         return normed.reshape(-1, 3)
 
 
+def _num_centroids_safe(project_data, t):
+    """Number of usable centroids for frame t, or 0 if the frame is unusable."""
+    try:
+        return len(get_centroids_for_volume(project_data, t)[0])
+    except (KeyError, IndexError, FileNotFoundError) as e:
+        logging.warning(f"Skipping frame {t}: {e}")
+        return 0
+
+
 class VolumeCoordsDataModule(LightningDataModule):
     """Train/val/test splits over frames, mirroring NeuronCropImageDataModule."""
 
@@ -199,9 +213,10 @@ class VolumeCoordsDataModule(LightningDataModule):
     def setup(self, stage: Optional[str] = None):
         max_frames = self.project_data.num_frames
         sampled = random.Random(self.seed).sample(range(max_frames), max_frames)
-        # Same validity rule as legacy get_crops_from_project (1, 200]
-        valid = [t for t in sampled
-                 if 1 < len(get_centroids_for_volume(self.project_data, t)[0]) <= 200]
+        # Same validity rule as legacy get_crops_from_project (1, 200].
+        # Guarded per frame: a single unreadable volume must not kill the trial
+        # (same convention as VolumeCoordsDataset, which skips such frames).
+        valid = [t for t in sampled if 1 < _num_centroids_safe(self.project_data, t) <= 200]
         if len(valid) < self.num_frames:
             logging.warning(f"Requested {self.num_frames} volumes, found {len(valid)}; continuing")
         frames = valid[:self.num_frames]

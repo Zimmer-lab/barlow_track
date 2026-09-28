@@ -16,7 +16,14 @@ from ruamel.yaml import YAML
 from submitit import AutoExecutor, LocalJob, DebugJob
 from itertools import product
 from barlow_track.scripts.train_barlow_clusterer import train_barlow_network
-from barlow_track.utils.barlow import PretrainedArchitectureMismatchError
+try:
+    from barlow_track.utils.barlow import PretrainedArchitectureMismatchError
+except ImportError as e:
+    raise ImportError(
+        "Installed barlow_track package is stale (no PretrainedArchitectureMismatchError); "
+        "it shadows your checkout. Reinstall from your checkout, e.g.: "
+        "pip install --no-deps -e <path-to-barlow_track-checkout>"
+    ) from e
 from barlow_track.utils.utils_ground_truth import check_training_finished, discover_trials, extract_val_from_json
 
 
@@ -107,15 +114,21 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     # Read parameters from yaml file
     parameters = list(hyperparameter_args['hyperparameters'])
     for param in parameters:
-        # Silence Ax UserWarning: `is_ordered` / `sort_values` defaulting for ChoiceParameter.
+        # Silence Ax UserWarning: `is_ordered` defaulting for ChoiceParameter.
         # Explicitly preserve Ax's default (True for int) so existing searches are unaffected.
+        # NOTE: do not pass `sort_values` here; this Ax version's parameter_from_json
+        # rejects it (ValueError: Unexpected keys). Template values are pre-sorted,
+        # so the default is fine.
         if param.get('type') == 'choice':
+            if 'sort_values' in param:
+                # Rejected by this Ax version (parameter_from_json); drop it.
+                logging.warning("Ignoring unsupported 'sort_values' for parameter "
+                                f"{param.get('name')!r}; remove it from the yaml")
+                param.pop('sort_values')
             if param.get('value_type') == 'int':
                 param.setdefault('is_ordered', True)
-                param.setdefault('sort_values', True)
             else:
                 param.setdefault('is_ordered', False)
-                param.setdefault('sort_values', False)
     ax_client.create_experiment(
         name="my_experiment",
         parameters=parameters,

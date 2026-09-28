@@ -22,6 +22,14 @@ from barlow_track.utils.utils_ground_truth import check_training_finished, disco
 def attach_prior_trial_to_ax_client(ax_client, full_params, result):
     # keep only parameters Ax knows about
     ax_params = {k: v for k, v in full_params.items() if k in ax_client.experiment.search_space.parameters}
+    # BoTorch GP cannot fit NaN/inf/None; fail loudly here so callers can skip
+    mean = result[0] if isinstance(result, tuple) else result
+    try:
+        is_finite = bool(np.isfinite(mean))
+    except TypeError:
+        is_finite = False
+    if not is_finite:
+        raise ValueError(f"Non-finite prior trial result {mean!r}; skipping")
     trial_index = ax_client.attach_trial(parameters=ax_params)
     ax_client.experiment.trials[trial_index].run_metadata = full_params
     if not isinstance(result, tuple):
@@ -78,13 +86,16 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         args = SimpleNamespace(**parameters)
         try:
             test_losses = train_barlow_network(args)
-            result = test_losses['test_loss']
-        except (TypeError, ValueError) as e:
-            logging.warning(f"Encountered error with trial; quitting gracefully")
+            result = test_losses['test_loss'] if isinstance(test_losses, dict) else 1e6
+        except Exception as e:
+            logging.warning(f"Encountered error with trial; quitting gracefully: {e}")
             result = 1e6
-        if np.isnan(result):
-            result = 1e6  # More or less infinity
-        return {"result": result}
+        try:
+            if result is None or not np.isfinite(result):
+                result = 1e6  # More or less infinity; Ax/BoTorch cannot fit NaN/inf
+        except TypeError:
+            result = 1e6
+        return {"result": float(result)}
 
     # Set up the Ax client
     ax_client = AxClient(enforce_sequential_optimization=DEBUG)
@@ -123,7 +134,14 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                     print(f"Prior trial {trial_name}: training was not finished; skipping")
                     continue
                 loss = extract_val_from_json(trial_path, key="test_loss")
-                attach_prior_trial_to_ax_client(ax_client, config, loss)
+                if loss is None:
+                    print(f"Prior trial {trial_name}: no test_loss found; skipping")
+                    continue
+                try:
+                    attach_prior_trial_to_ax_client(ax_client, config, loss)
+                except ValueError as e:
+                    print(f"Prior trial {trial_name}: skipping ({e})")
+                    continue
 
             except FileNotFoundError:
                 print(f"{trial_name}: train_config.yaml not found.")

@@ -44,6 +44,20 @@ DEFAULT_CROP_PHOTOMETRIC_ARGS = dict(
 )
 
 
+def build_photometric_transform(photometric_args=None):
+    """Shared per-crop photometric transform (blur/noise/intensity).
+
+    Used by `VolumeCoordsDataset` during training and by the napari
+    augmentation viewer, so the two cannot drift apart.
+    """
+    photo = {**DEFAULT_CROP_PHOTOMETRIC_ARGS, **(photometric_args or {})}
+    return tio.Compose([
+        tio.RandomBlur(p=photo['p_blur']),
+        tio.RandomNoise(std=photo['std_noise'], p=photo['p_noise']),
+        tio.RescaleIntensity(percentiles=(5, 100)),
+    ])
+
+
 def sample_global_affine(rng, p_global_affine=1.0, max_degrees_z=180.0, scale_jitter=0.1,
                          max_translation=(2, 8, 8), p_flip=0.0):
     """Sample a forward (z, x, y) transform: x' = R(x - C) + C + t.
@@ -130,12 +144,7 @@ class VolumeCoordsDataset(Dataset):
         self.target_sz = np.array(target_sz)
         self.global_args = {**DEFAULT_GLOBAL_ARGS, **(global_args or {})}
         self.rng = np.random.RandomState(seed)
-        photo = {**DEFAULT_CROP_PHOTOMETRIC_ARGS, **(photometric_args or {})}
-        self.crop_transform = tio.Compose([
-            tio.RandomBlur(p=photo['p_blur']),
-            tio.RandomNoise(std=photo['std_noise'], p=photo['p_noise']),
-            tio.RescaleIntensity(percentiles=(5, 100)),
-        ])
+        self.crop_transform = build_photometric_transform(photometric_args)
         # Precompute (cheap) centroids; volumes stay on disk until __getitem__
         self._centroids, self._seg_ids = [], []
         for t in tqdm(self.frame_indices, desc="Loading centroids", leave=False):

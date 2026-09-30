@@ -45,7 +45,8 @@ def train_barlow_network(args):
             train_fraction=args.train_fraction, val_fraction=args.val_fraction,
             target_sz=target_sz,
             global_args=getattr(args, 'global_augment', None),
-            photometric_args=getattr(args, 'crop_photometric', None))
+            photometric_args=getattr(args, 'crop_photometric', None),
+            position_args=getattr(args, 'position_augment', None))
     else:
         data_module = NeuronCropImageDataModule(project_data=project_data1, num_frames=args.num_frames, batch_size=1,
                                                 train_fraction=args.train_fraction,
@@ -248,18 +249,22 @@ def train_barlow_network(args):
 
 
 def _run_forward(model, batch, gpu, use_position):
-    """Single forward handling both legacy (y1,y2) and position (y1,y2,k1,k2) batches.
+    """Single forward handling both legacy (y1,y2) and position batches.
 
+    Position batches are (y1, y2, k1, k2) or (y1, y2, k1, k2, idx1, idx2);
+    the idx pair aligns independent per-view dropout on the intersection.
     Returns (loss, loss_original, loss_transpose, loss_match_or_None).
     """
     if not use_position:
         y1, y2 = _format_vectors_on_gpu(batch[0], batch[1], gpu)
         out = model.forward(y1, y2)
     else:
-        y1, y2, k1, k2 = batch
+        y1, y2, k1, k2 = batch[0], batch[1], batch[2], batch[3]
         y1, y2 = y1.to(gpu), y2.to(gpu)
         k1, k2 = k1.to(gpu), k2.to(gpu)
-        out = model.forward(y1, y2, k1, k2)
+        idx1 = batch[4].to(gpu) if len(batch) > 4 else None
+        idx2 = batch[5].to(gpu) if len(batch) > 5 else None
+        out = model.forward(y1, y2, k1, k2, idx1=idx1, idx2=idx2)
     if len(out) == 4:
         return out
     loss, loss_original, loss_transpose = out
@@ -271,11 +276,15 @@ def _correlation_for_plot(model, batch, gpu, use_position):
     if not use_position:
         y1, y2 = _format_vectors_on_gpu(batch[0], batch[1], gpu)
         return model.calculate_correlation_matrix(y1, y2)
-    from barlow_track.utils.barlow_superglue import both_correlation_matrices
-    y1, y2, k1, k2 = batch
+    from barlow_track.utils.barlow_superglue import both_correlation_matrices, intersection_gather
+    y1, y2, k1, k2 = batch[0], batch[1], batch[2], batch[3]
     y1, y2, k1, k2 = y1.to(gpu), y2.to(gpu), k1.to(gpu), k2.to(gpu)
     z1 = model.embed_with_position(y1, k1)
     z2 = model.embed_with_position(y2, k2)
+    if len(batch) > 5:
+        sel1, sel2 = intersection_gather(batch[4].to(gpu), batch[5].to(gpu))
+        if sel1 is not None and len(sel1) >= 2:
+            z1, z2 = z1[sel1], z2[sel2]
     return both_correlation_matrices(z1, z2)[0]
 
 

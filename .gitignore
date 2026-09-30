@@ -169,3 +169,15 @@ barlow_track/scripts/wandb/
 *.pth
 *.ipynb
 barlow_track/notebooks/wandb
+
+# Orca sandbox home-dir leaks (character device nodes, not real files)
+.bash_profile
+.bashrc
+.gitconfig
+.gitmodules
+.idea
+.profile
+.ripgreprc
+.vscode
+.zprofile
+.zshrc

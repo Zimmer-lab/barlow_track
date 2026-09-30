@@ -82,6 +82,15 @@ crop_photometric:
   p_noise: 0.1
   std_noise: 0.25
 
+# Position-only augmentations (only used when use_position is true).
+# Jitter shifts each view's crop centers + keypoints with Gaussian noise
+# (voxels; float or [z, x, y]); dropout drops an independent object subset
+# per view and the loss is computed on the surviving intersection.
+position_augment:
+  jitter_std: 0.0
+  dropout_p: 0.0
+  min_keep: 2
+
 # Debugging and logging parameters
 print_freq: 100
 rank: 0

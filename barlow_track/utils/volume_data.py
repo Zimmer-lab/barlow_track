@@ -43,6 +43,12 @@ DEFAULT_CROP_PHOTOMETRIC_ARGS = dict(
     std_noise=0.25,
 )
 
+DEFAULT_POSITION_ARGS = dict(
+    jitter_std=0.0,  # voxels; float (isotropic) or (z, x, y)
+    dropout_p=0.0,  # per-object independent drop prob, per view
+    min_keep=2,  # always keep at least this many objects per view (if available)
+)
+
 
 def sample_global_affine(rng, p_global_affine=1.0, max_degrees_z=180.0, scale_jitter=0.1,
                          max_translation=(2, 8, 8), p_flip=0.0):
@@ -77,6 +83,53 @@ def apply_global_affine(volume, points_zxy, R, t, order=1):
                                        R_inv, offset=offset, order=order, mode='nearest')
     pts_aug = (points_zxy - center) @ R.T + center + t
     return vol_aug, pts_aug
+
+
+def _parse_jitter_std(jitter_std):
+    """Float or (z, x, y) -> (3,) float array."""
+    arr = np.asarray(jitter_std, dtype=float).reshape(-1)
+    if arr.size == 1:
+        return np.full(3, float(arr[0]))
+    if arr.size == 3:
+        return arr
+    raise ValueError(f"jitter_std must be a float or (z, x, y), got {jitter_std!r}")
+
+
+def apply_position_jitter(points_zxy, rng, jitter_std=0.0):
+    """Independent Gaussian jitter per point (voxel units).
+
+    Applied AFTER the global affine so each view gets its own centroid noise.
+    Callers use the jittered points for BOTH crop extraction and keypoints,
+    keeping crops and position channel consistent within a view.
+    """
+    std = _parse_jitter_std(jitter_std)
+    if len(points_zxy) == 0 or bool((std == 0).all()):
+        return np.asarray(points_zxy, dtype=float).copy()
+    noise = rng.normal(0.0, 1.0, size=np.shape(points_zxy)) * std
+    return np.asarray(points_zxy, dtype=float) + noise
+
+
+def sample_dropout_keep(n, rng, dropout_p=0.0, min_keep=2):
+    """Independent per-object keep mask; returns (bool mask (N,), keep_idx (K,)).
+
+    Guarantees at least min(n, min_keep) survivors so tiny volumes stay usable.
+    """
+    n = int(n)
+    if n == 0:
+        return np.zeros((0,), dtype=bool), np.zeros((0,), dtype=int)
+    if not dropout_p or dropout_p <= 0.0:
+        return np.ones((n,), dtype=bool), np.arange(n, dtype=int)
+    if dropout_p >= 1.0:
+        keep = np.zeros((n,), dtype=bool)
+    else:
+        keep = rng.random(n) >= dropout_p
+    need = min(n, int(min_keep))
+    if keep.sum() < need:
+        # Top-up with random non-kept indices (rng-driven, reproducible)
+        candidates = np.where(~keep)[0]
+        rng.shuffle(candidates)
+        keep[candidates[:need - int(keep.sum())]] = True
+    return keep, np.where(keep)[0].astype(int)
 
 
 def get_centroids_for_volume(project_data, t):
@@ -117,18 +170,22 @@ def extract_crops(volume, points_zxy, target_sz):
 class VolumeCoordsDataset(Dataset):
     """Lazy dataset of full volumes + coordinates; crops extracted AFTER augmentation.
 
-    __getitem__ returns (y1, y2, kpts1, kpts2):
-        y1/y2: (N, 1, Z, X, Y) float32 torch tensors (two global-aug views)
-        kpts1/kpts2: (N, 3) normalized (z, x, y) torch tensors, augmentation-consistent
+    __getitem__ returns (y1, y2, kpts1, kpts2, idx1, idx2):
+        y1/y2: (N1/N2, 1, Z, X, Y) float32 torch tensors (two global-aug views)
+        kpts1/kpts2: (N1/N2, 3) normalized (z, x, y) torch tensors, augmentation-consistent
+        idx1/idx2: (N1/N2,) long tensors of original object indices, so the
+            training loss can align the intersection when per-view object
+            dropout keeps different subsets (N1 != N2).
     Volumes are loaded on demand (NOT pre-stacked) so RAM stays ~1 volume.
     """
 
     def __init__(self, project_data, frame_indices, target_sz,
-                 global_args=None, photometric_args=None, seed=0):
+                 global_args=None, photometric_args=None, position_args=None, seed=0):
         self.project_data = project_data
         self.frame_indices = list(frame_indices)
         self.target_sz = np.array(target_sz)
         self.global_args = {**DEFAULT_GLOBAL_ARGS, **(global_args or {})}
+        self.position_args = {**DEFAULT_POSITION_ARGS, **(position_args or {})}
         self.rng = np.random.RandomState(seed)
         photo = {**DEFAULT_CROP_PHOTOMETRIC_ARGS, **(photometric_args or {})}
         self.crop_transform = tio.Compose([
@@ -157,23 +214,32 @@ class VolumeCoordsDataset(Dataset):
         t = int(self.frame_indices[idx])
         volume = load_volume(self.project_data, t)
         points = self._centroids[idx].astype(float)
-        y1, k1 = self._augmented_view(volume, points)
-        y2, k2 = self._augmented_view(volume, points)
-        return y1, y2, k1, k2
+        y1, k1, i1 = self._augmented_view(volume, points)
+        y2, k2, i2 = self._augmented_view(volume, points)
+        return y1, y2, k1, k2, i1, i2
 
     def _augmented_view(self, volume, points):
         R, t_vec = sample_global_affine(self.rng, **self.global_args)
         vol_aug, pts_aug = apply_global_affine(volume, points, R, t_vec)
-        crops = extract_crops(vol_aug, pts_aug, self.target_sz)
+        # Position-only jitter: shift crop centers AND keypoints together
+        pts_aug = apply_position_jitter(pts_aug, self.rng,
+                                        self.position_args.get('jitter_std', 0.0))
+        # Position-only dropout: independent subset per view
+        _, keep_idx = sample_dropout_keep(
+            len(pts_aug), self.rng,
+            dropout_p=self.position_args.get('dropout_p', 0.0),
+            min_keep=self.position_args.get('min_keep', 2))
+        pts_kept = pts_aug[keep_idx] if len(pts_aug) else pts_aug
+        crops = extract_crops(vol_aug, pts_kept, self.target_sz)
         # 4D (N,Z,X,Y) with N as the channel dim, exactly like the legacy
         # NeuronAugmentedImagePairDataset path (torchio Image convention)
         x = self.crop_transform(torch.from_numpy(crops))
         if not torch.is_tensor(x):
             x = torch.as_tensor(np.asarray(x))
         x = x.float().unsqueeze(1)  # (N,1,Z,X,Y)
-        kpts = torch.from_numpy(np.asarray(pts_aug, dtype=np.float32))
+        kpts = torch.from_numpy(np.asarray(pts_kept, dtype=np.float32))
         kpts = self._normalize(kpts, vol_aug.shape)
-        return x, kpts
+        return x, kpts, torch.as_tensor(np.asarray(keep_idx, dtype=np.int64))
 
     @staticmethod
     def _normalize(kpts_vox, vol_shape):
@@ -198,7 +264,7 @@ class VolumeCoordsDataModule(LightningDataModule):
 
     def __init__(self, project_data=None, num_frames=100, batch_size=1,
                  train_fraction=0.8, val_fraction=0.1, target_sz=(8, 64, 64),
-                 global_args=None, photometric_args=None, seed=0):
+                 global_args=None, photometric_args=None, position_args=None, seed=0):
         super().__init__()
         self.project_data = project_data
         self.num_frames = num_frames
@@ -208,6 +274,7 @@ class VolumeCoordsDataModule(LightningDataModule):
         self.target_sz = target_sz
         self.global_args = global_args
         self.photometric_args = photometric_args
+        self.position_args = position_args
         self.seed = seed
 
     def setup(self, stage: Optional[str] = None):
@@ -224,7 +291,8 @@ class VolumeCoordsDataModule(LightningDataModule):
 
         alldata = VolumeCoordsDataset(self.project_data, frames, self.target_sz,
                                       global_args=self.global_args,
-                                      photometric_args=self.photometric_args, seed=self.seed)
+                                      photometric_args=self.photometric_args,
+                                      position_args=self.position_args, seed=self.seed)
         n = len(alldata)
         n_train = int(n * self.train_fraction) if self.train_fraction < 1.0 else int(self.train_fraction)
         n_val = int(n * self.val_fraction) if self.val_fraction < 1.0 else int(self.val_fraction)

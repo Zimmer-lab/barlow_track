@@ -54,8 +54,8 @@ def _synthetic_volume_and_points():
 
 
 def _identity_params(**overrides):
-    kw = dict(use_affine=True, p_global_affine=0.0,
-              use_blur=False, p_blur=0.0, use_noise=False, p_noise=0.0)
+    kw = dict(use_affine=False,
+              use_blur=False, use_noise=False)
     kw.update(overrides)
     return ViewerParams(**kw)
 
@@ -85,8 +85,8 @@ def test_augment_identity_reproduces_volume():
 
 def test_disable_affine_flag_forces_identity():
     vol, pts = _synthetic_volume_and_points()
-    params = _identity_params(use_affine=False, p_global_affine=1.0,
-                              max_degrees_z=180.0, p_flip=1.0)
+    params = _identity_params(use_affine=False,
+                              max_degrees_z=180.0)
     res = augment_frame_for_viewer(vol, pts, params, target_sz=(4, 16, 16))
     assert np.allclose(res.vol_aug, vol)
     assert np.allclose(res.pts_aug, pts)
@@ -94,7 +94,7 @@ def test_disable_affine_flag_forces_identity():
 
 def test_enabled_affine_changes_volume_and_points_together():
     vol, pts = _synthetic_volume_and_points()
-    params = ViewerParams(p_global_affine=1.0, max_degrees_z=180.0,
+    params = ViewerParams(max_degrees_z=180.0,
                           use_blur=False, use_noise=False, seed=0)
     res = augment_frame_for_viewer(vol, pts, params, target_sz=(4, 16, 16))
     assert not np.allclose(res.vol_aug, vol)
@@ -128,7 +128,7 @@ def test_viewer_state_on_real_project(project_data):
 
 @requires_project
 def test_viewer_state_seed_changes_augmentation(project_data):
-    params = ViewerParams(p_global_affine=1.0, max_degrees_z=180.0,
+    params = ViewerParams(max_degrees_z=180.0,
                           use_blur=False, use_noise=False, seed=0)
     s0 = ViewerState(project_data, target_sz=(4, 32, 32), params=params)
     first = s0.result.vol_aug.copy()

@@ -162,6 +162,11 @@ class BarlowWithPosition(BarlowTwins3d):
 
     def forward(self, y1, y2, kpts1, kpts2, scores1=None, scores2=None,
                 idx1=None, idx2=None):
+        # Views that lost (almost) all objects to out-of-bounds filtering
+        # carry no usable pairs; skip before embedding (avoids NaN std).
+        if y1.shape[0] < 2 or y2.shape[0] < 2:
+            dev = y1.device if isinstance(y1, torch.Tensor) else kpts1.device
+            return _zero_losses(dev)
         z1 = self.embed_with_position(y1, kpts1, scores1)
         z2 = self.embed_with_position(y2, kpts2, scores2)
         paired = self._paired_for_loss(z1, z2, idx1, idx2)
@@ -224,6 +229,9 @@ class BarlowVolumeAttention(BarlowWithPosition):
 
     def forward(self, y1, y2, kpts1, kpts2, scores1=None, scores2=None,
                 idx1=None, idx2=None):
+        if y1.shape[0] < 2 or y2.shape[0] < 2:
+            dev = y1.device if isinstance(y1, torch.Tensor) else kpts1.device
+            return _zero_losses(dev)
         z1 = self.embed_with_position(y1, kpts1, scores1)
         z2 = self.embed_with_position(y2, kpts2, scores2)
         paired = self._paired_for_loss(z1, z2, idx1, idx2)

@@ -47,6 +47,26 @@ datasets, weights, eval scripts (`barlow_track/scripts/eval_accuracy.py`,
 
 See instructions in the [project folder](barlow_track/barlow_project_template/README.md)
 
+## Visualizing augmentation (napari GUI)
+
+Tune Step 1 (global-before-crop) augmentation by eye with a test project:
+
+```
+conda activate MY_ENV  # includes napari[all]
+python barlow_track/scripts/view_volume_augmentation.py \
+    --project_path /home/charles/Current_work/test_projects/barlow/worm4-2-2025-03-09/project_config.yaml \
+    --frame 0
+```
+
+Options: `--frame` (timepoint), `--target_sz z x y` (default `8 64 64`), `--seed`.
+On the cluster use the `/lisc/...` mirror of the same test project
+(`.../wbfm/test_projects/barlow/worm4-2-2025-03-09/project_config.yaml`),
+or set `BARLOW_TEST_PROJECT` (same convention as `test_step0_embed_and_augment.py`).
+
+This opens two napari viewers (full volume + single-neuron crop, raw vs augmented
+with points and crop box) plus a dock widget for all augmentation parameters;
+press `Re-augment` to resample with the new settings.
+
 ## Tracking a BarlowTrack network
 
 This is organized via the sibling repository: [wbfm](https://github.com/Zimmer-lab/wbfm).

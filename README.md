@@ -37,6 +37,12 @@ In this case, please install the following packages using instructions from thei
 - torch-sparse
 
 
+## Evaluating position encodings against ground truth
+
+See [docs/accuracy_evaluation.md](docs/accuracy_evaluation.md) for the full handoff:
+datasets, weights, eval scripts (`barlow_track/scripts/eval_accuracy.py`,
+`eval_leifer_accuracy.py`), results, and environment gotchas.
+
 ## Training a network
 
 See instructions in the [project folder](barlow_track/barlow_project_template/README.md)

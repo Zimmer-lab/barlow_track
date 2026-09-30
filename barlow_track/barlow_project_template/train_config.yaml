@@ -87,6 +87,7 @@ crop_photometric:
 # (voxels; float or [z, x, y]); dropout drops an independent object subset
 # per view and the loss is computed on the surviving intersection.
 position_augment:
+  use_dropout: false  # master switch for object dropout; probability below is ignored when false
   jitter_std: 0.0
   dropout_p: 0.0
   min_keep: 2

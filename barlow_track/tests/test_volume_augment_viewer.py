@@ -17,9 +17,11 @@ import pytest
 from barlow_track.utils.volume_augment_viewer import (
     ViewerParams,
     ViewerState,
+    aug_point_labels,
     augment_frame_for_viewer,
     box_edges_from_bbox,
     load_project_for_viewer,
+    raw_point_labels,
 )
 
 TEST_PROJECT_CANDIDATES = [
@@ -109,6 +111,60 @@ def test_photometric_builder_shared_with_training():
     from barlow_track.utils.volume_data import build_photometric_transform
     t = build_photometric_transform(dict(p_blur=0.0, p_noise=0.0))
     assert isinstance(t, tio.Compose) and len(t) == 3
+
+
+def test_point_labels_are_plain_slider_indices():
+    # Single numbers only: aug labels must equal the crop_idx slider values
+    assert raw_point_labels(3, np.array([7, 8, 9])) == ['0', '1', '2']
+    assert aug_point_labels([2, 0], np.array([7, 8, 9])) == ['0', '1']
+
+
+def test_use_dropout_gates_probability():
+    rng = np.random.RandomState(42)
+    vol = (rng.rand(10, 40, 50) * 500).astype(np.float32)
+    pts = np.array([[5., 20., 25.], [2., 10., 10.],
+                    [7., 30., 40.], [3., 15., 20.]])
+    off = augment_frame_for_viewer(
+        vol, pts, _identity_params(use_dropout=False, dropout_p=0.9, min_keep=2),
+        target_sz=(4, 16, 16))
+    assert list(off.keep_idx) == [0, 1, 2, 3]
+    on = augment_frame_for_viewer(
+        vol, pts, _identity_params(use_dropout=True, dropout_p=0.9, min_keep=2,
+                                   seed=0),
+        target_sz=(4, 16, 16))
+    assert 2 <= len(on.keep_idx) < 4
+
+
+def test_resolve_dropout_p_legacy_missing_key():
+    from barlow_track.utils.volume_data import resolve_dropout_p
+    # Old configs without the master switch: dropout_p alone governs
+    assert resolve_dropout_p({'dropout_p': 0.5}) == 0.5
+    assert resolve_dropout_p({'use_dropout': False, 'dropout_p': 0.5}) == 0.0
+    assert resolve_dropout_p({'use_dropout': True, 'dropout_p': 0.5}) == 0.5
+
+
+def _state_with_fake_project(monkeypatch, params):
+    import types
+
+    import barlow_track.utils.volume_augment_viewer as vav
+
+    vol, pts = _synthetic_volume_and_points()
+    seg = np.array([10, 11])
+    monkeypatch.setattr(vav, 'load_volume', lambda proj, t: vol)
+    monkeypatch.setattr(vav, 'get_centroids_for_volume', lambda proj, t: (pts, seg))
+    proj = types.SimpleNamespace(num_frames=3)
+    return ViewerState(proj, target_sz=(4, 16, 16), params=params)
+
+
+def test_set_crop_idx_updates_crop_without_reaugment(monkeypatch):
+    # Regression: the live crop slider set params before calling, so a stale
+    # early-return skipped the recompute (highlight moved, crop did not)
+    state = _state_with_fake_project(monkeypatch, _identity_params())
+    vol_aug = state.result.vol_aug
+    first = state.result.crop_raw.copy()
+    state.set_crop_idx(1)
+    assert state.result.vol_aug is vol_aug  # augmentation reused ...
+    assert not np.allclose(state.result.crop_raw, first)  # ... but crop moved
 
 
 # ------------------------------------------------------------ real project

@@ -146,6 +146,20 @@ def sample_dropout_keep(n, rng, dropout_p=0.0, min_keep=2):
     return keep, np.where(keep)[0].astype(int)
 
 
+def resolve_dropout_p(position_args) -> float:
+    """Effective dropout probability honoring the ``use_dropout`` master switch.
+
+    ``use_dropout: false`` (the train-config default) forces 0.0. A missing
+    key means True, so old configs that only set ``dropout_p`` keep working.
+    Shared by training (``VolumeCoordsDataset``) and the napari viewer so the
+    two cannot drift apart.
+    """
+    position_args = position_args or {}
+    if not position_args.get('use_dropout', True):
+        return 0.0
+    return float(position_args.get('dropout_p', 0.0))
+
+
 def get_centroids_for_volume(project_data, t):
     """Centroids (z, x, y) + raw segmentation ids for one timepoint.
 
@@ -236,7 +250,7 @@ class VolumeCoordsDataset(Dataset):
         # Position-only dropout: independent subset per view
         _, keep_idx = sample_dropout_keep(
             len(pts_aug), self.rng,
-            dropout_p=self.position_args.get('dropout_p', 0.0),
+            dropout_p=resolve_dropout_p(self.position_args),
             min_keep=self.position_args.get('min_keep', 2))
         pts_kept = pts_aug[keep_idx] if len(pts_aug) else pts_aug
         crops = extract_crops(vol_aug, pts_kept, self.target_sz)

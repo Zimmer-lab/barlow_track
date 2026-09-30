@@ -27,9 +27,18 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
+    print(f"Loading project from {args.project_path} ...", flush=True)
     project_data = load_project_for_viewer(args.project_path)
+    print(f"Project loaded: {project_data.num_frames} frames.", flush=True)
+    print(f"Augmenting frame {args.frame} with crop size {tuple(args.target_sz)} ...",
+          flush=True)
     params = ViewerParams(frame=args.frame, seed=args.seed)
-    show_volume_augmentation(project_data, target_sz=tuple(args.target_sz), params=params)
+    main, crop, state = show_volume_augmentation(
+        project_data, target_sz=tuple(args.target_sz), params=params)
+    print(f"Viewers ready: frame {state.params.frame} with "
+          f"{state.num_points} neurons ({state.num_kept} kept).", flush=True)
 
     import napari
+    print("Starting napari event loop ...", flush=True)
     napari.run()
+    print("napari event loop exited.", flush=True)

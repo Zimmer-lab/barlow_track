@@ -27,6 +27,19 @@ except ImportError as e:
 from barlow_track.utils.utils_ground_truth import check_training_finished, discover_trials, extract_val_from_json
 
 
+def _to_yaml_safe(obj):
+    """Recursively convert numpy types (and tuples) to plain python types for ruamel.yaml."""
+    if isinstance(obj, dict):
+        return {k: _to_yaml_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_yaml_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return [_to_yaml_safe(v) for v in obj.tolist()]
+    if isinstance(obj, np.generic):
+        return obj.item()
+    return obj
+
+
 def attach_prior_trial_to_ax_client(ax_client, full_params, result):
     # keep only parameters Ax knows about
     ax_params = {k: v for k, v in full_params.items() if k in ax_client.experiment.search_space.parameters}
@@ -324,9 +337,10 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     # Copy the best parameters and index to a file
     best_params_path = os.path.join(experiment_parent_folder, 'best_parameters.yaml')
     with open(best_params_path, 'w') as f:
-        best_parameters['best_trial_index'] = best_trial_index
-        best_parameters['best_trial_name'] = best_trial_name
-        best_parameters['mean_and_variance'] = mean_and_variance
+        best_parameters = _to_yaml_safe(best_parameters or {})
+        best_parameters['best_trial_index'] = _to_yaml_safe(best_trial_index)
+        best_parameters['best_trial_name'] = _to_yaml_safe(best_trial_name)
+        best_parameters['mean_and_variance'] = _to_yaml_safe(mean_and_variance)
         YAML().dump(best_parameters, f)
 
 

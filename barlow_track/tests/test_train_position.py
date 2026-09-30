@@ -29,7 +29,7 @@ def _smoke_args(project_dir, kind):
         target_sz_xy=16,
         use_position=True,
         use_attention=kind == 'attention',
-        fusion='add',
+        fusion='position_only' if kind == 'posonly' else 'add',
         fusion_norm='layernorm' if kind == 'attention' else 'none',
         self_layers=1,
         keypoint_encoder_layers=[16, 32],
@@ -60,14 +60,21 @@ def _run_smoke(tmp_path, kind):
     assert np.isfinite(test_losses['test_loss'])
     assert (Path(tmp_path) / 'resnet50.pth').exists()
     assert (Path(tmp_path) / 'args.pickle').exists()
-    assert getattr(args, 'model_type') == kind
+    assert getattr(args, 'model_type') == {'posonly': 'position'}.get(kind, kind)
 
     # Saved checkpoints reload as the right class (load_barlow_model dispatch)
     from barlow_track.utils.barlow import load_barlow_model
     _, reloaded, _ = load_barlow_model(str(Path(tmp_path) / 'resnet50.pth'))
     expected_cls = {'attention': 'BarlowVolumeAttention',
-                    'position': 'BarlowWithPosition'}[kind]
+                    'position': 'BarlowWithPosition',
+                    'posonly': 'BarlowWithPosition'}[kind]
     assert type(reloaded).__name__ == expected_cls
+    if kind == 'posonly':
+        assert reloaded.fusion == 'position_only'
+        # Reload with an explicit config goes through architecture validation
+        from barlow_track.utils.barlow import load_barlow_model as _load
+        _, reloaded2, _ = _load(str(Path(tmp_path) / 'resnet50.pth'), expected_args=args)
+        assert type(reloaded2).__name__ == 'BarlowWithPosition'
     return args
 
 
@@ -81,6 +88,12 @@ def test_train_position_smoke(tmp_path):
 @pytest.mark.slow
 def test_train_attention_smoke(tmp_path):
     _run_smoke(tmp_path, kind='attention')
+
+
+@requires_project
+@pytest.mark.slow
+def test_train_posonly_smoke(tmp_path):
+    _run_smoke(tmp_path, kind='posonly')
 
 
 @requires_project

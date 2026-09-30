@@ -72,7 +72,7 @@ def test_centroids_available(project_data):
 @requires_project
 def test_dataset_getitem_shapes(project_data):
     ds = VolumeCoordsDataset(project_data, [0, 1, 2], target_sz=(4, 32, 32), seed=0)
-    y1, y2, k1, k2 = ds[0]
+    y1, y2, k1, k2 = ds[0][:4]
     n = ds.num_objects(0)
     assert y1.shape == (n, 1, 4, 32, 32) and y2.shape == y1.shape
     assert k1.shape == (n, 3) and k2.shape == (n, 3)
@@ -90,7 +90,7 @@ def test_identity_global_matches_legacy_crop_path(project_data):
     ds = VolumeCoordsDataset(project_data, [0], target_sz=target_sz,
                              global_args=dict(p_global_affine=0.0),
                              photometric_args=dict(p_blur=0.0, p_noise=0.0), seed=0)
-    y1, _, k1, _ = ds[0]
+    y1, _, k1, _ = ds[0][:4]
 
     vol = load_volume(project_data, 0)
     zxy, _ = get_centroids_for_volume(project_data, 0)
@@ -109,5 +109,35 @@ def test_identity_global_matches_legacy_crop_path(project_data):
 @requires_project
 def test_kpts_normalized_range(project_data):
     ds = VolumeCoordsDataset(project_data, [0], target_sz=(4, 32, 32), seed=0)
-    _, _, k1, _ = ds[0]
+    _, _, k1, _ = ds[0][:4]
     assert (k1.abs() <= 1.0).all()
+
+
+# ---------------------------------------------------------- position-only augments (synthetic, fast)
+def test_position_jitter_is_noop_at_zero():
+    from barlow_track.utils.volume_data import apply_position_jitter
+    rng = np.random.RandomState(0)
+    pts = np.array([[4.0, 10.0, 10.0], [4.0, 12.0, 12.0]])
+    assert np.allclose(apply_position_jitter(pts, rng, 0.0), pts)
+
+
+def test_position_jitter_moves_points():
+    from barlow_track.utils.volume_data import apply_position_jitter
+    pts = np.array([[4.0, 10.0, 10.0], [4.0, 12.0, 12.0]])
+    out = apply_position_jitter(pts, np.random.RandomState(0), 1.0)
+    assert out.shape == pts.shape and not np.allclose(out, pts)
+
+
+def test_dropout_keep_guarantees_min_keep():
+    from barlow_track.utils.volume_data import sample_dropout_keep
+    _, idx = sample_dropout_keep(6, np.random.RandomState(1), dropout_p=0.5, min_keep=2)
+    assert len(idx) >= 2
+    _, idx = sample_dropout_keep(1, np.random.RandomState(0), dropout_p=0.9, min_keep=2)
+    assert len(idx) == 1  # tiny volumes keep everything
+
+
+def test_intersection_gather_pairs_views():
+    import torch
+    from barlow_track.utils.barlow_superglue import intersection_gather
+    s1, s2 = intersection_gather(torch.tensor([0, 1, 3, 4]), torch.tensor([1, 2, 3]))
+    assert s1.tolist() == [1, 2] and s2.tolist() == [0, 2]

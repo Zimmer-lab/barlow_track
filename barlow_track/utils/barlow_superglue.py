@@ -51,6 +51,36 @@ def both_correlation_matrices(z1, z2):
     return c_features, c_objects
 
 
+def intersection_gather(idx1, idx2):
+    """Align two independent dropout views on their surviving intersection.
+
+    idx1/idx2: (N1,)/(N2,) original object ids (sorted, unique). Returns
+    (sel1, sel2): index tensors gathering the COMMON ids in the same order,
+    so z1[sel1] <-> z2[sel2] are paired. Empty when there is no overlap.
+    """
+    if idx1 is None or idx2 is None:
+        return None, None
+    i1 = idx1.reshape(-1).tolist()
+    i2 = idx2.reshape(-1).tolist()
+    set2 = set(i2)
+    common = [v for v in i1 if v in set2]
+    if not common:
+        dev = idx1.device
+        return (torch.empty(0, dtype=torch.long, device=dev),
+                torch.empty(0, dtype=torch.long, device=dev))
+    pos2 = {v: j for j, v in enumerate(i2)}
+    sel1 = torch.as_tensor([j for j, v in enumerate(i1) if v in set2],
+                           dtype=torch.long, device=idx1.device)
+    sel2 = torch.as_tensor([pos2[v] for v in common],
+                           dtype=torch.long, device=idx2.device)
+    return sel1, sel2
+
+
+def _zero_losses(device):
+    z = torch.tensor(0.0, device=device)
+    return z, z.clone(), z.clone()
+
+
 class L2Normalize(nn.Module):
     """Unit-norm over the feature dim (per neuron)."""
 
@@ -116,9 +146,28 @@ class BarlowWithPosition(BarlowTwins3d):
     def embed_with_position(self, y, kpts, scores=None):
         return self.projector(self.fused_descriptors(y, kpts, scores))
 
-    def forward(self, y1, y2, kpts1, kpts2, scores1=None, scores2=None):
+    def _paired_for_loss(self, z1, z2, idx1=None, idx2=None):
+        """Full-context embeddings -> intersection-paired rows for the loss.
+
+        Attention/contextualization already saw each view's full neighbor set;
+        the Barlow loss itself needs paired rows, so gather the common ids.
+        Returns None when the intersection has < 2 objects (no usable pairs).
+        """
+        if idx1 is None or idx2 is None:
+            return z1, z2
+        sel1, sel2 = intersection_gather(idx1, idx2)
+        if sel1 is None or len(sel1) < 2:
+            return None
+        return z1[sel1], z2[sel2]
+
+    def forward(self, y1, y2, kpts1, kpts2, scores1=None, scores2=None,
+                idx1=None, idx2=None):
         z1 = self.embed_with_position(y1, kpts1, scores1)
         z2 = self.embed_with_position(y2, kpts2, scores2)
+        paired = self._paired_for_loss(z1, z2, idx1, idx2)
+        if paired is None:
+            return _zero_losses(y1.device)
+        z1, z2 = paired
         c_features, c_objects = both_correlation_matrices(z1, z2)
 
         loss_transpose = torch.tensor(0.0, device=y1.device)
@@ -173,9 +222,14 @@ class BarlowVolumeAttention(BarlowWithPosition):
     def embed_with_position(self, y, kpts, scores=None):
         return self.projector(self.contextual_descriptors(y, kpts, scores))
 
-    def forward(self, y1, y2, kpts1, kpts2, scores1=None, scores2=None):
+    def forward(self, y1, y2, kpts1, kpts2, scores1=None, scores2=None,
+                idx1=None, idx2=None):
         z1 = self.embed_with_position(y1, kpts1, scores1)
         z2 = self.embed_with_position(y2, kpts2, scores2)
+        paired = self._paired_for_loss(z1, z2, idx1, idx2)
+        if paired is None:
+            return _zero_losses(y1.device)
+        z1, z2 = paired
         c_features, c_objects = both_correlation_matrices(z1, z2)
 
         loss_transpose = torch.tensor(0.0, device=y1.device)

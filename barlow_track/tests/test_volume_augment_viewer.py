@@ -113,6 +113,12 @@ def test_photometric_builder_shared_with_training():
     assert isinstance(t, tio.Compose) and len(t) == 3
 
 
+def test_flip_probability_honored_and_gated_by_affine():
+    assert _identity_params().global_args_dict()['p_flip'] == 0.0
+    assert ViewerParams(p_flip=0.25).global_args_dict()['p_flip'] == 0.25
+    assert ViewerParams(use_affine=False, p_flip=0.25).global_args_dict()['p_flip'] == 0.0
+
+
 def test_point_labels_are_plain_slider_indices():
     # Single numbers only: aug labels must equal the crop_idx slider values
     assert raw_point_labels(3, np.array([7, 8, 9])) == ['0', '1', '2']

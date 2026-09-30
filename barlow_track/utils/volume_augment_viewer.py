@@ -108,6 +108,7 @@ class ViewerParams:
     scale_jitter: float = DEFAULT_GLOBAL_ARGS['scale_jitter']
     max_translation_z: float = DEFAULT_GLOBAL_ARGS['max_translation'][0]
     max_translation_xy: float = DEFAULT_GLOBAL_ARGS['max_translation'][1]
+    p_flip: float = DEFAULT_GLOBAL_ARGS['p_flip']
     # Per-crop photometric
     use_blur: bool = DEFAULT_CROP_PHOTOMETRIC_ARGS['p_blur'] > 0
     use_noise: bool = DEFAULT_CROP_PHOTOMETRIC_ARGS['p_noise'] > 0
@@ -130,7 +131,7 @@ class ViewerParams:
             scale_jitter=self.scale_jitter if self.use_affine else 0.0,
             max_translation=(self.max_translation_z, self.max_translation_xy,
                              self.max_translation_xy),
-            p_flip=1.0 if self.use_affine else 0.0,
+            p_flip=self.p_flip if self.use_affine else 0.0,
         )
 
     def photometric_args_dict(self) -> Dict:
@@ -518,8 +519,20 @@ def build_control_widget(state: ViewerState, on_reaugment,
     that reuses the current augmentation), moving ``frame`` calls
     ``on_frame_live(old_frame)`` (defaults to ``on_reaugment``). Pass
     ``None`` to keep button-only behavior (e.g. in headless tests).
+
+    Layout is two stacked boxes: augmentation parameters with the
+    ``Re-augment`` button on top, and the live ``frame`` / ``crop_idx``
+    selection sliders below it.
     """
-    from magicgui.widgets import CheckBox, Container, FloatSpinBox, PushButton, Slider, SpinBox
+    from magicgui.widgets import (
+        CheckBox,
+        Container,
+        FloatSpinBox,
+        Label,
+        PushButton,
+        Slider,
+        SpinBox,
+    )
 
     p = state.params
     w = {}
@@ -533,12 +546,15 @@ def build_control_widget(state: ViewerState, on_reaugment,
         w[name] = FloatSpinBox(value=float(value), min=float(min_val), max=float(max_val),
                                step=float(step), label=name)
 
+    # --- Top box: augmentation parameters (applied on Re-augment) ---
+    aug_names = []
     # Global affine
     w['use_affine'] = CheckBox(value=p.use_affine, label='use_affine')
     _float('max_degrees_z', p.max_degrees_z, 0.0, 180.0, step=5.0)
     _float('scale_jitter', p.scale_jitter, 0.0, 0.5)
     _float('max_translation_z', p.max_translation_z, 0.0, 10.0, step=1.0)
     _float('max_translation_xy', p.max_translation_xy, 0.0, 32.0, step=1.0)
+    _float('p_flip', p.p_flip, 0.0, 1.0, step=0.1)
     # Photometric
     w['use_blur'] = CheckBox(value=p.use_blur, label='use_blur')
     w['use_noise'] = CheckBox(value=p.use_noise, label='use_noise')
@@ -552,12 +568,14 @@ def build_control_widget(state: ViewerState, on_reaugment,
     _float('dropout_p', p.dropout_p, 0.0, 0.9, step=0.05)
     w['min_keep'] = SpinBox(value=int(p.min_keep), min=0, max=max(state.num_points, 2),
                             step=1, label='min_keep')
-    # Selection
+    w['seed'] = SpinBox(value=p.seed, min=0, max=10000, step=1, label='seed')
+    w['reaugment'] = PushButton(label='Re-augment')
+    aug_names = [name for name in w]
+    # --- Bottom box: live selection (updates the viewers immediately) ---
     max_frame = int(state.project_data.num_frames - 1)
     _slider('frame', p.frame, 0, max_frame)
     _slider('crop_idx', p.crop_idx, 0, max(state.num_kept - 1, 0))
-    w['seed'] = SpinBox(value=p.seed, min=0, max=10000, step=1, label='seed')
-    w['reaugment'] = PushButton(label='Re-augment')
+    live_names = ['frame', 'crop_idx']
 
     def _sync_all():
         for name, widget in w.items():
@@ -600,7 +618,13 @@ def build_control_widget(state: ViewerState, on_reaugment,
     w['reaugment'].changed.connect(_on_click)
     w['crop_idx'].changed.connect(_on_crop_slider)
     w['frame'].changed.connect(_on_frame_slider)
-    box = Container(widgets=list(w.values()), labels=True)
+    aug_box = Container(widgets=[w[name] for name in aug_names],
+                        labels=True, label='Augmentation (press Re-augment)')
+    live_box = Container(
+        widgets=[Label(value='Live selection (updates viewers immediately)'),
+                 *[w[name] for name in live_names]],
+        labels=True, label='Live selection')
+    box = Container(widgets=[aug_box, live_box], labels=False)
     box._widgets = w  # expose for tests / external tweaks
     box._sync_crop_range = _sync_crop_range
     box._guard = _guard

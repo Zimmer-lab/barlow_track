@@ -169,3 +169,17 @@ barlow_track/scripts/wandb/
 *.pth
 *.ipynb
 barlow_track/notebooks/wandb
+
+# Orca workspace files
+.bash_profile
+.bashrc
+.claude/
+.gitconfig
+.gitmodules
+.idea
+.mcp.json
+.profile
+.ripgreprc
+.vscode
+.zprofile
+.zshrc

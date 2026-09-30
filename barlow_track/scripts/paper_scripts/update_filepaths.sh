@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-old_str="/lisc/scratch/neurobiology/zimmer/fieseler"
+old_str="/lisc/data/scratch/neurobiology/zimmer/fieseler"
 new_str="/lisc/data/scratch/neurobiology/zimmer/fieseler"
 file_name="project_config.yaml"
 

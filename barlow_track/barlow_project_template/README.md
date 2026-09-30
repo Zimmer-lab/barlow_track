@@ -42,7 +42,7 @@ python barlow_track/scripts/train_barlow_clusterer.py -p /path/to/train_config.y
 ```
 conda activate MY_ENV
 cd /path/to/this/repo
-python barlow_track/scripts/sbatch_train_barlow_clusterer.sbatch -p /path/to/train_config.yaml
+sbatch barlow_track/scripts/sbatch_train_barlow_clusterer.sbatch -p /path/to/train_config.yaml
 ```
 
 Important note: this will use a HARDCODED PATH to a script to run the actual training (the .py file in the previous section).
@@ -64,6 +64,7 @@ If you are in the zimmer lab, you can add your trained network folder here:
 
 ### Alternate training: multiple networks with hyperparameter search
 
+Note that this is not needed for most workflows with data similar to the worm baseline; in that case, the defaults are good.
 From the barlow_project_template folder, make a parent folder with the hyperparameter_search_template.yaml file, and modify it to set which parameters to vary.
 Optionally, set alternative defaults by also including a train_config.yaml file (this is required if you want to use wandb).
 Then run:

@@ -16,12 +16,28 @@ from ruamel.yaml import YAML
 from submitit import AutoExecutor, LocalJob, DebugJob
 from itertools import product
 from barlow_track.scripts.train_barlow_clusterer import train_barlow_network
+try:
+    from barlow_track.utils.barlow import PretrainedArchitectureMismatchError
+except ImportError as e:
+    raise ImportError(
+        "Installed barlow_track package is stale (no PretrainedArchitectureMismatchError); "
+        "it shadows your checkout. Reinstall from your checkout, e.g.: "
+        "pip install --no-deps -e <path-to-barlow_track-checkout>"
+    ) from e
 from barlow_track.utils.utils_ground_truth import check_training_finished, discover_trials, extract_val_from_json
 
 
 def attach_prior_trial_to_ax_client(ax_client, full_params, result):
     # keep only parameters Ax knows about
     ax_params = {k: v for k, v in full_params.items() if k in ax_client.experiment.search_space.parameters}
+    # BoTorch GP cannot fit NaN/inf/None; fail loudly here so callers can skip
+    mean = result[0] if isinstance(result, tuple) else result
+    try:
+        is_finite = bool(np.isfinite(mean))
+    except TypeError:
+        is_finite = False
+    if not is_finite:
+        raise ValueError(f"Non-finite prior trial result {mean!r}; skipping")
     trial_index = ax_client.attach_trial(parameters=ax_params)
     ax_client.experiment.trials[trial_index].run_metadata = full_params
     if not isinstance(result, tuple):
@@ -63,7 +79,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     with open(fname, 'r') as f:
         baseline_params = yaml.safe_load(f)
     if DEBUG:
-        experiment_parent_folder = '/lisc/scratch/neurobiology/zimmer/wbfm/TrainedBarlow/hyperparameter_search_debug'
+        experiment_parent_folder = '/lisc/data/scratch/neurobiology/zimmer/wbfm/TrainedBarlow/hyperparameter_search_debug'
         baseline_params['wandb_name'] = 'barlow-hyperparameter-search-debug'
         baseline_params['num_frames'] = 20
         baseline_params['epochs'] = 2
@@ -78,18 +94,41 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         args = SimpleNamespace(**parameters)
         try:
             test_losses = train_barlow_network(args)
-            result = test_losses['test_loss']
-        except (TypeError, ValueError) as e:
-            logging.warning(f"Encountered error with trial; quitting gracefully")
+            result = test_losses['test_loss'] if isinstance(test_losses, dict) else 1e6
+        except PretrainedArchitectureMismatchError:
+            # Systematic config error affecting every trial; fail fast instead of
+            # scoring 1e6 and letting Ax optimize noise.
+            raise
+        except Exception as e:
+            logging.warning(f"Encountered error with trial; quitting gracefully: {e}")
             result = 1e6
-        if np.isnan(result):
-            result = 1e6  # More or less infinity
-        return {"result": result}
+        try:
+            if result is None or not np.isfinite(result):
+                result = 1e6  # More or less infinity; Ax/BoTorch cannot fit NaN/inf
+        except TypeError:
+            result = 1e6
+        return {"result": float(result)}
 
     # Set up the Ax client
     ax_client = AxClient(enforce_sequential_optimization=DEBUG)
     # Read parameters from yaml file
     parameters = list(hyperparameter_args['hyperparameters'])
+    for param in parameters:
+        # Silence Ax UserWarning: `is_ordered` defaulting for ChoiceParameter.
+        # Explicitly preserve Ax's default (True for int) so existing searches are unaffected.
+        # NOTE: do not pass `sort_values` here; this Ax version's parameter_from_json
+        # rejects it (ValueError: Unexpected keys). Template values are pre-sorted,
+        # so the default is fine.
+        if param.get('type') == 'choice':
+            if 'sort_values' in param:
+                # Rejected by this Ax version (parameter_from_json); drop it.
+                logging.warning("Ignoring unsupported 'sort_values' for parameter "
+                                f"{param.get('name')!r}; remove it from the yaml")
+                param.pop('sort_values')
+            if param.get('value_type') == 'int':
+                param.setdefault('is_ordered', True)
+            else:
+                param.setdefault('is_ordered', False)
     ax_client.create_experiment(
         name="my_experiment",
         parameters=parameters,
@@ -113,7 +152,14 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                     print(f"Prior trial {trial_name}: training was not finished; skipping")
                     continue
                 loss = extract_val_from_json(trial_path, key="test_loss")
-                attach_prior_trial_to_ax_client(ax_client, config, loss)
+                if loss is None:
+                    print(f"Prior trial {trial_name}: no test_loss found; skipping")
+                    continue
+                try:
+                    attach_prior_trial_to_ax_client(ax_client, config, loss)
+                except ValueError as e:
+                    print(f"Prior trial {trial_name}: skipping ({e})")
+                    continue
 
             except FileNotFoundError:
                 print(f"{trial_name}: train_config.yaml not found.")
@@ -138,8 +184,8 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         executor.update_parameters(cpus_per_task=8)
         executor.update_parameters(slurm_mem="128G")
         executor.update_parameters(slurm_job_name=job_name if job_name is not None else "barlow_hyperparameter_search")
-        executor.update_parameters(slurm_gres="shard:2")
-        executor.update_parameters(slurm_constraint="l40s|a30|t4|v100|l4")
+        executor.update_parameters(slurm_gres="gpu:1")
+        executor.update_parameters(slurm_constraint="l40s|a30|t4|l4")
         executor.update_parameters(slurm_additional_parameters={"no-requeue": True})  # bash equivalent (no-arg flag): #SBATCH --no-requeue
 
     if direct_parameter_sweep:

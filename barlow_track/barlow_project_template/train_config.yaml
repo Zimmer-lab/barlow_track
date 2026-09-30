@@ -59,6 +59,38 @@ val_fraction: 0.1    # If > 1, interpreted as number of volumes not a fraction
 # Hyperparameters for the new (transposed) BarlowTrack loss
 lambd_obj: 0.67  # Set to 1 to only use the transposed loss; 0 means only original BarlowTwins loss
 
+####
+# Position encodings + SuperGlue-GNN options (all default off = legacy behavior)
+####
+use_position: false  # If true: global-before-crop aug + KeypointEncoder fusion
+use_attention: false # If true (requires use_position): intra-volume self-attention embeddings
+# use_gnn was removed: pair-only cross-volume matching has no inference path
+fusion: concat       # 'concat' (default) | 'add' (SuperGlue-style) | 'position_only' (geometry benchmark)
+fusion_norm: none    # per-branch norm before fusion: 'none' | 'layernorm' | 'l2'
+self_layers: 2       # number of intra-volume self-attention layers (attention models)
+keypoint_encoder_layers: [32, 64]
+
+# Global-before-crop augmentation (only used when use_position is true)
+global_augment:
+  p_global_affine: 1.0
+  max_degrees_z: 180.0
+  scale_jitter: 0.1
+  max_translation: [2, 8, 8]
+  p_flip: 0.0
+crop_photometric:
+  p_blur: 0.0
+  p_noise: 0.1
+  std_noise: 0.25
+
+# Position-only augmentations (only used when use_position is true).
+# Jitter shifts each view's crop centers + keypoints with Gaussian noise
+# (voxels; float or [z, x, y]); dropout drops an independent object subset
+# per view and the loss is computed on the surviving intersection.
+position_augment:
+  jitter_std: 0.0
+  dropout_p: 0.0
+  min_keep: 2
+
 # Debugging and logging parameters
 print_freq: 100
 rank: 0

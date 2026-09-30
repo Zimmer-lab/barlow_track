@@ -1,5 +1,18 @@
 # BarlowTrack
-Using a modification of Barlow Twins (self-supervised learning) to track single-cell resolution microscopy data, specifically designed for C. elegans neurons.
+Using a modification of Barlow Twins (self-supervised learning) to track single-cell resolution microscopy data, specifically designed for _C. elegans_ neurons.
+Please cite the preprint if you use this work:
+
+```
+@article{fieseler2025barlowtrack,
+  title={BarlowTrack: A Self-Supervised Framework for Zero-Shot Multi-Object Cell Tracking},
+  author={Fieseler, Charles and Lev, Itamar and Madhusudhanan, Jalaja and Zhai, Zihao and Schwartz, Siegfried and Zimmer, Manuel},
+  journal={bioRxiv},
+  pages={2025--11},
+  year={2025},
+  publisher={Cold Spring Harbor Laboratory}
+}
+```
+
 
 ## Installation
 
@@ -24,6 +37,12 @@ In this case, please install the following packages using instructions from thei
 - torch-sparse
 
 
+## Evaluating position encodings against ground truth
+
+See [docs/accuracy_evaluation.md](docs/accuracy_evaluation.md) for the full handoff:
+datasets, weights, eval scripts (`barlow_track/scripts/eval_accuracy.py`,
+`eval_leifer_accuracy.py`), results, and environment gotchas.
+
 ## Training a network
 
 See instructions in the [project folder](barlow_track/barlow_project_template/README.md)
@@ -33,8 +52,3 @@ See instructions in the [project folder](barlow_track/barlow_project_template/RE
 This is organized via the sibling repository: [wbfm](https://github.com/Zimmer-lab/wbfm).
 
 The main instructions are found here: [Running the full pipeline](https://github.com/Zimmer-lab/wbfm/blob/main/docs/running_the_pipeline.md).
-
-
-# Citation
-
-Coming soon!

@@ -357,10 +357,106 @@ def print_all_on_gpu():
             pass
 
 
-def load_barlow_model(model_fname):
+def _get_arg(args, name, default=None):
+    """Read an arch field from a SimpleNamespace or dict (checkpoints predate some keys)."""
+    if args is None:
+        return default
+    if isinstance(args, dict):
+        return args.get(name, default)
+    return getattr(args, name, default)
+
+
+def _backbone_params(args):
+    """(num_levels, f_maps) with the same defaults as fresh training."""
+    kwargs = _get_arg(args, 'backbone_kwargs', None) or {}
+    if not isinstance(kwargs, dict):
+        try:
+            kwargs = vars(kwargs)
+        except TypeError:
+            kwargs = {}
+    return kwargs.get('num_levels', 2), kwargs.get('f_maps', 4)
+
+
+def _target_sz_tuple(args):
+    """(z, xy) handling the legacy target_sz array fallback."""
+    z = _get_arg(args, 'target_sz_z', None)
+    xy = _get_arg(args, 'target_sz_xy', None)
+    if z is not None and xy is not None:
+        return z, xy
+    legacy = _get_arg(args, 'target_sz', None)
+    if legacy is not None:
+        try:
+            return legacy[0], legacy[1]
+        except (TypeError, IndexError, KeyError):
+            pass
+    return None, None
+
+
+def _expected_model_type(args):
+    if _get_arg(args, 'use_attention', False):
+        return 'attention'
+    if _get_arg(args, 'use_position', False):
+        return 'position'
+    return _get_arg(args, 'model_type', 'barlow') or 'barlow'
+
+
+class PretrainedArchitectureMismatchError(ValueError):
+    """Checkpoint architecture differs from the current config (fine-tuning setup error)."""
+
+
+def compare_model_architecture(expected_args, pretrained_args):
+    """List human-readable mismatches between config and checkpoint architecture.
+
+    Returns [] when architectures match. Each entry is
+    "field: config=<...> vs checkpoint=<...>".
+    """
+    mismatches = []
+    pre_type = _get_arg(pretrained_args, 'model_type', 'barlow') or 'barlow'
+    exp_type = _expected_model_type(expected_args)
+    if exp_type != pre_type:
+        mismatches.append(f"model_type: config={exp_type!r} vs checkpoint={pre_type!r} "
+                          f"(config use_position={_get_arg(expected_args, 'use_position', False)!r}, "
+                          f"use_attention={_get_arg(expected_args, 'use_attention', False)!r})")
+    for field in ('embedding_dim', 'projector', 'projector_final'):
+        curr, pre = _get_arg(expected_args, field), _get_arg(pretrained_args, field)
+        if curr is not None and pre is not None and curr != pre:
+            mismatches.append(f"{field}: config={curr!r} vs checkpoint={pre!r}")
+    curr_lv, curr_fm = _backbone_params(expected_args)
+    pre_lv, pre_fm = _backbone_params(pretrained_args)
+    if curr_lv != pre_lv:
+        mismatches.append(f"backbone num_levels: config={curr_lv!r} vs checkpoint={pre_lv!r}")
+    if curr_fm != pre_fm:
+        mismatches.append(f"backbone f_maps: config={curr_fm!r} vs checkpoint={pre_fm!r}")
+    curr_z, curr_xy = _target_sz_tuple(expected_args)
+    pre_z, pre_xy = _target_sz_tuple(pretrained_args)
+    if curr_z is not None and pre_z is not None and curr_z != pre_z:
+        mismatches.append(f"target_sz_z: config={curr_z!r} vs checkpoint={pre_z!r}")
+    if curr_xy is not None and pre_xy is not None and curr_xy != pre_xy:
+        mismatches.append(f"target_sz_xy: config={curr_xy!r} vs checkpoint={pre_xy!r}")
+    position_family = {'position', 'attention', 'superglue'}
+    if exp_type in position_family or pre_type in position_family:
+        for field, default in (('fusion', 'concat'), ('fusion_norm', 'none')):
+            curr, pre = _get_arg(expected_args, field, default), _get_arg(pretrained_args, field, default)
+            if curr != pre:
+                mismatches.append(f"{field}: config={curr!r} vs checkpoint={pre!r}")
+        curr_k, pre_k = list(_get_arg(expected_args, 'keypoint_encoder_layers', [32, 64])), \
+            list(_get_arg(pretrained_args, 'keypoint_encoder_layers', [32, 64]))
+        if curr_k != pre_k:
+            mismatches.append(f"keypoint_encoder_layers: config={curr_k!r} vs checkpoint={pre_k!r}")
+    if exp_type == 'attention' or pre_type == 'attention':
+        curr_s, pre_s = int(_get_arg(expected_args, 'self_layers', 2)), \
+            int(_get_arg(pretrained_args, 'self_layers', 2))
+        if curr_s != pre_s:
+            mismatches.append(f"self_layers: config={curr_s!r} vs checkpoint={pre_s!r}")
+    return mismatches
+
+
+def load_barlow_model(model_fname, expected_args=None):
     """
     Loads a model directly from the weights file, and assumes the args are saved in the same folder as args.pickle
 
+    If expected_args (current config) is given, the checkpoint architecture is
+    compared against it first and a ValueError listing every mismatch is raised.
     """
     if model_fname is None or not Path(model_fname).exists():
         raise FileNotFoundError(f"Model file not found: {model_fname}")
@@ -380,11 +476,43 @@ def load_barlow_model(model_fname):
     args_fname = Path(model_fname).with_name('args.pickle')
     args = pickle_load_binary(args_fname)
     logging.info(f"Loaded args from {args_fname}: {args}")
+    if expected_args is not None:
+        mismatches = compare_model_architecture(expected_args, args)
+        if mismatches:
+            details = "\n".join(f"  - {m}" for m in mismatches)
+            raise PretrainedArchitectureMismatchError(
+                f"Pretrained model architecture does not match current config ({model_fname}).\n"
+                f"{details}\n"
+                f"Checkpoint args were loaded from {args_fname}.\n"
+                f"Align the config with the checkpoint values above, or train from scratch "
+                f"with pretrained_model_path set to null."
+            )
     try:
         target_sz = np.array([args.target_sz_z, args.target_sz_xy, args.target_sz_xy])
     except AttributeError:
         target_sz = np.array(args.target_sz)
-    backbone_kwargs = dict(in_channels=1, num_levels=2, f_maps=4, crop_sz=target_sz)
-    model = BarlowTwins3d(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
-    model.load_state_dict(state_dict)
+    num_levels, f_maps = _backbone_params(args)
+    backbone_kwargs = dict(in_channels=1, num_levels=num_levels, f_maps=f_maps, crop_sz=target_sz)
+    model_type = getattr(args, 'model_type', 'barlow')
+    if model_type == 'superglue':
+        from barlow_track.utils.barlow_superglue import BarlowSuperGlue
+        model = BarlowSuperGlue(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
+    elif model_type == 'attention':
+        from barlow_track.utils.barlow_superglue import BarlowVolumeAttention
+        model = BarlowVolumeAttention(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
+    elif model_type == 'position':
+        from barlow_track.utils.barlow_superglue import BarlowWithPosition
+        model = BarlowWithPosition(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
+    else:
+        model = BarlowTwins3d(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
+    try:
+        model.load_state_dict(state_dict)
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"Could not load weights from {model_fname} into a '{model_type}' model "
+            f"(embedding_dim={getattr(args, 'embedding_dim', '?')}). "
+            f"If you changed the architecture, align the config with the checkpoint "
+            f"or train from scratch with pretrained_model_path set to null. "
+            f"Original error: {e}"
+        ) from e
     return gpu, model, args

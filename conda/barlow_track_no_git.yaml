@@ -1,0 +1,72 @@
+# barlow_track.yaml
+
+# Made by Charles Fieseler
+# update:  mamba env update -f barlow_track.yaml
+
+# Intended to be used with the long-term support (lts) version of pytorch
+
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.8
+  - pip
+  - numpy
+  - pandas
+  - tqdm
+  - zarr
+  - scipy
+  - torchaudio
+  - cudatoolkit=10.0.130
+  - cudnn=7.6.5
+  - matplotlib
+  - scikit-learn
+  - scikit-image
+  - lmfit
+  - natsort
+  - snakemake
+  - napari[all]
+  - pytorch=1.13.0
+  - torchvision
+  - pytorch-cuda=11.6
+  - plotly
+  - pip:
+    - tifffile==2023.7.10
+    - simpleitk==2.2.1
+    - opencv-contrib-python-headless
+    - tables
+    - networkx
+    - tensorflow
+    - sacred
+    - seaborn
+    - ruamel.yaml
+    - stardist  # Use 0.8.4 for printing fix, but not actually necessary
+    - hashfs
+    - openpyxl
+    - pytest
+    - backports.cached_property
+    - pytorch-lightning
+    - wandb
+    - hdbscan
+    - statsmodels
+    - ppca
+    - methodtools
+    - kaleido
+    - skan==0.9 # For behavior pipeline
+    - loguru  # For imutils
+    - ndtiff
+    - ndstorage
+    - torchio
+    - umap-learn
+    - pynwb
+    - ndx_multichannel_volume
+    - xlrd
+    - submitit
+    - kaleido
+    - torch_geometric
+    - torch-scatter
+    - torch-sparse
+    - --find-links https://data.pyg.org/whl/torch-2.1.0+cu121.html

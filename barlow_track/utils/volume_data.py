@@ -159,6 +159,23 @@ def load_volume(project_data, t):
     return np.asarray(vol, dtype=np.float32)
 
 
+def in_bounds_mask(points_zxy, vol_shape):
+    """Bool mask of points whose centroid lies inside the volume.
+
+    Non-square (H, W) volumes rotate points completely outside on large
+    z-rotations; their clipped crops would be nonsensical edge duplicates
+    with out-of-range keypoints, so callers drop them (keeping original
+    indices for intersection alignment).
+    """
+    pts = np.asarray(points_zxy, dtype=float)
+    if pts.size == 0:
+        return np.zeros((0,), dtype=bool)
+    shape = np.asarray(vol_shape, dtype=float)
+    return ((pts[:, 0] >= 0) & (pts[:, 0] < shape[0]) &
+            (pts[:, 1] >= 0) & (pts[:, 1] < shape[1]) &
+            (pts[:, 2] >= 0) & (pts[:, 2] < shape[2]))
+
+
 def extract_crops(volume, points_zxy, target_sz):
     """Extract a target_sz crop centered on each (z, x, y) point."""
     sz = np.array([1, *volume.shape])  # mimic full-video 4d shape for clipping
@@ -175,7 +192,9 @@ class VolumeCoordsDataset(Dataset):
         kpts1/kpts2: (N1/N2, 3) normalized (z, x, y) torch tensors, augmentation-consistent
         idx1/idx2: (N1/N2,) long tensors of original object indices, so the
             training loss can align the intersection when per-view object
-            dropout keeps different subsets (N1 != N2).
+            dropout keeps different subsets (N1 != N2). Objects whose
+            transformed centroid falls outside the volume are also dropped
+            here (same idx mechanism), so N1/N2 vary with the augmentation.
     Volumes are loaded on demand (NOT pre-stacked) so RAM stays ~1 volume.
     """
 
@@ -224,16 +243,26 @@ class VolumeCoordsDataset(Dataset):
         # Position-only jitter: shift crop centers AND keypoints together
         pts_aug = apply_position_jitter(pts_aug, self.rng,
                                         self.position_args.get('jitter_std', 0.0))
-        # Position-only dropout: independent subset per view
-        _, keep_idx = sample_dropout_keep(
-            len(pts_aug), self.rng,
+        # Drop objects rotated/translated completely out of frame: their
+        # clipped crops would be edge duplicates with out-of-range keypoints.
+        # Keep original indices so the loss can still align the intersection.
+        valid = in_bounds_mask(pts_aug, vol_aug.shape)
+        valid_orig_idx = np.where(valid)[0]
+        pts_valid = pts_aug[valid] if len(pts_aug) else pts_aug
+        # Position-only dropout: independent subset per view (of survivors)
+        _, keep_rel = sample_dropout_keep(
+            len(pts_valid), self.rng,
             dropout_p=self.position_args.get('dropout_p', 0.0),
             min_keep=self.position_args.get('min_keep', 2))
-        pts_kept = pts_aug[keep_idx] if len(pts_aug) else pts_aug
+        keep_idx = valid_orig_idx[keep_rel] if len(valid_orig_idx) else valid_orig_idx
+        pts_kept = pts_valid[keep_rel] if len(pts_valid) else pts_valid
         crops = extract_crops(vol_aug, pts_kept, self.target_sz)
         # 4D (N,Z,X,Y) with N as the channel dim, exactly like the legacy
         # NeuronAugmentedImagePairDataset path (torchio Image convention)
-        x = self.crop_transform(torch.from_numpy(crops))
+        if len(crops) == 0:
+            x = torch.from_numpy(crops)
+        else:
+            x = self.crop_transform(torch.from_numpy(crops))
         if not torch.is_tensor(x):
             x = torch.as_tensor(np.asarray(x))
         x = x.float().unsqueeze(1)  # (N,1,Z,X,Y)

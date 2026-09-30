@@ -92,21 +92,18 @@ class ViewerParams:
     """All tunable augmentation parameters plus frame/crop selection.
 
     Boolean ``use_*`` flags map to the widget checkboxes; when False the
-    corresponding probability is forced to 0 so the transform is skipped.
+    corresponding transform is skipped, when True it is always applied
+    (probability is fixed to 1, unlike training where it is stochastic).
     """
     # Global affine (applied to full volume + points)
     use_affine: bool = True
-    p_global_affine: float = DEFAULT_GLOBAL_ARGS['p_global_affine']
     max_degrees_z: float = DEFAULT_GLOBAL_ARGS['max_degrees_z']
     scale_jitter: float = DEFAULT_GLOBAL_ARGS['scale_jitter']
     max_translation_z: float = DEFAULT_GLOBAL_ARGS['max_translation'][0]
     max_translation_xy: float = DEFAULT_GLOBAL_ARGS['max_translation'][1]
-    p_flip: float = DEFAULT_GLOBAL_ARGS['p_flip']
     # Per-crop photometric
     use_blur: bool = DEFAULT_CROP_PHOTOMETRIC_ARGS['p_blur'] > 0
-    p_blur: float = DEFAULT_CROP_PHOTOMETRIC_ARGS['p_blur']
     use_noise: bool = DEFAULT_CROP_PHOTOMETRIC_ARGS['p_noise'] > 0
-    p_noise: float = DEFAULT_CROP_PHOTOMETRIC_ARGS['p_noise']
     std_noise: float = DEFAULT_CROP_PHOTOMETRIC_ARGS['std_noise']
     # Selection
     seed: int = 0
@@ -115,18 +112,18 @@ class ViewerParams:
 
     def global_args_dict(self) -> Dict:
         return dict(
-            p_global_affine=self.p_global_affine if self.use_affine else 0.0,
+            p_global_affine=1.0 if self.use_affine else 0.0,
             max_degrees_z=self.max_degrees_z,
             scale_jitter=self.scale_jitter if self.use_affine else 0.0,
             max_translation=(self.max_translation_z, self.max_translation_xy,
                              self.max_translation_xy),
-            p_flip=self.p_flip if self.use_affine else 0.0,
+            p_flip=1.0 if self.use_affine else 0.0,
         )
 
     def photometric_args_dict(self) -> Dict:
         return dict(
-            p_blur=self.p_blur if self.use_blur else 0.0,
-            p_noise=self.p_noise if self.use_noise else 0.0,
+            p_blur=1.0 if self.use_blur else 0.0,
+            p_noise=1.0 if self.use_noise else 0.0,
             std_noise=self.std_noise,
         )
 
@@ -387,17 +384,13 @@ def build_control_widget(state: ViewerState, on_reaugment) -> object:
 
     # Global affine
     w['use_affine'] = CheckBox(value=p.use_affine, label='use_affine')
-    _float('p_global_affine', p.p_global_affine, 0.0, 1.0)
     _float('max_degrees_z', p.max_degrees_z, 0.0, 180.0, step=5.0)
     _float('scale_jitter', p.scale_jitter, 0.0, 0.5)
     _float('max_translation_z', p.max_translation_z, 0.0, 10.0, step=1.0)
     _float('max_translation_xy', p.max_translation_xy, 0.0, 32.0, step=1.0)
-    _float('p_flip', p.p_flip, 0.0, 1.0)
     # Photometric
     w['use_blur'] = CheckBox(value=p.use_blur, label='use_blur')
-    _float('p_blur', p.p_blur, 0.0, 1.0)
     w['use_noise'] = CheckBox(value=p.use_noise, label='use_noise')
-    _float('p_noise', p.p_noise, 0.0, 1.0)
     _float('std_noise', p.std_noise, 0.0, 1.0)
     # Selection
     max_frame = int(state.project_data.num_frames - 1)

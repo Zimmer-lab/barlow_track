@@ -233,3 +233,152 @@ def test_position_only_with_attention(batch):
     assert torch.isfinite(loss)
     loss.backward()
     assert model.self_gnn.layers[0].attn.merge.weight.grad is not None
+
+
+def test_concat_fusion_has_no_bare_relu(batch):
+    from torch import nn as _nn
+    y1, y2, k1, k2 = batch
+    model = BarlowWithPosition(_args(fusion='concat'), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    assert isinstance(model.fuse_mlp[-1], _nn.LayerNorm)  # post-fusion norm, condensed
+    assert not any(isinstance(m, _nn.ReLU) for m in model.fuse_mlp)
+    loss, _, _ = model(y1, y2, k1, k2)
+    assert torch.isfinite(loss)
+
+
+def test_gated_attention_starts_near_identity(batch):
+    import math
+    y1, _, k1, _ = batch
+    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    gate = model.attention_gate_value()
+    assert gate == pytest.approx(1.0 / (1.0 + math.exp(4.0)), rel=0.01)
+    assert gate < 0.05
+    model.eval()
+    with torch.no_grad():
+        d = model.fused_descriptors(y1, k1)
+        c = model.contextualize(d)
+        # Near-identity residual + terminal LayerNorm: per-row unit-ish scale,
+        # no huge shared offset injected.
+        assert c.shape == d.shape
+        assert torch.isfinite(c).all()
+        row_norms = c.norm(dim=1)
+        assert (row_norms > 0).all()
+
+
+def test_custom_gate_init(batch):
+    y1, _, k1, _ = batch
+    model = BarlowVolumeAttention(_attn_args(attn_gate_init=0.0), backbone=ResidualEncoder3D,
+                                  **_backbone_kwargs())
+    assert model.attention_gate_value() == pytest.approx(0.5)
+    model.eval()
+    with torch.no_grad():
+        c = model.contextualize(model.fused_descriptors(y1, k1))
+        assert torch.isfinite(c).all()
+
+
+def test_sweep_template_names_match_train_config():
+    # The Ax runner merges sweep params flat over train_config.yaml, so every
+    # swept name must be a top-level training key (nested dicts can't be swept).
+    import yaml
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2] / 'barlow_track' / 'barlow_project_template'
+    with open(root / 'train_config.yaml') as f:
+        baseline = yaml.safe_load(f)
+    with open(root / 'hyperparameter_search_template.yaml') as f:
+        sweep = yaml.safe_load(f)
+    names = [p['name'] for p in sweep['hyperparameters']]
+    assert 'target_sz_z' not in names and 'target_sz_xy' not in names  # crop size fixed
+    missing = [n for n in names if n not in baseline]
+    assert not missing, f"sweep params missing from train_config.yaml: {missing}"
+
+
+def test_descriptor_health_ranges(batch):
+    from barlow_track.utils.barlow_superglue import descriptor_health
+    y1, _, k1, _ = batch
+    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    model.eval()
+    with torch.no_grad():
+        d = model.fused_descriptors(y1, k1)
+        h = descriptor_health(d)
+    n, dim = d.shape
+    assert 1.0 <= h['eff_rank'] <= min(n, dim)
+    assert 0.0 <= h['offdiag_corr'] <= 1.0
+    assert 0.0 <= h['dead_frac'] <= 1.0
+    assert h['mean_frac'] >= 0.0
+
+
+def test_volume_diagnostics_keys_and_entropy(batch):
+    from barlow_track.utils.barlow_superglue import volume_descriptor_diagnostics
+    y1, _, k1, _ = batch
+    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    model.eval()
+    with torch.no_grad():
+        diag = volume_descriptor_diagnostics(model, y1, k1)
+    assert 'fused_eff_rank' in diag and 'contextual_eff_rank' in diag
+    assert 'attn_gate' in diag and diag['attn_gate'] < 0.05
+    assert 'position_jitter_sensitivity' in diag
+    ent = diag['attention_entropy']
+    assert ent != ent or 0.0 <= ent <= 1.0  # NaN (no probs yet ok) or normed range
+
+
+def test_old_checkpoint_state_loads_with_new_params(batch):
+    # Simulate a pre-gating checkpoint: strip the new keys, reload leniently.
+    y1, y2, k1, k2 = batch
+    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    full = model.state_dict()
+    stripped = {k: v for k, v in full.items()
+                if not (k.startswith('attn_gate') or k.startswith('norm_context.')
+                        or k.startswith('fuse_mlp.2.') or k.startswith('fuse_mlp.3.')
+                        or k.startswith('fuse_mlp.4.'))}
+    assert stripped  # first Linear + backbone still there
+    fresh = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    missing, unexpected = fresh.load_state_dict(stripped, strict=False)
+    assert not unexpected
+    assert set(missing) == set(full) - set(stripped)
+    loss, _, _ = fresh(y1, y2, k1, k2)
+    assert torch.isfinite(loss)
+
+
+def test_projector_uses_layernorm_not_batchnorm(batch):
+    # A batch is one volume: BatchNorm would erase volume-level signal before
+    # the loss; LayerNorm (per-neuron) preserves inter-neuron structure.
+    from torch import nn as _nn
+    y1, y2, k1, k2 = batch
+    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    assert not any(isinstance(m, _nn.BatchNorm1d) for m in model.modules())
+    norms = [m for m in model.projector if isinstance(m, _nn.LayerNorm)]
+    assert len(norms) == 2  # one per hidden projector layer
+    loss, _, _ = model(y1, y2, k1, k2)
+    assert torch.isfinite(loss)
+    loss.backward()
+
+
+def test_old_batchnorm_checkpoint_loads_leniently(tmp_path, batch):
+    # Simulate a pre-LayerNorm checkpoint: same keys plus stale BN buffers.
+    # load_barlow_model must accept it (BN affine maps onto LayerNorm;
+    # running stats ignored) since tracking never uses the projector.
+    import pickle
+    y1, _, k1, _ = batch
+    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    sd = dict(model.state_dict())
+    ln_idx = [i for i, m in enumerate(model.projector) if isinstance(m, torch.nn.LayerNorm)]
+    assert ln_idx  # norm positions carry the stale BN buffers in old checkpoints
+    for i in ln_idx:
+        dim = model.projector[i].normalized_shape[0]
+        sd[f'projector.{i}.running_mean'] = torch.zeros(dim)
+        sd[f'projector.{i}.running_var'] = torch.ones(dim)
+    sd[f'projector.{ln_idx[0]}.num_batches_tracked'] = torch.tensor(100)
+    wpath = tmp_path / 'resnet50.pth'
+    torch.save(sd, str(wpath))
+    _a = _attn_args()
+    _a.model_type = 'attention'
+    _a.target_sz_z, _a.target_sz_xy = 4, 16
+    _a.backbone_kwargs = dict(num_levels=2, f_maps=2)
+    with open(tmp_path / 'args.pickle', 'wb') as f:
+        pickle.dump(_a, f)
+    from barlow_track.utils.barlow import load_barlow_model
+    _, reloaded, _ = load_barlow_model(str(wpath))
+    assert type(reloaded).__name__ == 'BarlowVolumeAttention'
+    reloaded.eval()
+    with torch.no_grad():
+        d = reloaded.contextual_descriptors(y1, k1)
+        assert torch.isfinite(d).all()

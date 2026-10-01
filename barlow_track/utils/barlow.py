@@ -36,6 +36,14 @@ class BarlowTwins3d(nn.Module):
         self.backbone.fc = nn.Identity()
 
         # projector
+        # NOTE: LayerNorm (per-neuron), NOT BatchNorm. A training batch is a
+        # single volume (rows = neurons of that volume), so BatchNorm would
+        # normalize each feature across the volume — destroying volume-level
+        # information before the loss ever sees it. The Barlow loss would then
+        # be blind to shared volume-mean components and could neither train
+        # on them nor train them away in the pre-projector (tracking) space.
+        # LayerNorm keeps inter-neuron structure intact so the loss pressures
+        # the descriptors we actually track with.
         sizes = [embedding_dim] + list(map(int, args.projector.split('-')))
         if 'projector_final' in vars(args):
             # Otherwise assume it's all in the original projector string
@@ -44,8 +52,7 @@ class BarlowTwins3d(nn.Module):
         layers = []
         for i in range(len(sizes) - 2):
             layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
-            # layers.append(nn.BatchNorm1d(sizes[i + 1], track_running_stats=False))
-            layers.append(nn.BatchNorm1d(sizes[i + 1]))
+            layers.append(nn.LayerNorm(sizes[i + 1]))
             layers.append(nn.ReLU(inplace=True))
         layers.append(nn.Linear(sizes[-2], sizes[-1], bias=False))
         self.projector = nn.Sequential(*layers)
@@ -508,11 +515,52 @@ def load_barlow_model(model_fname, expected_args=None):
     try:
         model.load_state_dict(state_dict)
     except RuntimeError as e:
-        raise RuntimeError(
-            f"Could not load weights from {model_fname} into a '{model_type}' model "
-            f"(embedding_dim={getattr(args, 'embedding_dim', '?')}). "
-            f"If you changed the architecture, align the config with the checkpoint "
-            f"or train from scratch with pretrained_model_path set to null. "
-            f"Original error: {e}"
-        ) from e
+        # Backward compat: checkpoints predating gated attention (attn_gate,
+        # norm_context) and the LayerNorm-terminated fusion MLP have missing
+        # keys only. Load what matches and keep fresh inits for the rest
+        # (gate starts near-identity by design, so old weights behave like
+        # the old model on load). Checkpoints predating the projector
+        # BatchNorm->LayerNorm switch additionally carry stale BN buffers
+        # (running_mean/var); those are ignored with a warning. BN affine
+        # weight/bias share key names and shapes with the new LayerNorm and
+        # load directly — fine for backbone/fused/contextual eval (the
+        # projector is discarded for tracking); retrain if you care about
+        # the 'projected' stage.
+        allowed_prefixes = ('attn_gate', 'norm_context.', 'fuse_mlp.2.',
+                            'fuse_mlp.3.', 'fuse_mlp.4.')
+        allowed_stale_suffixes = ('.running_mean', '.running_var',
+                                  '.num_batches_tracked')
+        try:
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            missing = list(missing)
+            stale_bn = [u for u in unexpected
+                        if u.startswith('projector.') and u.endswith(allowed_stale_suffixes)]
+            unexpected = [u for u in unexpected if u not in stale_bn]
+            if unexpected or any(not m.startswith(allowed_prefixes) for m in missing):
+                raise RuntimeError(
+                    f"Could not load weights from {model_fname} into a '{model_type}' model "
+                    f"(embedding_dim={getattr(args, 'embedding_dim', '?')}). "
+                    f"If you changed the architecture, align the config with the checkpoint "
+                    f"or train from scratch with pretrained_model_path set to null. "
+                    f"Original error: {e}"
+                ) from e
+            logging.warning(f"Checkpoint {model_fname} predates gated attention / "
+                            f"LayerNorm fusion MLP; {len(missing)} new params "
+                            f"kept at init: {sorted(missing)}")
+            if stale_bn:
+                logging.warning(f"Checkpoint {model_fname} predates the projector "
+                                f"BatchNorm->LayerNorm switch; {len(stale_bn)} stale "
+                                f"BN buffers ignored: {sorted(stale_bn)}")
+        except RuntimeError as e2:
+            # If the strict=False path itself raised a different error
+            # (e.g. shape mismatch), report the original failure.
+            if 'Could not load weights' in str(e2):
+                raise
+            raise RuntimeError(
+                f"Could not load weights from {model_fname} into a '{model_type}' model "
+                f"(embedding_dim={getattr(args, 'embedding_dim', '?')}). "
+                f"If you changed the architecture, align the config with the checkpoint "
+                f"or train from scratch with pretrained_model_path set to null. "
+                f"Original error: {e}"
+            ) from e
     return gpu, model, args

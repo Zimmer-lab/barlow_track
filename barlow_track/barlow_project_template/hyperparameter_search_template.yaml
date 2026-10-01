@@ -16,14 +16,14 @@ hyperparameters:
 
   - name: embedding_dim
     type: choice
-    values: [256, 512, 1024, 2048]
+    values: [256, 512]
     value_type: int
     is_ordered: true
 
   # Intra-volume self-attention depth; 0 disables attention (fusion-only ablation)
   - name: self_layers
     type: choice
-    values: [0, 1, 2, 4]
+    values: [0, 1, 2]
     value_type: int
     is_ordered: true
 
@@ -42,6 +42,6 @@ hyperparameters:
     values: [layernorm, l2]
 
   # Weight on the object-space (transposed) Barlow loss; 0 = feature loss only
-  - name: lambd_obj
-    type: range
-    bounds: [0.0, 1.0]
+  # - name: lambd_obj
+  #   type: range
+  #   bounds: [0.0, 1.0]

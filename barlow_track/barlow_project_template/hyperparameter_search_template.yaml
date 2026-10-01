@@ -1,4 +1,10 @@
 # Template for hyperparameter search configuration file
+#
+# NOTE: crop size (target_sz_z / target_sz_xy) is intentionally NOT searched:
+# it changes the data pipeline and breaks checkpoint comparability. Search
+# focuses on the attention/fusion anti-collapse parameters instead. All names
+# below must be top-level train_config.yaml keys (the runner merges them flat
+# over the baseline; nested dicts like position_augment cannot be swept).
 
 baseline_params_path: null
 
@@ -14,26 +20,28 @@ hyperparameters:
     value_type: int
     is_ordered: true
 
-  - name: target_sz_z
+  # Intra-volume self-attention depth; 0 disables attention (fusion-only ablation)
+  - name: self_layers
     type: choice
-    values: [4, 8, 16]
+    values: [0, 1, 2, 4]
     value_type: int
     is_ordered: true
 
-  - name: target_sz_xy
+  # Initial attention gate logit: sigmoid(-6)~0.002 (nearly off) to
+  # sigmoid(0)=0.5 (half-on). Default -4.0 starts "almost off".
+  - name: attn_gate_init
+    type: range
+    bounds: [-6.0, 0.0]
+
+  - name: fusion
     type: choice
-    values: [16, 32, 64, 128]
-    value_type: int
-    is_ordered: true
+    values: [concat, add]
 
+  - name: fusion_norm
+    type: choice
+    values: [layernorm, l2]
 
-#  - name: epochs
-#    type: range
-#    bounds: [ 10, 100 ]
-#    value_type: int
-
-  # - name: lambd_obj
-  #   type: range
-  #   bounds: [0.0, 1.0]
-  #   # Optimizing this affects the absolute value of the loss function
-
+  # Weight on the object-space (transposed) Barlow loss; 0 = feature loss only
+  - name: lambd_obj
+    type: range
+    bounds: [0.0, 1.0]

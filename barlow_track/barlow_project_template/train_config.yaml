@@ -47,8 +47,8 @@ std_RandomNoise: 0.25
 # Optimization hyperparameters
 lambd: 0.0051
 batch_size: 1  # This should stay; one volume = one batch
-weight_decay: 1e-6
-epochs: 50
+weight_decay: 1e-6  # Actually passed to Adam (previously listed but ignored)
+epochs: 20
 lr: 0.0001
 
 num_frames: 200
@@ -66,8 +66,9 @@ use_position: false  # If true: global-before-crop aug + KeypointEncoder fusion
 use_attention: false # If true (requires use_position): intra-volume self-attention embeddings
 # use_gnn was removed: pair-only cross-volume matching has no inference path
 fusion: concat       # 'concat' (default) | 'add' (SuperGlue-style) | 'position_only' (geometry benchmark)
-fusion_norm: none    # per-branch norm before fusion: 'none' | 'layernorm' | 'l2'
+fusion_norm: layernorm # per-branch norm before fusion: 'layernorm' (recommended) | 'l2' | 'none' (legacy)
 self_layers: 2       # number of intra-volume self-attention layers (attention models)
+attn_gate_init: -4.0 # initial attention gate logit; sigmoid(-4)~0.018 starts attention "almost off"
 keypoint_encoder_layers: [32, 64]
 
 # Global-before-crop augmentation (only used when use_position is true)

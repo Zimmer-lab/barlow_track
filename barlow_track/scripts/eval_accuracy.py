@@ -8,9 +8,19 @@ Pipeline per dataset: batched embed all frames -> SVD50 -> WormClusterTracker
 -> label_propagation (paper mode) -> df -> rename_columns_using_matching vs GT
 -> calculate_accuracy.
 
+Two frame sources (--source):
+  project: crops via segmentation metadata (standard path; needs
+      1-segmentation/metadata.pickle in the working copy).
+  nwb: crops centered on GT xyz read straight from a GT NWB's red_data
+      (for datasets whose segmentation is gone, e.g. leifer: its analyzed
+      project's metadata.pickle no longer exists on disk, but the NWB
+      carries both the volume and GT xyz). Works for any lab whose GT is
+      an NWB with red_data + final_tracks (flavell, leifer, samuel).
+
 Usage (wbfm env):
-  python exp_accuracy.py --lab zimmer --max_frames 50   # quick signal
-  python exp_accuracy.py --lab zimmer                   # full run
+  python eval_accuracy.py --lab zimmer --max_frames 50   # quick signal
+  python eval_accuracy.py --lab zimmer                   # full run
+  python eval_accuracy.py --lab leifer --source nwb --mode attention
 Results appended as JSON lines to /tmp/claude/exp_results.jsonl
 """
 import argparse
@@ -54,9 +64,196 @@ def log_result(rec):
     print(json.dumps(rec, indent=1))
 
 
+def _normalize_frame(emb, center, l2):
+    """Per-frame descriptor normalization (eval-time collapse diagnostic).
+
+    center: subtract the per-frame mean (removes a shared volume-mean
+    component c_i ~= m + r_i). l2: row-wise unit-norm. Applied in that
+    order when both are set; each is a no-op on empty input.
+    """
+    emb = np.asarray(emb, dtype=np.float64)
+    if emb.size == 0:
+        return emb
+    if center:
+        emb = emb - emb.mean(axis=0, keepdims=True)
+    if l2:
+        n = np.linalg.norm(emb, axis=1, keepdims=True)
+        emb = emb / np.maximum(n, 1e-12)
+    return emb
+
+
+def _trained_stage_emb(tmodel, crops, kpts, stage, device, chunk=32):
+    """One frame of trained-model descriptors at the requested stage.
+
+    backbone: tmodel.backbone(crops); fused: fused_descriptors (fallback
+    backbone); contextual: contextual_descriptors (fallback fused, then
+    backbone); projected: post-projector space via embed_with_position /
+    embed; auto: best available (legacy behavior).
+    """
+    import torch as _torch
+
+    def _cat(fn):
+        return _torch.cat([fn(crops[j:j + chunk].to(device),
+                               kpts[j:j + chunk].to(device) if kpts is not None else None).cpu()
+                           for j in range(0, len(crops), chunk)], 0)
+
+    def _cat_nokpts(fn):
+        return _torch.cat([fn(crops[j:j + chunk].to(device)).cpu()
+                           for j in range(0, len(crops), chunk)], 0)
+
+    has_ctx = hasattr(tmodel, 'contextual_descriptors')
+    has_fused = hasattr(tmodel, 'fused_descriptors')
+    has_pos_embed = hasattr(tmodel, 'embed_with_position')
+    if stage == 'auto':
+        if has_ctx:
+            stage = 'contextual'
+        elif has_fused:
+            stage = 'fused'
+        else:
+            stage = 'backbone'
+    if stage == 'backbone':
+        return _cat_nokpts(tmodel.backbone).numpy()
+    if stage == 'fused':
+        if has_fused:
+            return _cat(tmodel.fused_descriptors).numpy()
+        return _cat_nokpts(tmodel.backbone).numpy()
+    if stage == 'contextual':
+        if has_ctx:
+            return _cat(tmodel.contextual_descriptors).numpy()
+        if has_fused:
+            return _cat(tmodel.fused_descriptors).numpy()
+        return _cat_nokpts(tmodel.backbone).numpy()
+    if stage == 'projected':
+        if has_pos_embed:
+            return _cat(tmodel.embed_with_position).numpy()
+        if hasattr(tmodel, 'embed'):
+            return _cat_nokpts(tmodel.embed).numpy()
+        proj = tmodel.projector(tmodel.backbone(crops.to(device))).cpu()
+        return proj.numpy()
+    raise ValueError(f"Unknown descriptor_stage '{stage}'")
+
+
+def _embed_frame(mode, crops, kpts, models, tmodel, args, device, chunk=32):
+    """Embed one frame's crops under the requested mode (no grad)."""
+    paper_model, fmodel, amodel, pmodel = (models['paper'], models['fmodel'],
+                                          models['amodel'], models['pmodel'])
+    if mode == 'image':
+        return torch.cat([paper_model.backbone(crops[j:j + chunk].to(device)).cpu()
+                          for j in range(0, len(crops), chunk)], 0).numpy()
+    if mode == 'trained':
+        return _trained_stage_emb(tmodel, crops, kpts, args.descriptor_stage, device, chunk)
+    # Position-family descriptors (pre-projector): same dim as backbone.
+    # 'position': plain add-fusion (fuse_norm diagnostic optional).
+    # 'attention': layernorm fusion + intra-volume self-attention.
+    # 'posonly': pure geometry benchmark.
+    chunks = []
+    for j in range(0, len(crops), chunk):
+        cj, kj = crops[j:j + chunk].to(device), kpts[j:j + chunk].to(device)
+        if mode == 'attention':
+            d = amodel.contextual_descriptors(cj, kj)
+        elif mode == 'posonly':
+            d = pmodel.fused_descriptors(cj, kj)
+        else:
+            d = fmodel.fused_descriptors(cj, kj)
+        if args.fuse_norm:
+            # scale-matched diagnostic: unit-norm each branch, then add
+            v = fmodel.backbone(cj)
+            p = fmodel.encode_position(kj)
+            d = (v / v.norm(dim=1, keepdim=True).clamp_min(1e-6)
+                 + p / p.norm(dim=1, keepdim=True).clamp_min(1e-6))
+        chunks.append(d.cpu())
+    return torch.cat(chunks, 0).numpy()
+
+
+def _iter_project_frames(project_data, target_sz, normalizer, frame_list):
+    """Yield per-frame dicts (crops, kpts, meta) from segmentation crops.
+
+    meta: list of (raw_ind, seg) aligned with crops rows. Frames with < 2
+    detections are skipped (no relative geometry; matches legacy filter).
+    """
+    from barlow_track.utils.data_loading import get_bbox_data_for_volume_with_label
+    from barlow_track.utils.volume_data import VolumeCoordsDataset, load_volume
+    for t in frame_list:
+        vol = load_volume(project_data, t)
+        crops_d, seg2name, _ = get_bbox_data_for_volume_with_label(
+            project_data, t, target_sz=target_sz, include_untracked=True)
+        names = sorted(crops_d)
+        if len(names) < 2:
+            continue
+        name_to_seg = {}
+        for n in names:
+            if n in seg2name.values():
+                name_to_seg[n] = int([k for k, v in seg2name.items() if v == n][0])
+            else:
+                name_to_seg[n] = int(n.split('_')[-1])  # untracked_time_{t}_{ind}_{seg}
+        crops = torch.from_numpy(np.stack([crops_d[n] for n in names]).astype(np.float32))
+        crops = normalizer(crops).unsqueeze(1).float()
+        zxy = np.array([[r['z'], r['x'], r['y']] for r in
+                        _rows_for_names(project_data, t, names, name_to_seg)], dtype=np.float32)
+        kpts = VolumeCoordsDataset._normalize(torch.from_numpy(zxy), vol.shape)
+        meta = []
+        for n in names:
+            seg = name_to_seg[n]
+            try:
+                raw_ind = int(project_data.segmentation_metadata.mask_index_to_i_in_array(t, seg))
+            except (FileNotFoundError, IndexError, KeyError):
+                raw_ind = seg
+            meta.append((raw_ind, seg))
+        yield dict(t=t, crops=crops, kpts=kpts, meta=meta)
+
+
+def _load_nwb_arrays(nwb_project):
+    """Vectorized GT access for an NWB project (per-cell iloc is ~50ms)."""
+    df_gt = nwb_project.final_tracks
+    neurons = list(df_gt.columns.get_level_values(0).unique())
+    return dict(
+        df_gt=df_gt,
+        neurons=neurons,
+        gx=df_gt.loc[:, (slice(None), 'x')].values.astype(float),
+        gy=df_gt.loc[:, (slice(None), 'y')].values.astype(float),
+        gz=df_gt.loc[:, (slice(None), 'z')].values.astype(float),
+        gr=df_gt.loc[:, (slice(None), 'raw_neuron_ind_in_list')].values.astype(float),
+        gs=df_gt.loc[:, (slice(None), 'raw_segmentation_id')].values.astype(float),
+    )
+
+
+def _iter_nwb_frames(nwb_project, arrays, target_sz, normalizer, frame_list):
+    """Yield per-frame dicts (crops, kpts, meta) cropped around GT xyz.
+
+    Same dict schema as _iter_project_frames; meta entries are
+    (raw_neuron_ind_in_list, raw_segmentation_id) from the NWB directly.
+    """
+    from barlow_track.utils.data_loading import get_3d_crop_using_bbox_or_centroid
+    from barlow_track.utils.volume_data import VolumeCoordsDataset
+    gx, gy, gz, gr, gs = arrays['gx'], arrays['gy'], arrays['gz'], arrays['gr'], arrays['gs']
+    for t in frame_list:
+        vol = np.asarray(nwb_project.red_data[t, ...], dtype=np.float32)
+        sz = np.array([1, *vol.shape])
+        crops_l, zxy_l, meta_l = [], [], []
+        fin = np.isfinite(gx[t]) & np.isfinite(gy[t]) & np.isfinite(gz[t])
+        for j in np.flatnonzero(fin):
+            z, x, y = float(gz[t, j]), float(gx[t, j]), float(gy[t, j])
+            dat, _ = get_3d_crop_using_bbox_or_centroid([z, x, y], sz, target_sz, vol)
+            crops_l.append(dat)
+            zxy_l.append([z, x, y])
+            meta_l.append((int(gr[t, j]), int(gs[t, j])))
+        if len(crops_l) < 2:
+            continue
+        crops = normalizer(torch.from_numpy(np.stack(crops_l))).unsqueeze(1).float()
+        kpts = VolumeCoordsDataset._normalize(
+            torch.from_numpy(np.array(zxy_l, dtype=np.float32)), vol.shape)
+        yield dict(t=t, crops=crops, kpts=kpts, meta=meta_l)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--lab', required=True, choices=list(LABS))
+    ap.add_argument('--source', choices=['project', 'nwb'], default='project',
+                    help="frame data source: 'project' crops via segmentation metadata; "
+                         "'nwb' crops around GT xyz from the GT NWB itself (use for leifer, "
+                         "whose segmentation metadata is gone)")
+    ap.add_argument('--nwb', default=None,
+                    help='override NWB path for --source nwb (default: the lab GT entry)')
     ap.add_argument('--max_frames', type=int, default=None)
     ap.add_argument('--mode', choices=['image', 'position', 'posonly', 'attention', 'trained', 'both'], default='both')
     ap.add_argument('--weights', default=None, help='trained checkpoint for mode=trained (load_barlow_model)')
@@ -67,6 +264,13 @@ def main():
                     help='reuse saved embeddings from a previous run instead of re-embedding')
     ap.add_argument('--fuse_norm', action='store_true',
                     help='L2-normalize visual and position descriptors before adding (scale-matched fusion)')
+    ap.add_argument('--descriptor_stage', choices=['auto', 'backbone', 'fused', 'contextual', 'projected'],
+                    default='auto',
+                    help='trained-model descriptor to evaluate (auto=best available: contextual>fused>backbone, legacy behavior)')
+    ap.add_argument('--center_per_volume', action='store_true',
+                    help='subtract the per-frame descriptor mean before saving embeddings')
+    ap.add_argument('--l2_per_volume', action='store_true',
+                    help='row-wise L2-normalize descriptors before saving embeddings')
     args = ap.parse_args()
 
     import warnings
@@ -77,8 +281,6 @@ def main():
     from wbfm.utils.projects.finished_project_data import ProjectData
     from barlow_track.utils.barlow import load_barlow_model
     from barlow_track.utils.barlow_superglue import BarlowWithPosition
-    from barlow_track.utils.data_loading import get_bbox_data_for_volume_with_label
-    from barlow_track.utils.volume_data import VolumeCoordsDataset, extract_crops, load_volume
     from barlow_track.utils.utils_tracking import WormClusterTracker
     from barlow_track.utils.utils_ground_truth import calculate_accuracy
     from wbfm.utils.neuron_matching.utils_candidate_matches import rename_columns_using_matching
@@ -86,12 +288,23 @@ def main():
 
     spec = LABS[args.lab]
     t0 = time.time()
-    project_data = ProjectData.load_final_project_data(spec['project'], allow_hybrid_loading=True, verbose=0)
+    nwb_path = args.nwb or spec['gt']
+    if args.source == 'nwb' and not str(nwb_path).endswith('.nwb'):
+        raise ValueError(f"--source nwb needs an NWB file, got {nwb_path!r} (pass --nwb)")
+    # Embedding source: working-copy project, or the GT NWB itself.
+    src_data = ProjectData.load_final_project_data(
+        nwb_path if args.source == 'nwb' else spec['project'],
+        allow_hybrid_loading=True, verbose=0)
     gpu, paper_model, margs = load_barlow_model(spec['weights'])
     # Force CPU: no GPU on this machine; keep device explicit
     device = torch.device('cpu')
     paper_model = paper_model.to(device).eval()
-    target_sz = np.array(getattr(margs, 'target_sz', [margs.target_sz_z, margs.target_sz_xy, margs.target_sz_xy]))
+    if args.source == 'nwb':
+        # Old leifer-script convention: fixed crop size unless a trained
+        # checkpoint dictates its own target.
+        target_sz = np.array([8, 64, 64])
+    else:
+        target_sz = np.array(getattr(margs, 'target_sz', [margs.target_sz_z, margs.target_sz_xy, margs.target_sz_xy]))
     tmodel, targs, t_target_sz = None, None, None
     if args.weights:
         _, tmodel, targs = load_barlow_model(args.weights)
@@ -100,7 +313,7 @@ def main():
     if args.mode == 'trained':
         assert args.weights, '--mode trained requires --weights'
         target_sz = t_target_sz
-    print(f"[{args.lab}] model target {list(target_sz)}, emb {margs.embedding_dim}", flush=True)
+    print(f"[{args.lab}/{args.source}] model target {list(target_sz)}, emb {margs.embedding_dim}", flush=True)
 
     # Fusion/attention models sharing the SAME backbone weights (isolates new components)
     from types import SimpleNamespace
@@ -130,17 +343,32 @@ def main():
                         keypoint_encoder_layers=[32, 64]),
         backbone=ResidualEncoder3D, in_channels=1, num_levels=2, f_maps=4,
         crop_sz=target_sz).to(device).eval()
+    models = dict(paper=paper_model, fmodel=fmodel, amodel=amodel, pmodel=pmodel)
 
     normalizer = tio.RescaleIntensity(percentiles=(5, 100))
-    n_frames = project_data.num_frames if args.max_frames is None else min(args.max_frames, project_data.num_frames)
+    n_frames = src_data.num_frames if args.max_frames is None else min(args.max_frames, src_data.num_frames)
+    frame_list = list(range(n_frames))
+    if args.source == 'nwb':
+        arrays = _load_nwb_arrays(src_data)
+        frame_iter_fn = lambda: _iter_nwb_frames(src_data, arrays, target_sz, normalizer, frame_list)
+    else:
+        frame_iter_fn = lambda: _iter_project_frames(src_data, target_sz, normalizer, frame_list)
 
     modes = ['image', 'position'] if args.mode == 'both' else [args.mode]
     for mode in modes:
-        emb_path = f'/tmp/claude/emb_{args.lab}_{mode}{"_norm" if args.fuse_norm and mode == "position" else ""}.npz'
+        suffix = f"{mode}_stage{args.descriptor_stage}" if mode == 'trained' and args.descriptor_stage != 'auto' else mode
+        if args.fuse_norm and mode == 'position':
+            suffix += "_norm"
+        if args.center_per_volume:
+            suffix += "_centered"
+        if args.l2_per_volume:
+            suffix += "_l2"
+        emb_path = f'/tmp/claude/emb_{args.lab}_{suffix}.npz'
         if args.skip_embed and os.path.exists(emb_path):
             d = np.load(emb_path, allow_pickle=True)
-            X, time_to_lin, lin_to_t_seg, n_frames = (
-                d['X'], d['time_to_lin'].item(), d['lin_to_t_seg'].item(), int(d['n_frames']))
+            X, time_to_lin, lin_to_t_seg = d['X'], d['time_to_lin'].item(), d['lin_to_t_seg'].item()
+            # Older leifer-script caches lack n_frames; fall back to frame count.
+            n_frames = int(d['n_frames']) if 'n_frames' in d else len(time_to_lin)
             print(f"[{args.lab}/{mode}] loaded saved embeddings {X.shape}", flush=True)
             did_embed = False
         else:
@@ -148,79 +376,17 @@ def main():
             t1 = time.time()
             X_parts, time_to_lin, lin_to_t_seg = [], defaultdict(list), {}
             i_lin = 0
-            frame_list = list(range(n_frames))
-            for t in frame_list:
-                vol = load_volume(project_data, t)
-                crops_d, seg2name, _ = get_bbox_data_for_volume_with_label(
-                    project_data, t, target_sz=target_sz, include_untracked=True)
-                names = sorted(crops_d)
-                if len(names) < 2:
-                    continue  # no relative geometry; matches legacy len>1 filter; same frames skipped in both modes
-                name_to_seg = {}
-                for n in names:
-                    if n in seg2name.values():
-                        name_to_seg[n] = int([k for k, v in seg2name.items() if v == n][0])
-                    else:
-                        name_to_seg[n] = int(n.split('_')[-1])  # untracked_time_{t}_{ind}_{seg}
-                crops = torch.from_numpy(np.stack([crops_d[n] for n in names]).astype(np.float32))
-                crops = normalizer(crops).unsqueeze(1).float()
+            for fr in frame_iter_fn():
+                t, crops, meta = fr['t'], fr['crops'], fr['meta']
                 # Keypoints for every non-image mode (trained models use them iff
                 # the checkpoint actually contains a position branch).
-                kpts = None
-                if mode != 'image':
-                    zxy = np.array([[r['z'], r['x'], r['y']] for r in
-                                    _rows_for_names(project_data, t, names, name_to_seg)], dtype=np.float32)
-                    kpts = VolumeCoordsDataset._normalize(torch.from_numpy(zxy), vol.shape)
+                kpts = fr['kpts'] if mode != 'image' else None
                 with torch.no_grad():
-                    if mode == 'image':
-                        emb = torch.cat([paper_model.backbone(crops[j:j + 32].to(device)).cpu()
-                                         for j in range(0, len(crops), 32)], 0).numpy()
-                    elif mode == 'trained':
-                        # Best descriptor the checkpoint offers (position model if
-                        # it was trained as one, else its backbone).
-                        if hasattr(tmodel, 'contextual_descriptors'):
-                            emb = torch.cat([tmodel.contextual_descriptors(
-                                crops[j:j + 32].to(device),
-                                kpts[j:j + 32].to(device)).cpu()
-                                for j in range(0, len(crops), 32)], 0).numpy()
-                        elif hasattr(tmodel, 'fused_descriptors'):
-                            emb = torch.cat([tmodel.fused_descriptors(
-                                crops[j:j + 32].to(device),
-                                kpts[j:j + 32].to(device)).cpu()
-                                for j in range(0, len(crops), 32)], 0).numpy()
-                        else:
-                            emb = torch.cat([tmodel.backbone(crops[j:j + 32].to(device)).cpu()
-                                             for j in range(0, len(crops), 32)], 0).numpy()
-                    else:
-                        # Position-family descriptors (pre-projector, 64-d): same dim as
-                        # backbone, so the A/B isolates the new components.
-                        # 'position': plain add-fusion (fuse_norm diagnostic optional).
-                        # 'attention': layernorm fusion + intra-volume self-attention.
-                        chunks = []
-                        for j in range(0, len(crops), 32):
-                            cj, kj = crops[j:j + 32].to(device), kpts[j:j + 32].to(device)
-                            if mode == 'attention':
-                                d = amodel.contextual_descriptors(cj, kj)
-                            elif mode == 'posonly':
-                                d = pmodel.fused_descriptors(cj, kj)
-                            else:
-                                d = fmodel.fused_descriptors(cj, kj)
-                            if args.fuse_norm:
-                                # scale-matched diagnostic: unit-norm each branch, then add
-                                with torch.no_grad():
-                                    v = fmodel.backbone(cj)
-                                    p = fmodel.encode_position(kj)
-                                    d = (v / v.norm(dim=1, keepdim=True).clamp_min(1e-6)
-                                         + p / p.norm(dim=1, keepdim=True).clamp_min(1e-6))
-                            chunks.append(d.cpu())
-                        emb = torch.cat(chunks, 0).numpy()
+                    emb = _embed_frame(mode, crops, kpts, models, tmodel, args, device)
+                if args.center_per_volume or args.l2_per_volume:
+                    emb = _normalize_frame(emb, args.center_per_volume, args.l2_per_volume)
                 X_parts.append(emb)
-                for n in names:
-                    seg = name_to_seg[n]
-                    try:
-                        raw_ind = int(project_data.segmentation_metadata.mask_index_to_i_in_array(t, seg))
-                    except (FileNotFoundError, IndexError, KeyError):
-                        raw_ind = seg
+                for (raw_ind, seg) in meta:
                     time_to_lin[t].append(i_lin)
                     lin_to_t_seg[i_lin] = (t, raw_ind, seg)
                     i_lin += 1
@@ -240,25 +406,36 @@ def main():
         else:
             df_pred = tracker.track_using_global_clusterer()
         print(f"[{args.lab}/{mode}] tracked in {time.time()-t2:.0f}s; df {df_pred.shape}", flush=True)
-        from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind
-        df_pred = add_metadata_to_df_raw_ind(df_pred, project_data.segmentation_metadata)
 
-        # Accuracy vs GT on raw_segmentation_id level (paper recipe)
-        gt_data = ProjectData.load_final_project_data(spec['gt'], allow_hybrid_loading=True, verbose=0)
-        df_gt = gt_data.get_final_tracks_only_finished_neurons()[0]
-        if df_gt is None or df_gt.empty:
-            df_gt = gt_data.final_tracks
+        if args.source == 'nwb':
+            # GT ids come straight from the NWB; match on neuron index, no
+            # segmentation-metadata join (GT lacks seg ids at match time).
+            df_gt = arrays['df_gt']
+            match_col = 'raw_neuron_ind_in_list'
+        else:
+            from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind
+            df_pred = add_metadata_to_df_raw_ind(df_pred, src_data.segmentation_metadata)
+            # Accuracy vs GT on raw_segmentation_id level (paper recipe)
+            gt_data = ProjectData.load_final_project_data(spec['gt'], allow_hybrid_loading=True, verbose=0)
+            df_gt = gt_data.get_final_tracks_only_finished_neurons()[0]
+            if df_gt is None or df_gt.empty:
+                df_gt = gt_data.final_tracks
+            match_col = 'raw_segmentation_id'
         from barlow_track.utils.utils_ground_truth import pad_with_nan_rows
         max_len = max(len(df_gt), len(df_pred))
         df_pred = pad_with_nan_rows(df_pred, max_len)
         df_gt = pad_with_nan_rows(df_gt, max_len)
-        df_pred_r, _, _, _ = rename_columns_using_matching(df_gt, df_pred, column='raw_segmentation_id')
-        col_gt = df_gt.loc[:, (slice(None), 'raw_segmentation_id')].droplevel(1, axis=1)
-        col_pr = df_pred_r.loc[:, (slice(None), 'raw_segmentation_id')].droplevel(1, axis=1)
+        df_pred_r, _, _, _ = rename_columns_using_matching(df_gt, df_pred, column=match_col)
+        col_gt = df_gt.loc[:, (slice(None), match_col)].droplevel(1, axis=1)
+        col_pr = df_pred_r.loc[:, (slice(None), match_col)].droplevel(1, axis=1)
         stats = calculate_accuracy(col_gt, col_pr)
         log_result(dict(lab=args.lab, mode=mode, seed=args.seed, n_frames=n_frames,
+                        source=args.source,
                         cluster=args.cluster, num_seeds=args.num_seeds,
                         fuse_norm=bool(args.fuse_norm and mode == 'position'),
+                        descriptor_stage=args.descriptor_stage if mode == 'trained' else None,
+                        center_per_volume=bool(args.center_per_volume),
+                        l2_per_volume=bool(args.l2_per_volume),
                         accuracy=float(stats['accuracy']),
                         misses=int(stats['misses'].sum().sum()),
                         mismatches=int(stats['mismatches'].sum().sum()),

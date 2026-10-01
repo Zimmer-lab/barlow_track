@@ -44,11 +44,17 @@ Existing copies (reuse, ~200 KB each): `/tmp/claude/eval_projects/{zimmer,flavel
 | zimmer | `eval_projects/zimmer` (1667 fr) | `.../wbfm_projects/manually_annotated/paper_data/ZIM2165_Gcamp7b_worm1-2022_11_28_updated_format/project_config.yaml` | 131 finished neurons |
 | flavell | `eval_projects/flavell` (1600 fr) | `.../barlow_track_paper/flavell_data/images_for_charlie/flavell_data.nwb` | 163 named neurons |
 | samuel | `eval_projects/samuel` (1331 fr) | `.../barlow_track_paper/samuel_data/153.nwb` | 98 named neurons |
-| leifer | NWB directly (1536 fr) | `.../barlow_track_paper/leifer_data/Leifer_NeRVE_Worm1.nwb` | 79 named neurons, xyz + red volume in-file |
+| leifer | NWB directly (1536 fr, `--source nwb`) | `.../barlow_track_paper/leifer_data/Leifer_NeRVE_Worm1.nwb` | 79 named neurons, xyz + red volume in-file |
 
 Leifer special case: its source `1-segmentation/metadata.pickle` **no longer exists on disk**, so the
 analyzed leifer project cannot be (re-)embedded through the standard path. The NWB carries both the
-volume `(1536, 32, 632, 600)` and GT xyz, so `eval_leifer_accuracy.py` crops around GT positions instead.
+volume `(1536, 32, 632, 600)` and GT xyz, so `eval_accuracy.py --source nwb` crops around GT positions
+instead (this absorbed the old standalone `eval_leifer_accuracy.py`, deleted Oct 2026 after a
+bit-identical validation run). NOTE: the old leifer script's `attention` mode used add-fusion +
+attention while every other lab used concat-fusion + attention; the merged script standardizes
+`attention` = concat + layernorm for all labs. Pre-merge leifer attention records used the old
+add-fusion variant AND the old (ungated, bare-ReLU) architecture — do not compare them directly
+with post-merge attention numbers.
 
 ## 3. Networks / weights
 
@@ -79,13 +85,14 @@ save `model_type` (current `train_barlow_clusterer.py` stamps it for fresh and r
 
 ## 4. Scripts (vendored in `barlow_track/scripts/`)
 
-* `eval_accuracy.py` — main A/B: `--lab {zimmer,flavell,samuel} --mode {image,position,posonly,attention,trained}`.
-  `--weights` + `--mode trained` evaluates any checkpoint (uses contextual/fused/backbone descriptors
-  via `hasattr` dispatch; crops resized to *that* checkpoint's target). `--cluster {global,labelprop}`
+* `eval_accuracy.py` — main A/B: `--lab {zimmer,flavell,samuel,leifer} --mode {image,position,posonly,attention,trained}`.
+  `--source {project,nwb}` selects the frame source (nwb = crop around GT xyz from the GT NWB itself;
+  required for leifer). `--weights` + `--mode trained` evaluates any checkpoint (descriptor stage via
+  `--descriptor_stage {auto,backbone,fused,contextual,projected}`; `--center_per_volume` / `--l2_per_volume`
+  apply eval-time per-frame normalization). `--cluster {global,labelprop}`
   (default `labelprop`), `--num_seeds` (default 25; paper used 100). `--skip_embed` re-tracks saved
   embeddings from `/tmp/claude/emb_<lab>_<mode>.npz` without re-embedding. Appends JSON lines to
-  `/tmp/claude/exp_results.jsonl`.
-* `eval_leifer_accuracy.py` — same modes from the NWB (no segmentation path). Same flags.
+  `/tmp/claude/exp_results.jsonl` (records carry a `source` field).
 * `stored_acc.py` — zero-compute baseline: accuracy of the paper's saved `df_barlow_tracks.h5` vs GT.
 * `var_test.py` — re-tracks saved samuel-attention embeddings with UMAP seeds 0,1,2 (variance check).
 * `audit_format.py` — verifies identical loading + 100% seg-id overlap pred-vs-GT per lab.
@@ -95,7 +102,7 @@ Typical full run (labelprop-25, paper mode):
 ```bash
 $PY -u barlow_track/scripts/eval_accuracy.py --lab zimmer --mode attention \
   --cluster labelprop --num_seeds 25
-$PY -u barlow_track/scripts/eval_leifer_accuracy.py --mode trained \
+$PY -u barlow_track/scripts/eval_accuracy.py --lab leifer --source nwb --mode trained \
   --weights <trial>/resnet50.pth --cluster labelprop --num_seeds 25
 ```
 
@@ -133,7 +140,7 @@ unseeded `random.shuffle` of seed times; UMAP-seed spread on fixed embeddings is
 * Model default is now `fusion: concat`; `fusion: position_only` benchmarks pure geometry.
 * `load_barlow_model(fname, expected_args=config)` validates architecture strictly — including a
   latent-bug fix where training silently ignored custom `backbone_kwargs` (always used defaults).
-* Leifer analyzed projects are unusable for fresh embedding (segmentation gone); use the NWB script.
+* Leifer analyzed projects are unusable for fresh embedding (segmentation gone); use `--source nwb`.
 * `exp_results.jsonl` entries without `cluster` are global-mode; `n_frames: 2/3` entries are sanity runs.
 * Never `pkill -f` a pattern that appears in your own command line (it kills your shell); kill by PID.
 * When editing the experiment loops, keep the per-frame body indented under `for t` — two separate

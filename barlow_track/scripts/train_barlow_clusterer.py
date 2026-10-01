@@ -88,7 +88,8 @@ def train_barlow_network(args):
             args.model_type = 'barlow'
             model = BarlowTwins3d(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,
+                                 weight_decay=getattr(args, 'weight_decay', 0.0))
 
     # Actually train
     start_time = time.time()
@@ -179,10 +180,22 @@ def train_barlow_network(args):
                         run.log({"validation_chart": fig})
 
                 val_losses = {"val_loss": val_loss, "val_loss_original": val_loss_original, "val_loss_transpose": val_loss_transpose}
+                # Anti-collapse descriptor health (pre-projector): effective rank,
+                # off-diag correlation, dead dims, per-volume mean fraction,
+                # attention entropy/gate, position jitter sensitivity. SSL loss
+                # alone cannot reject collapsed tracking descriptors, so select
+                # configs by these + tracking accuracy instead.
+                try:
+                    _diag = _validation_descriptor_diagnostics(model, data_module, gpu, use_position)
+                    val_losses.update({f"val_{k}": v for k, v in _diag.items()})
+                except (RuntimeError, ValueError, AttributeError, StopIteration) as e:
+                    logging.warning(f"Descriptor diagnostics failed: {e}")
                 if run is not None:
                     run.log(val_losses)
                 # Printing
                 stats = dict(epoch=epoch, val_loss=val_loss, time=int(time.time() - start_time))
+                stats.update({f"val_{k}": v for k, v in val_losses.items() if k != "val_loss"
+                              and "val_loss_" not in k})
                 print(json.dumps(stats))
                 json_stats.append(stats)
 
@@ -246,6 +259,38 @@ def train_barlow_network(args):
         print("Training complete")
         
     return test_losses
+
+
+def _validation_descriptor_diagnostics(model, data_module, gpu, use_position):
+    """Anti-collapse health metrics on the first usable validation volume.
+
+    Runs pre-projector fused/contextual descriptors through
+    volume_descriptor_diagnostics (effective rank, off-diag correlation,
+    dead-dim fraction, per-volume mean fraction, attention entropy/gate,
+    position jitter sensitivity). Returns {} for legacy image-only models
+    or when no validation volume has >= 2 objects. Values are plain floats
+    (NaN where undefined); exceptions propagate to the caller, which logs
+    a warning instead of failing the epoch.
+    """
+    import torch as _torch
+
+    if not use_position or not hasattr(model, 'fused_descriptors'):
+        gate = getattr(model, 'attn_gate', None)
+        if gate is not None:
+            return {'attn_gate': float(_torch.sigmoid(gate.detach()).cpu())}
+        return {}
+    from barlow_track.utils.barlow_superglue import volume_descriptor_diagnostics
+    with _torch.no_grad():
+        for batch in data_module.val_dataloader():
+            y1, k1 = batch[0].to(gpu), batch[2].to(gpu)
+            if y1.shape[0] < 2:
+                continue
+            diag = volume_descriptor_diagnostics(model, y1, k1)
+            return {k: (float(v) if v == v else float('nan')) for k, v in diag.items()}
+    gate = getattr(model, 'attn_gate', None)
+    if gate is not None:
+        return {'attn_gate': float(_torch.sigmoid(gate.detach()).cpu())}
+    return {}
 
 
 def _run_forward(model, batch, gpu, use_position):

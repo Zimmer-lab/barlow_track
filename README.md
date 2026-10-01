@@ -40,8 +40,8 @@ In this case, please install the following packages using instructions from thei
 ## Evaluating position encodings against ground truth
 
 See [docs/accuracy_evaluation.md](docs/accuracy_evaluation.md) for the full handoff:
-datasets, weights, eval scripts (`barlow_track/scripts/eval_accuracy.py`,
-`eval_leifer_accuracy.py`), results, and environment gotchas.
+datasets, weights, eval script (`barlow_track/scripts/eval_accuracy.py`,
+with `--source nwb` covering leifer), results, and environment gotchas.
 
 ## Training a network
 

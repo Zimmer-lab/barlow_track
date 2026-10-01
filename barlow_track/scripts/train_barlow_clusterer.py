@@ -88,8 +88,11 @@ def train_barlow_network(args):
             args.model_type = 'barlow'
             model = BarlowTwins3d(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,
-                                 weight_decay=getattr(args, 'weight_decay', 0.0))
+    # NOTE: yaml.safe_load parses '1e-6' (no decimal point) as str, not float,
+    # which used to crash Adam with "'<=' not supported between 'float' and 'str'".
+    # Coerce here so old configs keep working; the template now uses 1.0e-6.
+    optimizer = torch.optim.Adam(model.parameters(), lr=float(args.lr),
+                                 weight_decay=float(getattr(args, 'weight_decay', 0.0)))
 
     # Actually train
     start_time = time.time()

@@ -47,7 +47,7 @@ std_RandomNoise: 0.25
 # Optimization hyperparameters
 lambd: 0.0051
 batch_size: 1  # This should stay; one volume = one batch
-weight_decay: 1e-6  # Actually passed to Adam (previously listed but ignored)
+weight_decay: 1.0e-6  # Actually passed to Adam (previously listed but ignored); NOTE: must keep the decimal point so yaml.safe_load parses it as float, not str
 epochs: 20
 lr: 0.0001
 

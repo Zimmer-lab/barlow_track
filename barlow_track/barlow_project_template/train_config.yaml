@@ -62,8 +62,8 @@ lambd_obj: 0.67  # Set to 1 to only use the transposed loss; 0 means only origin
 ####
 # Position encodings + SuperGlue-GNN options (all default off = legacy behavior)
 ####
-use_position: false  # If true: global-before-crop aug + KeypointEncoder fusion
-use_attention: false # If true (requires use_position): intra-volume self-attention embeddings
+use_position: true  # If true: global-before-crop aug + KeypointEncoder fusion
+use_attention: true # If true (requires use_position): intra-volume self-attention embeddings
 fusion: concat       # 'concat' (default) | 'add' (SuperGlue-style) | 'position_only' (geometry benchmark)
 fusion_norm: layernorm # per-branch norm before fusion: 'layernorm' (recommended) | 'l2' | 'none' (legacy)
 self_layers: 2       # number of intra-volume self-attention layers (attention models)

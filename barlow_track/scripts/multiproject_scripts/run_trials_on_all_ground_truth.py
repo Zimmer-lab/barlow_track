@@ -78,6 +78,10 @@ def parse_args():
                         choices=["auto", "backbone", "fused", "contextual", "projected"])
     parser.add_argument("--debug", action="store_true",
                         help="Print commands without running them, and verify the torch --device actually loads")
+    parser.add_argument("--jobs", type=int, default=None,
+                        help="Max concurrent evaluations (default: one per GPU in --gpus)")
+    parser.add_argument("--gpus", default="auto",
+                        help="GPUs to round-robin jobs over, e.g. '0,1' (default: all visible via nvidia-smi)")
     return parser.parse_args()
 
 
@@ -117,6 +121,37 @@ def resolve_trials(trial_parent_dir, trials, model_fname):
     return selected
 
 
+def resolve_gpus(gpus_arg):
+    """Return a list of GPU indices; 'auto' queries nvidia-smi."""
+    if gpus_arg != "auto":
+        return [g.strip() for g in gpus_arg.split(",") if g.strip()]
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+                             capture_output=True, text=True, check=True).stdout
+        gpus = [line.strip() for line in out.splitlines() if line.strip()]
+        if gpus:
+            return gpus
+    except Exception as e:
+        print(f"nvidia-smi query failed ({e}); trying torch")
+    try:
+        import torch
+        n = torch.cuda.device_count()
+        if n:
+            return [str(i) for i in range(n)]
+    except ImportError:
+        pass
+    print("WARNING: no GPUs detected; falling back to a single worker")
+    return ["0"]
+
+
+def run_one(cmd, gpu, label):
+    """Run one evaluation with only the assigned GPU visible."""
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu))
+    print(f"\n### {label} [gpu {gpu}]\n{' '.join(cmd)}", flush=True)
+    rc = subprocess.call(cmd, env=env)
+    return rc
+
+
 def main():
     args = parse_args()
     trial_parent_dir = os.path.abspath(args.trial_parent_dir)
@@ -130,12 +165,10 @@ def main():
         raise SystemExit("No runnable trials found.")
     print(f"Trials: {trials}\nDatasets: {labs}\nResults: {results_jsonl}\n")
 
-    tags = []
-    failures = []
+    tasks = []  # (lab, trial_num, tag, cmd)
     for trial_num in trials:
         for lab in labs:
             tag = f"{parent_base}_trial{trial_num}_{lab}"
-            tags.append((lab, trial_num, tag))
             weights = os.path.join(trial_parent_dir, f"trial_{trial_num}", args.model_fname)
             spec = DATASETS[lab]
             cmd = [sys.executable, "-u", EVAL_SCRIPT, "--lab", LAB_FOR_DATASET[lab],
@@ -150,16 +183,33 @@ def main():
                 cmd += ["--project", os.path.join(spec["project"], "project_config.yaml")]
             if args.max_frames is not None:
                 cmd += ["--max_frames", str(args.max_frames)]
-            print(f"\n### trial_{trial_num} on {lab}\n{' '.join(cmd)}", flush=True)
-            if args.debug:
-                continue
-            rc = subprocess.call(cmd)
-            if rc != 0:
-                failures.append((trial_num, lab, rc))
+            tasks.append((lab, trial_num, tag, cmd))
+    tags = [(lab, trial_num, tag) for lab, trial_num, tag, _ in tasks]
+
+    gpus = resolve_gpus(args.gpus)
+    jobs = args.jobs or len(gpus)
+    print(f"GPUs: {gpus}; max concurrent jobs: {jobs}")
 
     if args.debug:
+        for i, (lab, trial_num, tag, cmd) in enumerate(tasks):
+            print(f"\n### trial_{trial_num} on {lab} [gpu {gpus[i % len(gpus)]}]\n{' '.join(cmd)}", flush=True)
         check_device(args.device)
         return
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    failures = []
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        future_to_task = {}
+        for i, (lab, trial_num, tag, cmd) in enumerate(tasks):
+            gpu = gpus[i % len(gpus)]
+            fut = pool.submit(run_one, cmd, gpu, f"trial_{trial_num} on {lab}")
+            future_to_task[fut] = (trial_num, lab)
+        for fut in as_completed(future_to_task):
+            trial_num, lab = future_to_task[fut]
+            rc = fut.result()
+            print(f"### trial_{trial_num} on {lab} finished with exit code {rc}", flush=True)
+            if rc != 0:
+                failures.append((trial_num, lab, rc))
     print(f"\n{'=' * 60}\nSummary (from {results_jsonl}):")
     print(f"{'dataset':<14}{'trial':<8}{'accuracy':<10}{'miss':<8}{'mismatch':<10}n_frames")
     with open(results_jsonl) as f:

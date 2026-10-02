@@ -89,13 +89,15 @@ def _trained_stage_emb(tmodel, crops, kpts, stage, device, chunk=32):
     backbone); contextual: contextual_descriptors (fallback fused, then
     backbone); projected: post-projector space via embed_with_position /
     embed; auto: best available (legacy behavior).
+
+    NOTE: fused/contextual/projected-with-position run as a single
+    full-volume forward (no chunking). KENC/GNN use InstanceNorm over N and
+    attention softmax runs over N keys, so per-32 chunking is inexact (same
+    blast radius as track_using_barlow.embed_volumes_with_position). The
+    backbone-only path is per-sample (GroupNorm) and stays chunked to bound
+    3D-conv memory. chunk is kept for back-compat and only applies there.
     """
     import torch as _torch
-
-    def _cat(fn):
-        return _torch.cat([fn(crops[j:j + chunk].to(device),
-                               kpts[j:j + chunk].to(device) if kpts is not None else None).cpu()
-                           for j in range(0, len(crops), chunk)], 0)
 
     def _cat_nokpts(fn):
         return _torch.cat([fn(crops[j:j + chunk].to(device)).cpu()
@@ -113,23 +115,25 @@ def _trained_stage_emb(tmodel, crops, kpts, stage, device, chunk=32):
             stage = 'backbone'
     if stage == 'backbone':
         return _cat_nokpts(tmodel.backbone).numpy()
-    if stage == 'fused':
-        if has_fused:
-            return _cat(tmodel.fused_descriptors).numpy()
-        return _cat_nokpts(tmodel.backbone).numpy()
-    if stage == 'contextual':
-        if has_ctx:
-            return _cat(tmodel.contextual_descriptors).numpy()
-        if has_fused:
-            return _cat(tmodel.fused_descriptors).numpy()
-        return _cat_nokpts(tmodel.backbone).numpy()
-    if stage == 'projected':
-        if has_pos_embed:
-            return _cat(tmodel.embed_with_position).numpy()
-        if hasattr(tmodel, 'embed'):
-            return _cat_nokpts(tmodel.embed).numpy()
-        proj = tmodel.projector(tmodel.backbone(crops.to(device))).cpu()
-        return proj.numpy()
+    _crops_d, _kpts_d = crops.to(device), kpts.to(device) if kpts is not None else None
+    with _torch.no_grad():
+        if stage == 'fused':
+            if has_fused:
+                return tmodel.fused_descriptors(_crops_d, _kpts_d).cpu().numpy()
+            return _cat_nokpts(tmodel.backbone).numpy()
+        if stage == 'contextual':
+            if has_ctx:
+                return tmodel.contextual_descriptors(_crops_d, _kpts_d).cpu().numpy()
+            if has_fused:
+                return tmodel.fused_descriptors(_crops_d, _kpts_d).cpu().numpy()
+            return _cat_nokpts(tmodel.backbone).numpy()
+        if stage == 'projected':
+            if has_pos_embed:
+                return tmodel.embed_with_position(_crops_d, _kpts_d).cpu().numpy()
+            if hasattr(tmodel, 'embed'):
+                return tmodel.embed(_crops_d).cpu().numpy()
+            proj = tmodel.projector(tmodel.backbone(_crops_d)).cpu()
+            return proj.numpy()
     raise ValueError(f"Unknown descriptor_stage '{stage}'")
 
 
@@ -138,6 +142,7 @@ def _embed_frame(mode, crops, kpts, models, tmodel, args, device, chunk=32):
     paper_model, fmodel, amodel, pmodel = (models['paper'], models['fmodel'],
                                           models['amodel'], models['pmodel'])
     if mode == 'image':
+        # Backbone-only: per-sample ops, chunking is exact.
         return torch.cat([paper_model.backbone(crops[j:j + chunk].to(device)).cpu()
                           for j in range(0, len(crops), chunk)], 0).numpy()
     if mode == 'trained':
@@ -146,9 +151,10 @@ def _embed_frame(mode, crops, kpts, models, tmodel, args, device, chunk=32):
     # 'position': plain add-fusion (fuse_norm diagnostic optional).
     # 'attention': layernorm fusion + intra-volume self-attention.
     # 'posonly': pure geometry benchmark.
-    chunks = []
-    for j in range(0, len(crops), chunk):
-        cj, kj = crops[j:j + chunk].to(device), kpts[j:j + chunk].to(device)
+    # Full-volume forward (no chunking): InstanceNorm stats + attention
+    # softmax both run over N; see _trained_stage_emb.
+    cj, kj = crops.to(device), kpts.to(device)
+    with torch.no_grad():
         if mode == 'attention':
             d = amodel.contextual_descriptors(cj, kj)
         elif mode == 'posonly':
@@ -161,8 +167,7 @@ def _embed_frame(mode, crops, kpts, models, tmodel, args, device, chunk=32):
             p = fmodel.encode_position(kj)
             d = (v / v.norm(dim=1, keepdim=True).clamp_min(1e-6)
                  + p / p.norm(dim=1, keepdim=True).clamp_min(1e-6))
-        chunks.append(d.cpu())
-    return torch.cat(chunks, 0).numpy()
+    return d.cpu().numpy()
 
 
 def _iter_project_frames(project_data, target_sz, normalizer, frame_list):
@@ -315,7 +320,15 @@ def main():
         target_sz = t_target_sz
     print(f"[{args.lab}/{args.source}] model target {list(target_sz)}, emb {margs.embedding_dim}", flush=True)
 
-    # Fusion/attention models sharing the SAME backbone weights (isolates new components)
+    # Fusion/attention models sharing the SAME backbone weights (isolates new components).
+    # NOTE (measurement confound): only the backbone weights are loaded here;
+    # KENC/GNN/projector heads are RANDOMLY INITIALIZED, and fmodel (add/none)
+    # differs from amodel (concat/layernorm) in BOTH fusion type and norm. So
+    # cross-mode position-family numbers compare untrained heads with a double
+    # confound -- do not draw architecture conclusions from them. The
+    # trustworthy trained-model comparison is --mode trained (with
+    # --descriptor_stage backbone/fused/contextual/projected), which embeds
+    # with the checkpoint's own heads and args.
     from types import SimpleNamespace
     from barlow_track.utils.siamese import ResidualEncoder3D
     fargs = SimpleNamespace(embedding_dim=margs.embedding_dim, projector=margs.projector,
@@ -345,7 +358,7 @@ def main():
         crop_sz=target_sz).to(device).eval()
     models = dict(paper=paper_model, fmodel=fmodel, amodel=amodel, pmodel=pmodel)
 
-    normalizer = tio.RescaleIntensity(percentiles=(5, 100))
+    normalizer = tio.RescaleIntensity(percentiles=(5, 99.5))  # in sync with training
     n_frames = src_data.num_frames if args.max_frames is None else min(args.max_frames, src_data.num_frames)
     frame_list = list(range(n_frames))
     if args.source == 'nwb':
@@ -429,10 +442,14 @@ def main():
         col_gt = df_gt.loc[:, (slice(None), match_col)].droplevel(1, axis=1)
         col_pr = df_pred_r.loc[:, (slice(None), match_col)].droplevel(1, axis=1)
         stats = calculate_accuracy(col_gt, col_pr)
+        _fusion = {'image': None, 'position': 'add', 'attention': 'concat',
+                   'posonly': 'position_only', 'trained': getattr(targs, 'fusion', None) if targs else None}.get(mode)
         log_result(dict(lab=args.lab, mode=mode, seed=args.seed, n_frames=n_frames,
                         source=args.source,
                         cluster=args.cluster, num_seeds=args.num_seeds,
                         fuse_norm=bool(args.fuse_norm and mode == 'position'),
+                        fusion=_fusion,
+                        head_init='trained' if mode == 'trained' else 'random-backbone-only',
                         descriptor_stage=args.descriptor_stage if mode == 'trained' else None,
                         center_per_volume=bool(args.center_per_volume),
                         l2_per_volume=bool(args.l2_per_volume),

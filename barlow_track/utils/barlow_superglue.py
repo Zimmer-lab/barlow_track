@@ -41,12 +41,12 @@ from barlow_track.utils.superglue import (
 
 def both_correlation_matrices(z1, z2):
     """Feature-space (DxD) and object-space (NxN) cross-correlation matrices."""
-    z1_norm = (z1 - z1.mean(0)) / z1.std(0)
-    z2_norm = (z2 - z2.mean(0)) / z2.std(0)
+    z1_norm = (z1 - z1.mean(0)) / z1.std(0).clamp_min(1e-6)
+    z2_norm = (z2 - z2.mean(0)) / z2.std(0).clamp_min(1e-6)
     c_features = torch.matmul(z1_norm.T, z2_norm) / z1.shape[0]
 
-    z1_t = ((z1.T - z1.mean(1)) / z1.std(1)).T
-    z2_t = ((z2.T - z2.mean(1)) / z2.std(1)).T
+    z1_t = ((z1.T - z1.mean(1)) / z1.std(1).clamp_min(1e-6)).T
+    z2_t = ((z2.T - z2.mean(1)) / z2.std(1).clamp_min(1e-6)).T
     c_objects = torch.matmul(z1_t, z2_t.T) / z1.shape[1]
     return c_features, c_objects
 
@@ -81,6 +81,136 @@ def _zero_losses(device):
     return z, z.clone(), z.clone()
 
 
+@torch.no_grad()
+def descriptor_health(C, dead_rel_tol=0.01):
+    """Anti-collapse health metrics for one (N, D) pre-projector descriptor set.
+
+    Returns dict with:
+      eff_rank: exp(entropy of normalized singular values), in [1, min(N,D)]
+      offdiag_corr: mean |off-diagonal| of the DxD feature correlation matrix
+      dead_frac: fraction of dims with std < dead_rel_tol * max dim std
+      mean_frac: ||per-volume mean|| / mean per-row ||.|| in [0, 1]; high
+        means descriptors are dominated by a shared volume-mean component
+        (the diagnosed dense-volume collapse signature c_i ~= m + r_i).
+    Returns NaNs when N < 2 or D < 2.
+    """
+    C = C.detach().float()
+    n, d = C.shape
+    nan = float('nan')
+    if n < 2 or d < 2:
+        return dict(eff_rank=nan, offdiag_corr=nan, dead_frac=nan, mean_frac=nan)
+    centered = C - C.mean(dim=0, keepdim=True)
+    try:
+        s = torch.linalg.svdvals(centered)
+    except RuntimeError:
+        return dict(eff_rank=nan, offdiag_corr=nan, dead_frac=nan, mean_frac=nan)
+    s = s[s > 0]
+    if s.numel() == 0:
+        eff_rank = 1.0
+    else:
+        p = s / s.sum()
+        eff_rank = float(torch.exp(-(p * (p + 1e-12).log()).sum()).cpu())
+    std = centered.std(dim=0)
+    denom = (centered * centered).mean().sqrt().clamp_min(1e-12)
+    corr = (centered.T @ centered) / n / (denom * denom)
+    corr = corr.clamp(-1.0, 1.0)
+    mask = ~torch.eye(d, dtype=torch.bool, device=C.device)
+    offdiag = float(corr[mask].abs().mean().cpu())
+    max_std = float(std.max().cpu())
+    if max_std <= 0:
+        dead_frac = 1.0
+    else:
+        dead_frac = float((std < dead_rel_tol * max_std).float().mean().cpu())
+    mean_vec = C.mean(dim=0)
+    row_norms = C.norm(dim=1).mean().clamp_min(1e-12)
+    mean_frac = float((mean_vec.norm() / row_norms).cpu())
+    return dict(eff_rank=eff_rank, offdiag_corr=offdiag,
+                dead_frac=dead_frac, mean_frac=mean_frac)
+
+
+@torch.no_grad()
+def attention_entropy_normed(model):
+    """Mean attention entropy / log(N), averaged over stored probs.
+
+    Reads the prob lists that AttentionalGNN stashed during the last
+    contextualize() call. Returns NaN when no probs are stored (e.g.
+    self_layers=0 or single-detection passthrough). Near 1.0 means
+    diffuse/uniform attention (averaging risk); near 0.0 means peaked.
+    """
+    probs = []
+    gnn = getattr(model, 'self_gnn', None)
+    for layer in getattr(gnn, 'layers', []) or []:
+        for p in getattr(getattr(layer, 'attn', None), 'prob', []) or []:
+            probs.append(p.detach().float())
+    if not probs:
+        return float('nan')
+    ents = []
+    for p in probs:
+        n = p.shape[-1]
+        if n < 2:
+            continue
+        p = p.clamp_min(1e-12)
+        ent = -(p * p.log()).sum(dim=-1).mean() / torch.tensor(n, dtype=torch.float32).log()
+        ents.append(float(ent.cpu()))
+    return float(sum(ents) / len(ents)) if ents else float('nan')
+
+
+@torch.no_grad()
+def position_jitter_sensitivity(model, kpts, eps=0.02):
+    """Relative change in position descriptors under small keypoint noise.
+
+    ||P(k+e) - P(k)||_F / ||P(k)||_F. NaN for N < 2 (fallback path) or
+    zero-norm descriptors. Healthy models respond to geometry but do not
+    explode; ~0 with large tracking error means the position branch is dead.
+    """
+    if kpts.shape[0] < 2 or not hasattr(model, 'encode_position'):
+        return float('nan')
+    try:
+        base = model.encode_position(kpts).float()
+        denom = base.norm().clamp_min(1e-12)
+        if not torch.isfinite(denom) or float(denom) == 0:
+            return float('nan')
+        noisy = model.encode_position(
+            kpts + torch.randn_like(kpts) * eps).float()
+        return float(((noisy - base).norm() / denom).cpu())
+    except (RuntimeError, ValueError):
+        return float('nan')
+
+
+@torch.no_grad()
+def volume_descriptor_diagnostics(model, y, kpts, scores=None):
+    """One-volume anti-collapse report on pre-projector descriptors.
+
+    Runs fused (+ contextual when available) descriptors without gradients
+    and returns a flat dict: fused_*/contextual_* health, attention_entropy,
+    attn_gate (when gated), and position jitter sensitivity. Used by the
+    training validation loop; N < 2 volumes yield NaNs rather than crashing.
+    """
+    out = {}
+    try:
+        fused = model.fused_descriptors(y, kpts, scores) if hasattr(
+            model, 'fused_descriptors') else model.backbone(y)
+    except (RuntimeError, ValueError):
+        return out
+    for k, v in descriptor_health(fused).items():
+        out[f'fused_{k}'] = v
+    if hasattr(model, 'contextual_descriptors'):
+        try:
+            ctx = model.contextual_descriptors(y, kpts, scores)
+        except (RuntimeError, ValueError):
+            ctx = None
+        if ctx is not None:
+            for k, v in descriptor_health(ctx).items():
+                out[f'contextual_{k}'] = v
+    out['attention_entropy'] = attention_entropy_normed(model)
+    gate = getattr(model, 'attn_gate', None)
+    if gate is not None:
+        out['attn_gate'] = float(torch.sigmoid(gate.detach()).cpu())
+    out['position_jitter_sensitivity'] = position_jitter_sensitivity(
+        model, kpts)
+    return out
+
+
 class L2Normalize(nn.Module):
     """Unit-norm over the feature dim (per neuron)."""
 
@@ -107,13 +237,28 @@ class BarlowWithPosition(BarlowTwins3d):
         embedding_dim = args.embedding_dim
         self.embedding_dim = embedding_dim
         self.fusion = fusion or getattr(args, 'fusion', 'concat')
-        self.fusion_norm = fusion_norm or getattr(args, 'fusion_norm', 'none')
+        # Default 'layernorm': per-branch LayerNorm stops the position branch
+        # from dominating via scale (~25:1 init imbalance with 'none').
+        # 'none' is kept for loading legacy checkpoints (see load_barlow_model
+        # migration, which pins missing fields to legacy values).
+        self.fusion_norm = fusion_norm or getattr(args, 'fusion_norm', 'layernorm')
         layers = keypoint_layers or list(getattr(args, 'keypoint_encoder_layers', [32, 64]))
         self.kenc = KeypointEncoder(embedding_dim, layers)
         self.norm_visual = _make_norm(self.fusion_norm, embedding_dim)
         self.norm_pos = _make_norm(self.fusion_norm, embedding_dim)
         if self.fusion == 'concat':
-            self.fuse_mlp = nn.Sequential(nn.Linear(2 * embedding_dim, embedding_dim), nn.ReLU())
+            # LayerNorm-terminated MLP (no bare terminal ReLU): the final
+            # LayerNorm IS the post-fusion normalization, so no separate
+            # norm_fused layer is needed. This fixes the dead-dim failure
+            # mode of the old Linear+ReLU head and stops the position
+            # branch from dominating via scale.
+            self.fuse_mlp = nn.Sequential(
+                nn.Linear(2 * embedding_dim, embedding_dim),
+                nn.LayerNorm(embedding_dim),
+                nn.GELU(),
+                nn.Linear(embedding_dim, embedding_dim),
+                nn.LayerNorm(embedding_dim),
+            )
         elif self.fusion == 'position_only':
             pass  # visual branch unused; see fused_descriptors
         elif self.fusion != 'add':
@@ -175,12 +320,13 @@ class BarlowWithPosition(BarlowTwins3d):
         z1, z2 = paired
         c_features, c_objects = both_correlation_matrices(z1, z2)
 
+        feat_w, obj_w = self._offdiag_weights()
         loss_transpose = torch.tensor(0.0, device=y1.device)
         loss_original = torch.tensor(0.0, device=y1.device)
         if self.args.lambd_obj < 1:
-            loss_original = self.loss_from_correlation_matrix(c_features)
+            loss_original = self.loss_from_correlation_matrix(c_features, feat_w)
         if self.args.lambd_obj > 0:
-            loss_transpose = self.loss_from_correlation_matrix(c_objects)
+            loss_transpose = self.loss_from_correlation_matrix(c_objects, obj_w)
 
         loss = (1.0 - self.args.lambd_obj) * loss_original + self.args.lambd_obj * loss_transpose
         return loss, loss_original, loss_transpose
@@ -208,18 +354,41 @@ class BarlowVolumeAttention(BarlowWithPosition):
         self.self_layer_names = ['self'] * n_self
         self.self_gnn = (AttentionalGNN(args.embedding_dim, self.self_layer_names)
                          if n_self > 0 else nn.Identity())
+        # C2: pre-attention volume-mean centering. A shared per-volume
+        # component (c_i ~= m + r_i) is frame identity, not neuron identity:
+        # it cancels within a frame but gates the cross-frame kNN budget and
+        # gets metric-amplified by SVD50. Subtracting the per-volume mean
+        # before self-attention kills the span(1)/DC attractor the softmax
+        # otherwise diffuses toward. Per-row LayerNorm (norm_context) does NOT
+        # do this (it removes per-row means, leaving centered-m shared).
+        # Gated residual: attention starts "almost off" (sigmoid(-4) ~= 0.018)
+        # and training must prove it useful.
+        self.center_per_volume = bool(getattr(args, 'center_per_volume', True))
+        gate_init = float(getattr(args, 'attn_gate_init', -4.0))
+        self.attn_gate = nn.Parameter(torch.tensor(gate_init))
+        self.norm_context = nn.LayerNorm(args.embedding_dim)
+
+    def attention_gate_value(self):
+        """Scalar gate in (0, 1); near 0 means attention is ~identity."""
+        return float(torch.sigmoid(self.attn_gate).detach().cpu())
 
     def contextualize(self, d):
         """(N,D) fused descriptors -> (N,D) volume-contextualized descriptors.
 
-        Single detections bypass attention (nothing to attend to, and the
-        propagation MLP's InstanceNorm needs N > 1).
+        With center_per_volume (default), the per-volume mean is subtracted
+        before self-attention so a shared frame component cannot become the
+        attention attractor; the residual + LayerNorm then operate in centered
+        space. Single detections bypass attention (nothing to attend to, and
+        the propagation MLP's InstanceNorm needs N > 1).
         """
         if d.shape[0] < 2 or isinstance(self.self_gnn, nn.Identity):
             return d
-        batch = d.transpose(0, 1).unsqueeze(0)
+        dc = d - d.mean(dim=0, keepdim=True) if self.center_per_volume else d
+        batch = dc.transpose(0, 1).unsqueeze(0)
         out, _ = self.self_gnn(batch, batch)
-        return out.squeeze(0).transpose(0, 1)
+        out = out.squeeze(0).transpose(0, 1)
+        gate = torch.sigmoid(self.attn_gate)
+        return self.norm_context(dc + gate * (out - dc))
 
     def contextual_descriptors(self, y, kpts, scores=None):
         return self.contextualize(self.fused_descriptors(y, kpts, scores))
@@ -240,12 +409,13 @@ class BarlowVolumeAttention(BarlowWithPosition):
         z1, z2 = paired
         c_features, c_objects = both_correlation_matrices(z1, z2)
 
+        feat_w, obj_w = self._offdiag_weights()
         loss_transpose = torch.tensor(0.0, device=y1.device)
         loss_original = torch.tensor(0.0, device=y1.device)
         if self.args.lambd_obj < 1:
-            loss_original = self.loss_from_correlation_matrix(c_features)
+            loss_original = self.loss_from_correlation_matrix(c_features, feat_w)
         if self.args.lambd_obj > 0:
-            loss_transpose = self.loss_from_correlation_matrix(c_objects)
+            loss_transpose = self.loss_from_correlation_matrix(c_objects, obj_w)
 
         loss = (1.0 - self.args.lambd_obj) * loss_original + self.args.lambd_obj * loss_transpose
         return loss, loss_original, loss_transpose

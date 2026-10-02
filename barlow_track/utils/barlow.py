@@ -36,6 +36,14 @@ class BarlowTwins3d(nn.Module):
         self.backbone.fc = nn.Identity()
 
         # projector
+        # NOTE: LayerNorm (per-neuron), NOT BatchNorm. A training batch is a
+        # single volume (rows = neurons of that volume), so BatchNorm would
+        # normalize each feature across the volume — destroying volume-level
+        # information before the loss ever sees it. The Barlow loss would then
+        # be blind to shared volume-mean components and could neither train
+        # on them nor train them away in the pre-projector (tracking) space.
+        # LayerNorm keeps inter-neuron structure intact so the loss pressures
+        # the descriptors we actually track with.
         sizes = [embedding_dim] + list(map(int, args.projector.split('-')))
         if 'projector_final' in vars(args):
             # Otherwise assume it's all in the original projector string
@@ -44,48 +52,63 @@ class BarlowTwins3d(nn.Module):
         layers = []
         for i in range(len(sizes) - 2):
             layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
-            # layers.append(nn.BatchNorm1d(sizes[i + 1], track_running_stats=False))
-            layers.append(nn.BatchNorm1d(sizes[i + 1]))
+            layers.append(nn.LayerNorm(sizes[i + 1]))
             layers.append(nn.ReLU(inplace=True))
         layers.append(nn.Linear(sizes[-2], sizes[-1], bias=False))
         self.projector = nn.Sequential(*layers)
-
-        # normalization layer for the representations z1 and z2
-        # self.bn = nn.BatchNorm1d(sizes[-1], affine=False)
-        # self.bn = nn.Identity()
 
     def embed(self, _y):
         return self.projector(self.backbone(_y))
 
     def forward(self, y1, y2):
+        # Degenerate volumes carry no pairs (std over N<2 is NaN); return
+        # grad-free zeros so the training loop skips the optimizer step.
+        if y1.shape[0] < 2 or y2.shape[0] < 2:
+            z = torch.tensor(0.0, device=y1.device)
+            return z, z.clone(), z.clone()
         # Shape of z: neurons x features
         c_features, c_objects = self.calculate_both_correlation_matrices(y1, y2)
-        
+        feat_w, obj_w = self._offdiag_weights()
         loss_transpose = torch.tensor(0.0, device=y1.device)
         loss_original = torch.tensor(0.0, device=y1.device)
         if self.args.lambd_obj < 1:
             # Original loss
-            loss_original = self.loss_from_correlation_matrix(c_features)
+            loss_original = self.loss_from_correlation_matrix(c_features, feat_w)
         if self.args.lambd_obj > 0:
             # New object loss; use same lambd to combine on and off diagonal
-            loss_transpose = self.loss_from_correlation_matrix(c_objects)
+            loss_transpose = self.loss_from_correlation_matrix(c_objects, obj_w)
         
         loss = (1.0-self.args.lambd_obj) * loss_original + self.args.lambd_obj * loss_transpose
 
         return loss, loss_original, loss_transpose
 
-    def loss_from_correlation_matrix(self, c_features):
+    def loss_from_correlation_matrix(self, c_features, offdiag_weight=None):
+        if offdiag_weight is None:
+            offdiag_weight = float(getattr(self.args, 'lambd', 0.0051))
         on_diag = torch.diagonal(c_features).add_(-1).pow_(2).sum()
         off_diag = off_diagonal(c_features).pow_(2).sum()
-        loss_features = (on_diag + self.args.lambd * off_diag) / c_features.numel()
+        loss_features = (on_diag + offdiag_weight * off_diag) / c_features.numel()
         return loss_features
+
+    def _offdiag_weights(self):
+        """(feature_w, object_w) off-diagonal weights.
+
+        object_w defaults to lambd (back-compat); set lambd_obj_offdiag
+        (~0.05-0.3 suggested) to make object-space collapse actually costly
+        once the projector is LayerNorm (post-LN the shared mean no longer
+        leaks through BN, so the tiny 0.0051 default under-penalizes it).
+        """
+        feat_w = float(getattr(self.args, 'lambd', 0.0051))
+        obj_w = getattr(self.args, 'lambd_obj_offdiag', None)
+        obj_w = float(obj_w) if obj_w is not None else feat_w
+        return feat_w, obj_w
 
     def calculate_correlation_matrix(self, y1, y2):
         z1 = self.embed(y1)
         z2 = self.embed(y2)
         # empirical cross-correlation matrix
-        z1_norm = (z1 - z1.mean(0)) / z1.std(0)
-        z2_norm = (z2 - z2.mean(0)) / z2.std(0)
+        z1_norm = (z1 - z1.mean(0)) / z1.std(0).clamp_min(1e-6)
+        z2_norm = (z2 - z2.mean(0)) / z2.std(0).clamp_min(1e-6)
         this_batch_sz = z1.shape[0]
 
         c = torch.matmul(z1_norm.T, z2_norm) / this_batch_sz  # D x D (feature space)
@@ -108,14 +131,14 @@ class BarlowTwins3d(nn.Module):
         z1 = self.embed(y1)
         z2 = self.embed(y2)
         # empirical cross-correlation matrix
-        z1_norm = (z1 - z1.mean(0)) / z1.std(0)
-        z2_norm = (z2 - z2.mean(0)) / z2.std(0)
+        z1_norm = (z1 - z1.mean(0)) / z1.std(0).clamp_min(1e-6)
+        z2_norm = (z2 - z2.mean(0)) / z2.std(0).clamp_min(1e-6)
         this_batch_sz = z1.shape[0]
         c_features = torch.matmul(z1_norm.T, z2_norm) / this_batch_sz  # D x D (feature space)
 
         # empirical cross-correlation matrix
-        z1_norm = ((z1.T - z1.mean(1)) / z1.std(1)).T
-        z2_norm = ((z2.T - z2.mean(1)) / z2.std(1)).T
+        z1_norm = ((z1.T - z1.mean(1)) / z1.std(1).clamp_min(1e-6)).T
+        z2_norm = ((z2.T - z2.mean(1)) / z2.std(1).clamp_min(1e-6)).T
         this_num_features = z1.shape[1]
         c_objects = torch.matmul(z1_norm, z2_norm.T) / this_num_features  # N x N (object space)
 
@@ -173,9 +196,11 @@ class Transform:
             args['p_RandomAffine_base'] = args['p_RandomAffine_both']
             args['p_RandomAffine_flip'] = args['p_RandomAffine_both']
 
-        # This normalization should get rid of the noise floor (~100) and keep the actual peak values
-        self.final_normalization = tio.RescaleIntensity(percentiles=(5, 100))
-        self.final_normalization_no_copy = tio.RescaleIntensity(percentiles=(5, 100), copy=False)
+        # This normalization should get rid of the noise floor (~100) and keep the actual peak values.
+        # (5, 99.5): the 100th percentile (= max) lets one hot voxel compress
+        # contrast for the whole frame; kept in sync with volume_data + inference.
+        self.final_normalization = tio.RescaleIntensity(percentiles=(5, 99.5))
+        self.final_normalization_no_copy = tio.RescaleIntensity(percentiles=(5, 99.5), copy=False)
 
         self.transform = tio.transforms.Compose([
             tio.RandomAffine(degrees=(180, 0, 0), p=args.get('p_RandomAffine_base', 1.0)),
@@ -366,6 +391,14 @@ def _get_arg(args, name, default=None):
     return getattr(args, name, default)
 
 
+def _set_arg(args, name, value):
+    """Set an arch field on a SimpleNamespace or dict (legacy migration)."""
+    if isinstance(args, dict):
+        args[name] = value
+    else:
+        setattr(args, name, value)
+
+
 def _backbone_params(args):
     """(num_levels, f_maps) with the same defaults as fresh training."""
     kwargs = _get_arg(args, 'backbone_kwargs', None) or {}
@@ -435,10 +468,15 @@ def compare_model_architecture(expected_args, pretrained_args):
         mismatches.append(f"target_sz_xy: config={curr_xy!r} vs checkpoint={pre_xy!r}")
     position_family = {'position', 'attention', 'superglue'}
     if exp_type in position_family or pre_type in position_family:
-        for field, default in (('fusion', 'concat'), ('fusion_norm', 'none')):
-            curr, pre = _get_arg(expected_args, field, default), _get_arg(pretrained_args, field, default)
-            if curr != pre:
-                mismatches.append(f"{field}: config={curr!r} vs checkpoint={pre!r}")
+        # Fresh-training default is layernorm; legacy checkpoints without the
+        # field keep 'none' (pinned in load_barlow_model).
+        curr_fn = _get_arg(expected_args, 'fusion_norm', 'layernorm')
+        pre_fn = _get_arg(pretrained_args, 'fusion_norm', 'none')
+        if curr_fn != pre_fn:
+            mismatches.append(f"fusion_norm: config={curr_fn!r} vs checkpoint={pre_fn!r}")
+        curr_f, pre_f = _get_arg(expected_args, 'fusion', 'concat'), _get_arg(pretrained_args, 'fusion', 'concat')
+        if curr_f != pre_f:
+            mismatches.append(f"fusion: config={curr_f!r} vs checkpoint={pre_f!r}")
         curr_k, pre_k = list(_get_arg(expected_args, 'keypoint_encoder_layers', [32, 64])), \
             list(_get_arg(pretrained_args, 'keypoint_encoder_layers', [32, 64]))
         if curr_k != pre_k:
@@ -448,6 +486,10 @@ def compare_model_architecture(expected_args, pretrained_args):
             int(_get_arg(pretrained_args, 'self_layers', 2))
         if curr_s != pre_s:
             mismatches.append(f"self_layers: config={curr_s!r} vs checkpoint={pre_s!r}")
+        curr_c, pre_c = bool(_get_arg(expected_args, 'center_per_volume', True)), \
+            bool(_get_arg(pretrained_args, 'center_per_volume', False))
+        if curr_c != pre_c:
+            mismatches.append(f"center_per_volume: config={curr_c!r} vs checkpoint={pre_c!r}")
     return mismatches
 
 
@@ -476,6 +518,12 @@ def load_barlow_model(model_fname, expected_args=None):
     args_fname = Path(model_fname).with_name('args.pickle')
     args = pickle_load_binary(args_fname)
     logging.info(f"Loaded args from {args_fname}: {args}")
+    # Legacy migration: checkpoints predating a field must keep legacy
+    # behavior, not the current fresh-training default.
+    if _get_arg(args, 'fusion_norm', None) is None:
+        _set_arg(args, 'fusion_norm', 'none')
+    if _get_arg(args, 'center_per_volume', None) is None:
+        _set_arg(args, 'center_per_volume', False)
     if expected_args is not None:
         mismatches = compare_model_architecture(expected_args, args)
         if mismatches:
@@ -508,11 +556,52 @@ def load_barlow_model(model_fname, expected_args=None):
     try:
         model.load_state_dict(state_dict)
     except RuntimeError as e:
-        raise RuntimeError(
-            f"Could not load weights from {model_fname} into a '{model_type}' model "
-            f"(embedding_dim={getattr(args, 'embedding_dim', '?')}). "
-            f"If you changed the architecture, align the config with the checkpoint "
-            f"or train from scratch with pretrained_model_path set to null. "
-            f"Original error: {e}"
-        ) from e
+        # Backward compat: checkpoints predating gated attention (attn_gate,
+        # norm_context) and the LayerNorm-terminated fusion MLP have missing
+        # keys only. Load what matches and keep fresh inits for the rest
+        # (gate starts near-identity by design, so old weights behave like
+        # the old model on load). Checkpoints predating the projector
+        # BatchNorm->LayerNorm switch additionally carry stale BN buffers
+        # (running_mean/var); those are ignored with a warning. BN affine
+        # weight/bias share key names and shapes with the new LayerNorm and
+        # load directly — fine for backbone/fused/contextual eval (the
+        # projector is discarded for tracking); retrain if you care about
+        # the 'projected' stage.
+        allowed_prefixes = ('attn_gate', 'norm_context.', 'fuse_mlp.2.',
+                            'fuse_mlp.3.', 'fuse_mlp.4.')
+        allowed_stale_suffixes = ('.running_mean', '.running_var',
+                                  '.num_batches_tracked')
+        try:
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            missing = list(missing)
+            stale_bn = [u for u in unexpected
+                        if u.startswith('projector.') and u.endswith(allowed_stale_suffixes)]
+            unexpected = [u for u in unexpected if u not in stale_bn]
+            if unexpected or any(not m.startswith(allowed_prefixes) for m in missing):
+                raise RuntimeError(
+                    f"Could not load weights from {model_fname} into a '{model_type}' model "
+                    f"(embedding_dim={getattr(args, 'embedding_dim', '?')}). "
+                    f"If you changed the architecture, align the config with the checkpoint "
+                    f"or train from scratch with pretrained_model_path set to null. "
+                    f"Original error: {e}"
+                ) from e
+            logging.warning(f"Checkpoint {model_fname} predates gated attention / "
+                            f"LayerNorm fusion MLP; {len(missing)} new params "
+                            f"kept at init: {sorted(missing)}")
+            if stale_bn:
+                logging.warning(f"Checkpoint {model_fname} predates the projector "
+                                f"BatchNorm->LayerNorm switch; {len(stale_bn)} stale "
+                                f"BN buffers ignored: {sorted(stale_bn)}")
+        except RuntimeError as e2:
+            # If the strict=False path itself raised a different error
+            # (e.g. shape mismatch), report the original failure.
+            if 'Could not load weights' in str(e2):
+                raise
+            raise RuntimeError(
+                f"Could not load weights from {model_fname} into a '{model_type}' model "
+                f"(embedding_dim={getattr(args, 'embedding_dim', '?')}). "
+                f"If you changed the architecture, align the config with the checkpoint "
+                f"or train from scratch with pretrained_model_path set to null. "
+                f"Original error: {e}"
+            ) from e
     return gpu, model, args

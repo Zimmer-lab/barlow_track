@@ -113,7 +113,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
             # scoring 1e6 and letting Ax optimize noise.
             raise
         except Exception as e:
-            logging.warning(f"Encountered error with trial; quitting gracefully: {e}")
+            logging.exception(f"Encountered error with trial; quitting gracefully: {e}")
             result = 1e6
         try:
             if result is None or not np.isfinite(result):

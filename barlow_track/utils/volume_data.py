@@ -60,7 +60,9 @@ def build_photometric_transform(photometric_args=None):
     return tio.Compose([
         tio.RandomBlur(p=photo['p_blur']),
         tio.RandomNoise(std=photo['std_noise'], p=photo['p_noise']),
-        tio.RescaleIntensity(percentiles=(5, 100)),
+        # (5, 99.5): the max (100) lets one hot voxel compress contrast for
+        # the whole frame; must stay in sync with all inference normalizers.
+        tio.RescaleIntensity(percentiles=(5, 99.5)),
     ])
 
 

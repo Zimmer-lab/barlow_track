@@ -88,7 +88,11 @@ def train_barlow_network(args):
             args.model_type = 'barlow'
             model = BarlowTwins3d(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    # NOTE: yaml.safe_load parses '1e-6' (no decimal point) as str, not float,
+    # which used to crash Adam with "'<=' not supported between 'float' and 'str'".
+    # Coerce here so old configs keep working; the template now uses 1.0e-6.
+    optimizer = torch.optim.Adam(model.parameters(), lr=float(args.lr),
+                                 weight_decay=float(getattr(args, 'weight_decay', 0.0)))
 
     # Actually train
     start_time = time.time()
@@ -120,16 +124,24 @@ def train_barlow_network(args):
     else:
         json_stats.append(dict(run_name="Non-wandb-run", run_id=None))
 
+    num_skipped_batches = 0
     try:
         for epoch in range(0, args.epochs):
             for step, batch in enumerate(loader, start=epoch * len(loader)):
                 loss, loss_original, loss_transpose, loss_match = _run_forward(model, batch, gpu, use_position)
 
-                # adjust_learning_rate(args, optimizer, loader, step)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
+                # Degenerate batches (a view with <2 objects, or an empty
+                # dropout intersection) yield a grad-free zero loss; skip the
+                # optimizer step but keep logging so one bad volume cannot
+                # kill the whole trial.
+                if loss.requires_grad:
+                    # adjust_learning_rate(args, optimizer, loader, step)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+                else:
+                    num_skipped_batches += 1
 
                 if step % args.print_freq == 0 or step == 0:
                     if args.rank == 0:
@@ -164,25 +176,40 @@ def train_barlow_network(args):
                 with torch.no_grad():
                     val_loss, val_loss_original, val_loss_transpose = 0, 0, 0
                     c = None
+                    num_val_batches = 0
                     for val_step, batch in enumerate(data_module.val_dataloader()):
                         loss, loss_original, loss_transpose, _ = _run_forward(model, batch, gpu, use_position)
                         val_loss += loss.item()
                         val_loss_original += loss_original.item()
                         val_loss_transpose += loss_transpose.item()
+                        num_val_batches += 1
                         # Plot validation embedding
                         if run is not None:
                             c_batch = _correlation_for_plot(model, batch, gpu, use_position)
                             c = c_batch if c is None else c + c_batch
-                    if run is not None and c is not None:
-                        c /= val_step  # Plot the average
+                    if run is not None and c is not None and num_val_batches > 0:
+                        c /= num_val_batches  # Plot the average
                         fig = visualize_model_performance(c, save_fname=None, vmin=-0.5, vmax=1)
                         run.log({"validation_chart": fig})
 
                 val_losses = {"val_loss": val_loss, "val_loss_original": val_loss_original, "val_loss_transpose": val_loss_transpose}
+                # Anti-collapse descriptor health (pre-projector): effective rank,
+                # off-diag correlation, dead dims, per-volume mean fraction,
+                # attention entropy/gate, position jitter sensitivity. SSL loss
+                # alone cannot reject collapsed tracking descriptors, so select
+                # configs by these + tracking accuracy instead.
+                try:
+                    _diag = _validation_descriptor_diagnostics(model, data_module, gpu, use_position)
+                    val_losses.update({f"val_{k}": v for k, v in _diag.items()})
+                except (RuntimeError, ValueError, AttributeError, StopIteration) as e:
+                    logging.warning(f"Descriptor diagnostics failed: {e}")
                 if run is not None:
                     run.log(val_losses)
                 # Printing
-                stats = dict(epoch=epoch, val_loss=val_loss, time=int(time.time() - start_time))
+                stats = dict(epoch=epoch, val_loss=val_loss, time=int(time.time() - start_time),
+                             skipped_batches=num_skipped_batches)
+                stats.update({f"val_{k}": v for k, v in val_losses.items() if k != "val_loss"
+                              and "val_loss_" not in k})
                 print(json.dumps(stats))
                 json_stats.append(stats)
 
@@ -246,6 +273,38 @@ def train_barlow_network(args):
         print("Training complete")
         
     return test_losses
+
+
+def _validation_descriptor_diagnostics(model, data_module, gpu, use_position):
+    """Anti-collapse health metrics on the first usable validation volume.
+
+    Runs pre-projector fused/contextual descriptors through
+    volume_descriptor_diagnostics (effective rank, off-diag correlation,
+    dead-dim fraction, per-volume mean fraction, attention entropy/gate,
+    position jitter sensitivity). Returns {} for legacy image-only models
+    or when no validation volume has >= 2 objects. Values are plain floats
+    (NaN where undefined); exceptions propagate to the caller, which logs
+    a warning instead of failing the epoch.
+    """
+    import torch as _torch
+
+    if not use_position or not hasattr(model, 'fused_descriptors'):
+        gate = getattr(model, 'attn_gate', None)
+        if gate is not None:
+            return {'attn_gate': float(_torch.sigmoid(gate.detach()).cpu())}
+        return {}
+    from barlow_track.utils.barlow_superglue import volume_descriptor_diagnostics
+    with _torch.no_grad():
+        for batch in data_module.val_dataloader():
+            y1, k1 = batch[0].to(gpu), batch[2].to(gpu)
+            if y1.shape[0] < 2:
+                continue
+            diag = volume_descriptor_diagnostics(model, y1, k1)
+            return {k: (float(v) if v == v else float('nan')) for k, v in diag.items()}
+    gate = getattr(model, 'attn_gate', None)
+    if gate is not None:
+        return {'attn_gate': float(_torch.sigmoid(gate.detach()).cpu())}
+    return {}
 
 
 def _run_forward(model, batch, gpu, use_position):

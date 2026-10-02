@@ -149,7 +149,7 @@ def _normalize_crops(crops: np.ndarray) -> np.ndarray:
     """Same intensity normalization the training path ends with."""
     import torchio as tio
 
-    norm = tio.RescaleIntensity(percentiles=(5, 100))
+    norm = tio.RescaleIntensity(percentiles=(5, 99.5))  # in sync with training
     out = norm(crops)
     return np.asarray(out, dtype=np.float32)
 

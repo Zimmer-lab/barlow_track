@@ -75,13 +75,21 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
         results_subfolder = '3-tracking/barlow_tracker'
         project_data.logger.info(f"Output subfolder for results: {results_subfolder}")
 
-    # Get tracking method from config
+    # Get tracking method from config (barlow_tracker is a dict; older code
+    # overwrote it with a bare string, so read defensively)
     tracking_config = project_config.get_tracking_config()
+    _bt_cfg = tracking_config.config.get('barlow_tracker', {})
+    if isinstance(_bt_cfg, dict):
+        _default_mode = _bt_cfg.get('tracking_mode', 'global')
+    else:
+        _default_mode = _bt_cfg if isinstance(_bt_cfg, str) else 'global'
     if tracking_mode is None:
-        tracking_mode = tracking_config.config.get('barlow_tracker', {}).get('tracking_mode', 'global')
+        tracking_mode = _default_mode
     else:
         project_config.logger.info(f"Using user-specified tracking mode: {tracking_mode}")
-        tracking_config.config['barlow_tracker'] = tracking_mode
+        if not isinstance(tracking_config.config.get('barlow_tracker'), dict):
+            tracking_config.config['barlow_tracker'] = {}
+        tracking_config.config['barlow_tracker']['tracking_mode'] = tracking_mode
         tracking_config.update_self_on_disk()
 
     # Check to see if the results already exist
@@ -219,7 +227,7 @@ def cluster_embeddings_from_config(project_config: ModularProjectConfig,
         svd_components = 50
         if tracker.X.shape[1] > svd_components:
             project_config.logger.info(f"Truncating feature space using {svd_components} PCA components "
-                                    f"(original matrix size: {X.shape})")
+                                    f"(original matrix size: {tracker.X.shape})")
             tracker.X = _robust_svd(tracker.X, svd_components)
             project_config.logger.info(f"Finished truncation")
         df_combined = tracker.track_using_global_clusterer()
@@ -300,13 +308,21 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
         results_subfolder = '3-tracking/barlow_tracker'
         project_data.logger.info(f"Output subfolder for results: {results_subfolder}")
 
-    # Get tracking method from config
+    # Get tracking method from config (barlow_tracker is a dict; older code
+    # overwrote it with a bare string, so read defensively)
     tracking_config = project_config.get_tracking_config()
+    _bt_cfg = tracking_config.config.get('barlow_tracker', {})
+    if isinstance(_bt_cfg, dict):
+        _default_mode = _bt_cfg.get('tracking_mode', 'global')
+    else:
+        _default_mode = _bt_cfg if isinstance(_bt_cfg, str) else 'global'
     if tracking_mode is None:
-        tracking_mode = tracking_config.config.get('barlow_tracker', {}).get('tracking_mode', 'global')
+        tracking_mode = _default_mode
     else:
         project_config.logger.info(f"Using user-specified tracking mode: {tracking_mode}")
-        tracking_config.config['barlow_tracker'] = tracking_mode
+        if not isinstance(tracking_config.config.get('barlow_tracker'), dict):
+            tracking_config.config['barlow_tracker'] = {}
+        tracking_config.config['barlow_tracker']['tracking_mode'] = tracking_mode
         tracking_config.update_self_on_disk()
 
     # Check to see if the results already exist
@@ -459,7 +475,10 @@ def embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space
             def _parallel_func(name):
                 idx = ids.index(name)
                 crop = torch.unsqueeze(batch[:, idx, ...], 0)
-                embeddings = model.embed(crop) if use_projection_space else model.backbone(crop)
+                # torch.no_grad is thread-local, so it must wrap the forward
+                # inside the worker (an outer with-block would not apply here).
+                with torch.no_grad():
+                    embeddings = model.embed(crop) if use_projection_space else model.backbone(crop)
                 all_embeddings[name][t] = embeddings.cpu().detach().numpy()
 
             # no_grad is thread-local
@@ -474,7 +493,7 @@ def embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space
     return all_embeddings
 
 
-def embed_volumes_with_position(gpu, model, project_data, frame_indices, target_sz, chunk_size=32):
+def embed_volumes_with_position(gpu, model, project_data, frame_indices, target_sz, chunk_size=None):
     """Fused visual+position embeddings for selected frames (Step 4).
 
     Uses the VolumeCoordsDataset plumbing (centroids + direct crop extraction,
@@ -483,6 +502,14 @@ def embed_volumes_with_position(gpu, model, project_data, frame_indices, target_
     {t: (N_t, D) array} and {t: (N_t,) raw segmentation ids}.
 
     For legacy BarlowTwins3d checkpoints use embed_using_barlow() instead.
+
+    NOTE: the position/attention path is intentionally UNCHUNKED (full-volume
+    forward). KeypointEncoder/GNN MLPs use InstanceNorm1d (stats over N) and
+    attention softmax runs over N keys, so per-32-row chunking shifts every
+    descriptor with chunk composition and breaks trailing single-crop chunks
+    (N==1 zero-fallbacks). Memory is trivial (attention H*N*N ~= 0.64MB at
+    N=200; training already runs 2xN full-volume forwards with autograd).
+    chunk_size is kept for back-compat and ignored.
     """
     from barlow_track.utils.volume_data import (
         VolumeCoordsDataset, extract_crops, get_centroids_for_volume, load_volume)
@@ -492,7 +519,8 @@ def embed_volumes_with_position(gpu, model, project_data, frame_indices, target_
         raise TypeError(f"{type(model).__name__} has no position fusion; "
                         f"use embed_using_barlow() for legacy checkpoints")
     target_sz = np.array(target_sz)
-    normalizer = tio.RescaleIntensity(percentiles=(5, 100))
+    # Kept in sync with training (volume_data build_photometric_transform): (5, 99.5).
+    normalizer = tio.RescaleIntensity(percentiles=(5, 99.5))
     model.eval()
     out, seg_out = {}, {}
     with torch.no_grad():
@@ -505,10 +533,9 @@ def embed_volumes_with_position(gpu, model, project_data, frame_indices, target_
             crops = torch.from_numpy(extract_crops(vol, zxy, target_sz)).float()
             crops = normalizer(crops).unsqueeze(1)  # tio needs 4D; model needs (N,1,Z,X,Y)
             kpts = VolumeCoordsDataset._normalize(torch.from_numpy(zxy.astype(np.float32)), vol.shape)
-            embs = [model.embed_with_position(crops[i:i + chunk_size].to(gpu),
-                                              kpts[i:i + chunk_size].to(gpu)).cpu().numpy()
-                    for i in range(0, len(crops), chunk_size)]
-            out[t] = np.vstack(embs)
+            # Full-volume forward: no chunking (see docstring).
+            out[t] = model.embed_with_position(crops.to(gpu),
+                                               kpts.to(gpu)).cpu().numpy()
             seg_out[t] = np.asarray(seg)
     logging.info(f"Embedded {len(out)} frames with position")
     return out, seg_out
@@ -620,10 +647,16 @@ class BarlowProject:
 
     def load_model(self, model_path):
         self.gpu, self.model, self.args = load_barlow_model(model_path)
-        self.target_sz = self.args.target_sz
+        self.target_sz = get_target_size_from_args(self.args)
         self.model.eval()
 
-    def embed_data(self):
+    def embed_data(self, use_projection_space=False):
+        """Embed crops; backbone space by default (tracking convention).
+
+        use_projection_space=False matches embed_using_barlow's default
+        (model.backbone); pass True only to explicitly evaluate projector
+        space. Forward runs under per-worker torch.no_grad.
+        """
         if self.all_embeddings:
             self.logger.info("Embeddings already exist. Returning existing embeddings.")
             return self.all_embeddings
@@ -641,7 +674,9 @@ class BarlowProject:
                 def _parallel_func(name):
                     idx = ids.index(name)
                     crop = torch.unsqueeze(batch[:, idx, ...], 0)
-                    self.all_embeddings[name][t] = self.model.embed(crop).cpu().detach().numpy()
+                    with torch.no_grad():
+                        emb = self.model.embed(crop) if use_projection_space else self.model.backbone(crop)
+                    self.all_embeddings[name][t] = emb.cpu().detach().numpy()
 
             # no_grad is thread-local
             # https://github.com/pytorch/pytorch/issues/20528

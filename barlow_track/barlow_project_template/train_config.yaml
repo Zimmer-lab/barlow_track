@@ -58,6 +58,9 @@ val_fraction: 0.1    # If > 1, interpreted as number of volumes not a fraction
 
 # Hyperparameters for the new (transposed) BarlowTrack loss
 lambd_obj: 0.67  # Set to 1 to only use the transposed loss; 0 means only original BarlowTwins loss
+# Optional separate off-diagonal weight for the object-space loss (default: falls back to lambd).
+# Suggested sweep 0.05-0.3 once the projector is LayerNorm; the 0.0051 default under-penalizes object collapse.
+lambd_obj_offdiag: null
 
 ####
 # Position encodings + SuperGlue-GNN options (all default off = legacy behavior)
@@ -68,6 +71,7 @@ fusion: concat       # 'concat' (default) | 'add' (SuperGlue-style) | 'position_
 fusion_norm: layernorm # per-branch norm before fusion: 'layernorm' (recommended) | 'l2' | 'none' (legacy)
 self_layers: 2       # number of intra-volume self-attention layers (attention models)
 attn_gate_init: -4.0 # initial attention gate logit; sigmoid(-4)~0.018 starts attention "almost off"
+center_per_volume: true # subtract the per-volume mean before self-attention (kills the shared frame-identity attractor)
 keypoint_encoder_layers: [32, 64]
 
 # Global-before-crop augmentation (only used when use_position is true)

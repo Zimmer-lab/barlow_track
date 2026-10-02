@@ -97,7 +97,7 @@ def test_identity_global_matches_legacy_crop_path(project_data):
     sz = np.array([1, *vol.shape])
     legacy = np.stack([get_3d_crop_using_bbox_or_centroid(p, sz, np.array(target_sz), vol)[0]
                        for p in zxy])
-    norm = tio.RescaleIntensity(percentiles=(5, 100))
+    norm = tio.RescaleIntensity(percentiles=(5, 99.5))  # in sync with training
     expected = norm(torch.from_numpy(legacy)).float().unsqueeze(1)
     assert torch.allclose(y1, expected, atol=1e-5)
 

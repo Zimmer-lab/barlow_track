@@ -525,7 +525,8 @@ def main():
         # Label propagation is the paper's final clustering step (global mode
         # only for quick debugging).
         if args.cluster == 'labelprop':
-            df_pred = tracker.track_using_label_propagation_clusterer(num_seeds=args.num_seeds)
+            df_pred = tracker.track_using_label_propagation_clusterer(
+                num_seeds=args.num_seeds, device=device if device.type == 'cuda' else None)
         else:
             df_pred = tracker.track_using_global_clusterer()
         print(f"[{args.lab}/{mode}] tracked in {time.time()-t2:.0f}s; df {df_pred.shape}", flush=True)

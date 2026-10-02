@@ -70,24 +70,36 @@ def run_label_propagation(edge_index, y, num_layers=50, alpha=0.9):
     return pred
 
 
-def clamped_label_propagation(edge_index, y, num_layers=50, DEBUG=True):
+def normalized_adjacency(edge_index):
+    """Symmetric-normalized adjacency weights, on edge_index's device.
+
+    Split out of clamped_label_propagation so multi-seed runs build it once
+    instead of once per seed (identical values; the ops are deterministic).
     """
-    edge_index: graph edges
-    y: seed labels (-1 for unlabeled)
-    """
-    # build adjacency (row-normalized) -- PyG has utils for this
     from torch_geometric.utils import add_self_loops, degree
-    
+
     edge_index, _ = add_self_loops(edge_index)
     row, col = edge_index
     deg = degree(row, dtype=torch.float)
-    
+
     deg_inv_sqrt = deg.pow(-0.5)
     deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
     norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
     # deg_inv = deg.pow(-1)
     # deg_inv[deg_inv == float('inf')] = 0
     # norm = deg_inv[row]
+    return edge_index, norm
+
+
+def clamped_label_propagation(edge_index, y, num_layers=50, norm=None, DEBUG=True):
+    """
+    edge_index: graph edges
+    y: seed labels (-1 for unlabeled)
+    norm: precomputed adjacency weights from normalized_adjacency (same device
+        as edge_index/y); rebuilt if None
+    """
+    if norm is None:
+        edge_index, norm = normalized_adjacency(edge_index)
 
     # seed mask
     mask = (y != -1)
@@ -121,16 +133,25 @@ def clamped_label_propagation(edge_index, y, num_layers=50, DEBUG=True):
 #     return labelings
 
 
-def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k=1, prob_thresh=None, tau=0.01, softmax=True, DEBUG=False):
+def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k=1, prob_thresh=None, tau=0.01, softmax=True, DEBUG=False,
+                          device=None, edge_norm=None):
     """
     edge_index: graph edges
     y: seed labels (-1 for unlabeled)
+    device: torch device for propagation (None = keep inputs where they are, i.e. CPU backup)
+    edge_norm: precomputed adjacency weights from normalized_adjacency (same
+        device as edge_index); rebuilt per call if None
     """
+    if device is not None:
+        edge_index = edge_index.to(device)
+        y = y.to(device)
+    if edge_norm is None:
+        edge_index, edge_norm = normalized_adjacency(edge_index)
     mask = (y != -1)  # seeds
 
     # Threshold purely chance labelings
     if prob_thresh is None:
-        prob_thresh = 1.1*(1.0 / mask.sum().numpy())
+        prob_thresh = 1.1*(1.0 / mask.sum().item())
 
     if DEBUG:
         print(f"Seeds found: {mask.sum().item()}")
@@ -139,7 +160,7 @@ def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k
     
     # lp = LabelPropagation(num_layers=num_layers, alpha=alpha)
     # out = lp(y_filled, edge_index, mask=mask)  # (N, C)
-    out = clamped_label_propagation(edge_index, y, num_layers=num_layers, DEBUG=DEBUG)
+    out = clamped_label_propagation(edge_index, y, num_layers=num_layers, norm=edge_norm, DEBUG=DEBUG)
 
     if return_top_k == 1:
         probs = torch.softmax(out, dim=-1)
@@ -165,15 +186,24 @@ def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k
         return top_labels, top_probs  # (N, k), (N, k)
 
 
-def multi_seed_propagation(X, slices, time_index_to_linear_feature_indices, k=20, **kwargs):
+def multi_seed_propagation(X, slices, time_index_to_linear_feature_indices, k=20, device=None, **kwargs):
+    """Propagate labels from each seed time; device=None keeps the CPU backup path.
+
+    The kNN graph is built once on CPU; with a device, edge weights move there
+    once (adjacency normalization hoisted out of the per-seed loop) and results
+    come back as numpy either way.
+    """
     edge_index = build_knn_graph(X, k=k)
+    if device is not None:
+        edge_index = edge_index.to(device)
+    edge_index, edge_norm = normalized_adjacency(edge_index)
     labelings = []
     probabilities = []
     for t in tqdm(slices, desc="Propagating labels from seed times", leave=False):
         y = make_seed_labels_no_dict(time_index_to_linear_feature_indices[t], num_timepoints=X.shape[0])
-        pred, probs = run_label_propagation(edge_index, y, **kwargs)
-        labelings.append(pred.numpy())
-        probabilities.append(probs.numpy())
+        pred, probs = run_label_propagation(edge_index, y, edge_norm=edge_norm, device=device, **kwargs)
+        labelings.append(pred.detach().cpu().numpy())
+        probabilities.append(probs.detach().cpu().numpy())
     return labelings, probabilities
 
 

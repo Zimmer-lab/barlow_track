@@ -137,6 +137,69 @@ def _trained_stage_emb(tmodel, crops, kpts, stage, device, chunk=32):
     raise ValueError(f"Unknown descriptor_stage '{stage}'")
 
 
+def _centroid_boxes(zxy, target_sz, vol_shape, round_centroids=True):
+    """Integer (z0, z1, x0, x1, y0, y1) boxes replicating
+    data_loading.get_3d_crop_using_bbox_or_centroid (centroid input).
+
+    round_centroids mirrors the 3-value branch (int(np.round)); False mirrors
+    the 6-value branch with duplicated centroids (int((c + c) / 2), i.e.
+    truncation). The project path uses duplicated centroids, the NWB path
+    plain ones.
+    """
+    tz, tx, ty = int(target_sz[0]), int(target_sz[1]), int(target_sz[2])
+    Z, X, Y = (int(s) for s in vol_shape)
+    boxes = []
+    for z, x, y in np.asarray(zxy, dtype=float):
+        if round_centroids:
+            zm, xm, ym = int(round(z)), int(round(x)), int(round(y))
+        else:
+            zm, xm, ym = int(z), int(x), int(y)
+        z0 = min(max(zm - tz // 2, 0), Z); z1 = min(max(zm + tz // 2, 0), Z)
+        if z1 - z0 > tz:
+            z1 = z0 + tz
+        x0 = min(max(xm - tx // 2, 0), X); x1 = min(max(xm + tx // 2, 0), X)
+        if x1 - x0 > tx:
+            x1 = x0 + tx
+        y0 = min(max(ym - ty // 2, 0), Y); y1 = min(max(ym + ty // 2, 0), Y)
+        if y1 - y0 > ty:
+            y1 = y0 + ty
+        boxes.append((z0, z1, x0, x1, y0, y1))
+    return boxes
+
+
+def _extract_crops_gpu(vol_t, zxy, target_sz, round_centroids=True):
+    """GPU replica of volume_data.extract_crops: centroid boxes, pad-before zeros.
+
+    vol_t: (Z, X, Y) tensor already on the target device. Returns
+    (N, tz, tx, ty) on the same device. Bit-identical values to the numpy path
+    (same box math, same zero padding); only the slicing device differs.
+    """
+    tz, tx, ty = int(target_sz[0]), int(target_sz[1]), int(target_sz[2])
+    out = torch.zeros((len(zxy), tz, tx, ty), dtype=vol_t.dtype, device=vol_t.device)
+    for i, (z0, z1, x0, x1, y0, y1) in enumerate(
+            _centroid_boxes(zxy, target_sz, vol_t.shape, round_centroids)):
+        crop = vol_t[z0:z1, x0:x1, y0:y1]
+        if crop.numel():
+            dz, dx, dy = tz - crop.shape[0], tx - crop.shape[1], ty - crop.shape[2]
+            out[i, dz:, dx:, dy:] = crop
+    return out
+
+
+def _rescale_gpu(x, lo_pct=5.0, hi_pct=99.5):
+    """GPU replica of tio RescaleIntensity(percentiles=(lo, hi)).
+
+    Global cutoffs over the whole stack (as tio does), linear rescale,
+    clipped to [0, 1]. Quantiles computed in float64 to match np.percentile.
+    """
+    with torch.no_grad():
+        q = torch.quantile(x.detach().double().reshape(-1),
+                           torch.tensor([lo_pct / 100.0, hi_pct / 100.0],
+                                        dtype=torch.float64, device=x.device))
+        lo, hi = q[0].to(x.dtype), q[1].to(x.dtype)
+        denom = (hi - lo).clamp_min(1e-12)
+        return ((x - lo) / denom).clamp_(0, 1)
+
+
 def _embed_frame(mode, crops, kpts, models, tmodel, args, device, chunk=32):
     """Embed one frame's crops under the requested mode (no grad)."""
     paper_model, fmodel, amodel, pmodel = (models['paper'], models['fmodel'],
@@ -170,19 +233,23 @@ def _embed_frame(mode, crops, kpts, models, tmodel, args, device, chunk=32):
     return d.cpu().numpy()
 
 
-def _iter_project_frames(project_data, target_sz, normalizer, frame_list):
+def _iter_project_frames(project_data, target_sz, normalizer, frame_list, device=None):
     """Yield per-frame dicts (crops, kpts, meta) from segmentation crops.
 
     meta: list of (raw_ind, seg) aligned with crops rows. Frames with < 2
     detections are skipped (no relative geometry; matches legacy filter).
+    With a CUDA device, the volume is transferred once per frame and crops +
+    intensity normalization happen on the GPU (numerically identical to CPU).
     """
     from barlow_track.utils.data_loading import get_bbox_data_for_volume_with_label
     from barlow_track.utils.volume_data import VolumeCoordsDataset, load_volume
+    use_gpu = device is not None and device.type == 'cuda'
     for t in frame_list:
         vol = load_volume(project_data, t)
-        crops_d, seg2name, _ = get_bbox_data_for_volume_with_label(
-            project_data, t, target_sz=target_sz, include_untracked=True)
-        names = sorted(crops_d)
+        dat_d, seg2name, _ = get_bbox_data_for_volume_with_label(
+            project_data, t, target_sz=target_sz, include_untracked=True,
+            skip_crops=use_gpu)
+        names = sorted(dat_d)
         if len(names) < 2:
             continue
         name_to_seg = {}
@@ -191,10 +258,16 @@ def _iter_project_frames(project_data, target_sz, normalizer, frame_list):
                 name_to_seg[n] = int([k for k, v in seg2name.items() if v == n][0])
             else:
                 name_to_seg[n] = int(n.split('_')[-1])  # untracked_time_{t}_{ind}_{seg}
-        crops = torch.from_numpy(np.stack([crops_d[n] for n in names]).astype(np.float32))
-        crops = normalizer(crops).unsqueeze(1).float()
-        zxy = np.array([[r['z'], r['x'], r['y']] for r in
-                        _rows_for_names(project_data, t, names, name_to_seg)], dtype=np.float32)
+        if use_gpu:
+            zxy = np.array([dat_d[n] for n in names], dtype=np.float32)
+            vol_t = torch.from_numpy(np.ascontiguousarray(vol)).to(device, dtype=torch.float32)
+            crops = _rescale_gpu(
+                _extract_crops_gpu(vol_t, zxy, target_sz, round_centroids=False)).unsqueeze(1)
+        else:
+            crops = torch.from_numpy(np.stack([dat_d[n] for n in names]).astype(np.float32))
+            crops = normalizer(crops).unsqueeze(1).float()
+            zxy = np.array([[r['z'], r['x'], r['y']] for r in
+                            _rows_for_names(project_data, t, names, name_to_seg)], dtype=np.float32)
         kpts = VolumeCoordsDataset._normalize(torch.from_numpy(zxy), vol.shape)
         meta = []
         for n in names:
@@ -235,32 +308,39 @@ def _load_nwb_arrays(nwb_project):
     )
 
 
-def _iter_nwb_frames(nwb_project, arrays, target_sz, normalizer, frame_list):
+def _iter_nwb_frames(nwb_project, arrays, target_sz, normalizer, frame_list, device=None):
     """Yield per-frame dicts (crops, kpts, meta) cropped around GT xyz.
 
     Same dict schema as _iter_project_frames; meta entries are
     (raw_neuron_ind_in_list, raw_segmentation_id) from the NWB directly.
+    With a CUDA device, crops + intensity normalization happen on the GPU.
     """
     from barlow_track.utils.data_loading import get_3d_crop_using_bbox_or_centroid
     from barlow_track.utils.volume_data import VolumeCoordsDataset
+    use_gpu = device is not None and device.type == 'cuda'
     gx, gy, gz, gr, gs = arrays['gx'], arrays['gy'], arrays['gz'], arrays['gr'], arrays['gs']
     for t in frame_list:
         vol = np.asarray(nwb_project.red_data[t, ...], dtype=np.float32)
         sz = np.array([1, *vol.shape])
-        crops_l, zxy_l, meta_l = [], [], []
+        zxy_l, meta_l = [], []
         fin = np.isfinite(gx[t]) & np.isfinite(gy[t]) & np.isfinite(gz[t]) \
             & np.isfinite(gr[t]) & np.isfinite(gs[t])
         for j in np.flatnonzero(fin):
             z, x, y = float(gz[t, j]), float(gx[t, j]), float(gy[t, j])
-            dat, _ = get_3d_crop_using_bbox_or_centroid([z, x, y], sz, target_sz, vol)
-            crops_l.append(dat)
             zxy_l.append([z, x, y])
             meta_l.append((int(gr[t, j]), int(gs[t, j])))
-        if len(crops_l) < 2:
+        if len(zxy_l) < 2:
             continue
-        crops = normalizer(torch.from_numpy(np.stack(crops_l))).unsqueeze(1).float()
+        zxy = np.array(zxy_l, dtype=np.float32)
+        if use_gpu:
+            vol_t = torch.from_numpy(np.ascontiguousarray(vol)).to(device)
+            crops = _rescale_gpu(_extract_crops_gpu(vol_t, zxy, target_sz)).unsqueeze(1)
+        else:
+            crops_l = [get_3d_crop_using_bbox_or_centroid([z, x, y], sz, target_sz, vol)[0]
+                       for z, x, y in zxy_l]
+            crops = normalizer(torch.from_numpy(np.stack(crops_l))).unsqueeze(1).float()
         kpts = VolumeCoordsDataset._normalize(
-            torch.from_numpy(np.array(zxy_l, dtype=np.float32)), vol.shape)
+            torch.from_numpy(zxy), vol.shape)
         yield dict(t=t, crops=crops, kpts=kpts, meta=meta_l)
 
 
@@ -388,9 +468,11 @@ def main():
     frame_list = list(range(n_frames))
     if args.source == 'nwb':
         arrays = _load_nwb_arrays(src_data)
-        frame_iter_fn = lambda: _iter_nwb_frames(src_data, arrays, target_sz, normalizer, frame_list)
+        frame_iter_fn = lambda: _iter_nwb_frames(src_data, arrays, target_sz, normalizer, frame_list,
+                                                device=device)
     else:
-        frame_iter_fn = lambda: _iter_project_frames(src_data, target_sz, normalizer, frame_list)
+        frame_iter_fn = lambda: _iter_project_frames(src_data, target_sz, normalizer, frame_list,
+                                                     device=device)
 
     modes = ['image', 'position'] if args.mode == 'both' else [args.mode]
     for mode in modes:

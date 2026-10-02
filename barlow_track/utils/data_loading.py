@@ -43,10 +43,14 @@ def get_bbox_data_for_volume(project_data, t, target_sz=np.array([8, 64, 64]), r
 
 
 def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 64, 64]), which_neurons=None,
-                                        include_untracked=False):
+                                        include_untracked=False, skip_crops=False):
     """
     Like get_bbox_data_for_volume, but only returns objects that have an ID in the final tracks (unless include_untracked=True)
     Instead of returning a list of arrays, returns a dict indexed by the string name as found in project_data
+
+    If skip_crops is True, no image data is read or sliced; the returned dict
+    maps each name to its centroid [z, x, y] instead of a crop array, so the
+    caller can slice on its own device (e.g. GPU).
     """
     if which_neurons is None:
         which_neurons = project_data.finished_neuron_names()
@@ -70,11 +74,7 @@ def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 
 
     # Get a bbox for all neurons in 3d, but optionally skip the untracked mask indices
     all_dat_dict = {}
-    this_red = project_data.red_data[t, ...]
-    # Check for dask arrays
-    if hasattr(this_red, 'compute'):
-        this_red = this_red.compute()
-    sz = project_data.red_data.shape
+    specs = []  # (name, centroid [z, x, y]) in mdata order; sliced below unless skip_crops
 
     # Use the metadata as calculated in the project
     try:
@@ -103,6 +103,17 @@ def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 
                     ind_in_list = int(row['raw_neuron_ind_in_list'])
                 this_name = f"untracked_time_{t}_{ind_in_list:04d}_{this_seg_label:04d}"
         zxy = [row['z'], row['x'], row['y']]
+        specs.append((this_name, zxy))
+
+    if skip_crops:
+        return dict(specs), seg2name, which_neurons
+
+    this_red = project_data.red_data[t, ...]
+    # Check for dask arrays
+    if hasattr(this_red, 'compute'):
+        this_red = this_red.compute()
+    sz = project_data.red_data.shape
+    for this_name, zxy in specs:
         # Repeat to be zxyzxy
         zxyzxy = [zxy[0], zxy[1], zxy[2], zxy[0], zxy[1], zxy[2]]
         dat, _ = get_3d_crop_using_bbox_or_centroid(zxyzxy, sz, target_sz, this_red)

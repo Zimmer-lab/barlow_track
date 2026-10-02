@@ -406,15 +406,7 @@ def main():
     src_data = ProjectData.load_final_project_data(
         nwb_path if args.source == 'nwb' else project_path,
         allow_hybrid_loading=True, verbose=0)
-    gpu, paper_model, margs = load_barlow_model(spec['weights'])
     device = torch.device(args.device)
-    paper_model = paper_model.to(device).eval()
-    if args.source == 'nwb':
-        # Old leifer-script convention: fixed crop size unless a trained
-        # checkpoint dictates its own target.
-        target_sz = np.array([8, 64, 64])
-    else:
-        target_sz = np.array(getattr(margs, 'target_sz', [margs.target_sz_z, margs.target_sz_xy, margs.target_sz_xy]))
     tmodel, targs, t_target_sz = None, None, None
     if args.weights:
         _, tmodel, targs = load_barlow_model(args.weights)
@@ -422,7 +414,20 @@ def main():
         t_target_sz = np.array(getattr(targs, 'target_sz', [targs.target_sz_z, targs.target_sz_xy, targs.target_sz_xy]))
     if args.mode == 'trained':
         assert args.weights, '--mode trained requires --weights'
+        # The checkpoint carries its own architecture; the lab reference
+        # weights are unused here, so don't load them (also avoids stale-arch
+        # migration warnings for legacy reference checkpoints).
+        paper_model, margs = None, targs
         target_sz = t_target_sz
+    else:
+        gpu, paper_model, margs = load_barlow_model(spec['weights'])
+        paper_model = paper_model.to(device).eval()
+        if args.source == 'nwb':
+            # Old leifer-script convention: fixed crop size unless a trained
+            # checkpoint dictates its own target.
+            target_sz = np.array([8, 64, 64])
+        else:
+            target_sz = np.array(getattr(margs, 'target_sz', [margs.target_sz_z, margs.target_sz_xy, margs.target_sz_xy]))
     print(f"[{args.lab}/{args.source}] model target {list(target_sz)}, emb {margs.embedding_dim}", flush=True)
 
     # Fusion/attention models sharing the SAME backbone weights (isolates new components).

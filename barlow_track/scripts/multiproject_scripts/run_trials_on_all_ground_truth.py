@@ -69,10 +69,17 @@ def parse_args():
     parser.add_argument("--device", default="cuda", help="torch device for embedding")
     parser.add_argument("--results_jsonl", default=None,
                         help="Where to append results (default: <trial_parent_dir>/exp_results.jsonl)")
+    parser.add_argument("--unified_json", default=None,
+                        help="Write this run's records as one JSON array here "
+                             "(default: <results_jsonl basename>_unified.json alongside it)")
     parser.add_argument("--emb_dir", default=None,
                         help="Embedding cache dir (default: <trial_parent_dir>/emb_cache)")
     parser.add_argument("--max_frames", type=int, default=None, help="Frame cap per dataset (smoke test)")
     parser.add_argument("--cluster", default="labelprop", choices=["labelprop", "global"])
+    parser.add_argument("--mode", default="trained",
+                        choices=["trained", "image", "position", "posonly", "attention", "both"],
+                        help="trained: evaluate trial checkpoints (--trials/--trial_parent_dir); "
+                             "otherwise run the reference untrained baselines once per dataset")
     parser.add_argument("--num_seeds", type=int, default=25)
     parser.add_argument("--descriptor_stage", default="auto",
                         choices=["auto", "backbone", "fused", "contextual", "projected"])
@@ -168,22 +175,29 @@ def main():
     labs = args.labs or DEFAULT_LABS
 
     trials = resolve_trials(trial_parent_dir, args.trials, args.model_fname)
-    if not trials:
+    if args.mode == "trained" and not trials:
         raise SystemExit("No runnable trials found.")
-    print(f"Trials: {trials}\nDatasets: {labs}\nResults: {results_jsonl}\n")
+    trial_str = trials if args.mode == "trained" else "(untrained baselines; no checkpoints)"
+    print(f"Mode: {args.mode}; Trials: {trial_str}\nDatasets: {labs}\nResults: {results_jsonl}\n")
 
     tasks = []  # (lab, trial_num, tag, cmd)
-    for trial_num in trials:
-        for lab in labs:
-            tag = f"{parent_base}_trial{trial_num}_{lab}"
-            weights = os.path.join(trial_parent_dir, f"trial_{trial_num}", args.model_fname)
+    if args.mode == "trained":
+        trial_jobs = [(lab, trial_num, f"{parent_base}_trial{trial_num}_{lab}",
+                       os.path.join(trial_parent_dir, f"trial_{trial_num}", args.model_fname))
+                      for trial_num in trials for lab in labs]
+    else:
+        # Untrained reference baselines: one run per dataset, no checkpoint.
+        trial_jobs = [(lab, None, f"untrained_{args.mode}_{lab}", None) for lab in labs]
+    for lab, trial_num, tag, weights in trial_jobs:
             spec = DATASETS[lab]
             cmd = [sys.executable, "-u", EVAL_SCRIPT, "--lab", LAB_FOR_DATASET[lab],
-                   "--source", spec["source"], "--mode", "trained",
-                   "--weights", weights, "--device", args.device,
+                   "--source", spec["source"], "--mode", args.mode,
+                   "--device", args.device,
                    "--cluster", args.cluster, "--num_seeds", str(args.num_seeds),
                    "--descriptor_stage", args.descriptor_stage,
                    "--tag", tag, "--results_jsonl", results_jsonl, "--emb_dir", emb_dir]
+            if weights is not None:
+                cmd += ["--weights", weights]
             if spec["source"] == "nwb":
                 cmd += ["--nwb", spec["nwb"]]
             else:
@@ -199,7 +213,7 @@ def main():
 
     if args.debug:
         for i, (lab, trial_num, tag, cmd) in enumerate(tasks):
-            print(f"\n### trial_{trial_num} on {lab} [gpu {gpus[i % len(gpus)]}]\n{' '.join(cmd)}", flush=True)
+            print(f"\n### {tag} [gpu {gpus[i % len(gpus)]}]\n{' '.join(cmd)}", flush=True)
         check_device(args.device)
         return
 
@@ -209,14 +223,14 @@ def main():
         future_to_task = {}
         for i, (lab, trial_num, tag, cmd) in enumerate(tasks):
             gpu = gpus[i % len(gpus)]
-            fut = pool.submit(run_one, cmd, gpu, f"trial_{trial_num} on {lab}")
-            future_to_task[fut] = (trial_num, lab)
+            fut = pool.submit(run_one, cmd, gpu, tag)
+            future_to_task[fut] = (trial_num, lab, tag)
         for fut in as_completed(list(future_to_task)):
             if fut.cancelled():
                 continue
-            trial_num, lab = future_to_task[fut]
+            trial_num, lab, tag = future_to_task[fut]
             rc = fut.result()
-            print(f"### trial_{trial_num} on {lab} finished with exit code {rc}", flush=True)
+            print(f"### {tag} finished with exit code {rc}", flush=True)
             if rc != 0:
                 failures.append((trial_num, lab, rc))
                 if args.fail_fast:
@@ -229,16 +243,24 @@ def main():
     print(f"{'dataset':<14}{'trial':<8}{'accuracy':<10}{'miss':<8}{'mismatch':<10}n_frames")
     with open(results_jsonl) as f:
         records = [json.loads(line) for line in f if line.strip()]
+    run_records = []
     for lab, trial_num, tag in tags:
         matches = [r for r in records if r.get("tag") == tag]
         rec = matches[-1] if matches else None
         if rec is None:
             print(f"{lab:<14}{trial_num:<8}{'MISSING':<10}")
         else:
+            run_records.append(rec)
             print(f"{lab:<14}{trial_num:<8}{rec['accuracy']:<10.4f}{rec['misses']:<8d}"
                   f"{rec['mismatches']:<10d}{rec['n_frames']}")
     if failures:
         print(f"\nFAILED: {failures}")
+    # Unified output: one JSON array with this run's full records (weights
+    # paths + training configs included) for future display/analysis.
+    unified_json = args.unified_json or (os.path.splitext(results_jsonl)[0] + "_unified.json")
+    with open(unified_json, "w") as f:
+        json.dump(run_records, f, indent=2)
+    print(f"Unified JSON ({len(run_records)} records) written to {unified_json}")
 
 
 if __name__ == "__main__":

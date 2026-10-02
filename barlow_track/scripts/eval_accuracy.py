@@ -560,9 +560,21 @@ def main():
         stats = calculate_accuracy(col_gt, col_pr)
         _fusion = {'image': None, 'position': 'add', 'attention': 'concat',
                    'posonly': 'position_only', 'trained': getattr(targs, 'fusion', None) if targs else None}.get(mode)
+        train_config = None
+        if mode == 'trained' and args.weights:
+            # Record the exact training setup alongside the result: the
+            # train_config.yaml saved next to the checkpoint (plain
+            # yaml.safe_load types, so the record stays JSON-serializable).
+            cfg_path = os.path.join(os.path.dirname(os.path.abspath(args.weights)),
+                                    'train_config.yaml')
+            if os.path.isfile(cfg_path):
+                import yaml
+                with open(cfg_path) as f:
+                    train_config = yaml.safe_load(f)
         log_result(dict(lab=args.lab, mode=mode, seed=args.seed, n_frames=n_frames,
                         source=args.source,
-                        tag=args.tag, weights=args.weights,
+                        tag=args.tag, weights=os.path.abspath(args.weights) if args.weights else None,
+                        train_config=train_config,
                         cluster=args.cluster, num_seeds=args.num_seeds,
                         fuse_norm=bool(args.fuse_norm and mode == 'position'),
                         fusion=_fusion,

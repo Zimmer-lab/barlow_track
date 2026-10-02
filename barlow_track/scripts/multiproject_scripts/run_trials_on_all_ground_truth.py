@@ -52,6 +52,10 @@ DATASETS = {
 LAB_FOR_DATASET = {"zimmer_1128": "zimmer", "zimmer_1123": "zimmer", "zimmer_1210": "zimmer",
                    "flavell": "flavell", "leifer": "leifer", "samuel": "samuel"}
 
+# Default evaluation set: one zimmer dataset plus the three external labs.
+# The other zimmer datasets remain available via --labs.
+DEFAULT_LABS = ["zimmer_1128", "flavell", "leifer", "samuel"]
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate trained trials on all ground truth datasets.")
@@ -72,8 +76,30 @@ def parse_args():
     parser.add_argument("--num_seeds", type=int, default=25)
     parser.add_argument("--descriptor_stage", default="auto",
                         choices=["auto", "backbone", "fused", "contextual", "projected"])
-    parser.add_argument("--dryrun", action="store_true", help="Print commands without running")
+    parser.add_argument("--debug", action="store_true",
+                        help="Print commands without running them, and verify the torch --device actually loads")
     return parser.parse_args()
+
+
+def check_device(device_str):
+    """Smoke-test that torch can actually use the requested device."""
+    try:
+        import torch
+    except ImportError:
+        print("WARNING: torch is not importable here; cannot verify --device")
+        return False
+    try:
+        d = torch.device(device_str)
+        if d.type == "cuda" and not torch.cuda.is_available():
+            print(f"WARNING: device '{device_str}' requested but torch.cuda.is_available() is False")
+            return False
+        _ = (torch.ones(4, device=d) + 1).sum().item()  # real op on the device
+        name = torch.cuda.get_device_name(d) if d.type == "cuda" else "cpu"
+        print(f"Device check OK: '{device_str}' ({name})")
+        return True
+    except Exception as e:
+        print(f"Device check FAILED for '{device_str}': {e}")
+        return False
 
 
 def resolve_trials(trial_parent_dir, trials, model_fname):
@@ -97,7 +123,7 @@ def main():
     parent_base = os.path.basename(trial_parent_dir.rstrip("/"))
     results_jsonl = args.results_jsonl or os.path.join(trial_parent_dir, "exp_results.jsonl")
     emb_dir = args.emb_dir or os.path.join(trial_parent_dir, "emb_cache")
-    labs = args.labs or list(DATASETS)
+    labs = args.labs or DEFAULT_LABS
 
     trials = resolve_trials(trial_parent_dir, args.trials, args.model_fname)
     if not trials:
@@ -125,13 +151,14 @@ def main():
             if args.max_frames is not None:
                 cmd += ["--max_frames", str(args.max_frames)]
             print(f"\n### trial_{trial_num} on {lab}\n{' '.join(cmd)}", flush=True)
-            if args.dryrun:
+            if args.debug:
                 continue
             rc = subprocess.call(cmd)
             if rc != 0:
                 failures.append((trial_num, lab, rc))
 
-    if args.dryrun:
+    if args.debug:
+        check_device(args.device)
         return
     print(f"\n{'=' * 60}\nSummary (from {results_jsonl}):")
     print(f"{'dataset':<14}{'trial':<8}{'accuracy':<10}{'miss':<8}{'mismatch':<10}n_frames")

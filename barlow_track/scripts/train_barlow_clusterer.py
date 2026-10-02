@@ -124,16 +124,24 @@ def train_barlow_network(args):
     else:
         json_stats.append(dict(run_name="Non-wandb-run", run_id=None))
 
+    num_skipped_batches = 0
     try:
         for epoch in range(0, args.epochs):
             for step, batch in enumerate(loader, start=epoch * len(loader)):
                 loss, loss_original, loss_transpose, loss_match = _run_forward(model, batch, gpu, use_position)
 
-                # adjust_learning_rate(args, optimizer, loader, step)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
+                # Degenerate batches (a view with <2 objects, or an empty
+                # dropout intersection) yield a grad-free zero loss; skip the
+                # optimizer step but keep logging so one bad volume cannot
+                # kill the whole trial.
+                if loss.requires_grad:
+                    # adjust_learning_rate(args, optimizer, loader, step)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+                else:
+                    num_skipped_batches += 1
 
                 if step % args.print_freq == 0 or step == 0:
                     if args.rank == 0:
@@ -196,7 +204,8 @@ def train_barlow_network(args):
                 if run is not None:
                     run.log(val_losses)
                 # Printing
-                stats = dict(epoch=epoch, val_loss=val_loss, time=int(time.time() - start_time))
+                stats = dict(epoch=epoch, val_loss=val_loss, time=int(time.time() - start_time),
+                             skipped_batches=num_skipped_batches)
                 stats.update({f"val_{k}": v for k, v in val_losses.items() if k != "val_loss"
                               and "val_loss_" not in k})
                 print(json.dumps(stats))

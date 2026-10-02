@@ -80,6 +80,8 @@ def parse_args():
                         help="Print commands without running them, and verify the torch --device actually loads")
     parser.add_argument("--jobs", type=int, default=None,
                         help="Max concurrent evaluations (default: one per GPU in --gpus)")
+    parser.add_argument("--sequential", action="store_true",
+                        help="Run evaluations one at a time (equivalent to --jobs 1)")
     parser.add_argument("--gpus", default="auto",
                         help="GPUs to round-robin jobs over, e.g. '0,1' (default: all visible via nvidia-smi)")
     parser.add_argument("--fail_fast", dest="fail_fast", action="store_true",
@@ -192,7 +194,7 @@ def main():
     tags = [(lab, trial_num, tag) for lab, trial_num, tag, _ in tasks]
 
     gpus = resolve_gpus(args.gpus)
-    jobs = args.jobs or len(gpus)
+    jobs = 1 if args.sequential else (args.jobs or len(gpus))
     print(f"GPUs: {gpus}; max concurrent jobs: {jobs}")
 
     if args.debug:

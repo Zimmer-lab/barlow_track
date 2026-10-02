@@ -209,7 +209,20 @@ def _iter_project_frames(project_data, target_sz, normalizer, frame_list):
 
 def _load_nwb_arrays(nwb_project):
     """Vectorized GT access for an NWB project (per-cell iloc is ~50ms)."""
+    import pandas as pd
     df_gt = nwb_project.final_tracks
+    level1 = set(df_gt.columns.get_level_values(1).unique())
+    if 'raw_neuron_ind_in_list' not in level1:
+        # Some NWBs (e.g. flavell) only carry raw_segmentation_id. The tracker
+        # output always uses a 'raw_neuron_ind_in_list' level, so expose the
+        # segmentation ids under that standard name to keep matching working.
+        if 'raw_segmentation_id' not in level1:
+            raise ValueError(f"GT final_tracks has no usable neuron-id column; level1={sorted(level1)}")
+        ids = df_gt.loc[:, (slice(None), 'raw_segmentation_id')]
+        ids.columns = pd.MultiIndex.from_arrays(
+            [ids.columns.get_level_values(0),
+             ['raw_neuron_ind_in_list'] * len(ids.columns)])
+        df_gt = pd.concat([df_gt, ids], axis=1)
     neurons = list(df_gt.columns.get_level_values(0).unique())
     return dict(
         df_gt=df_gt,
@@ -235,7 +248,8 @@ def _iter_nwb_frames(nwb_project, arrays, target_sz, normalizer, frame_list):
         vol = np.asarray(nwb_project.red_data[t, ...], dtype=np.float32)
         sz = np.array([1, *vol.shape])
         crops_l, zxy_l, meta_l = [], [], []
-        fin = np.isfinite(gx[t]) & np.isfinite(gy[t]) & np.isfinite(gz[t])
+        fin = np.isfinite(gx[t]) & np.isfinite(gy[t]) & np.isfinite(gz[t]) \
+            & np.isfinite(gr[t]) & np.isfinite(gs[t])
         for j in np.flatnonzero(fin):
             z, x, y = float(gz[t, j]), float(gx[t, j]), float(gy[t, j])
             dat, _ = get_3d_crop_using_bbox_or_centroid([z, x, y], sz, target_sz, vol)

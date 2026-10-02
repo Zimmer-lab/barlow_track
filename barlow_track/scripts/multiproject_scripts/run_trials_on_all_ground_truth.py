@@ -82,6 +82,11 @@ def parse_args():
                         help="Max concurrent evaluations (default: one per GPU in --gpus)")
     parser.add_argument("--gpus", default="auto",
                         help="GPUs to round-robin jobs over, e.g. '0,1' (default: all visible via nvidia-smi)")
+    parser.add_argument("--fail_fast", dest="fail_fast", action="store_true",
+                        help="stop starting new evaluations after the first failure (default)")
+    parser.add_argument("--no_fail_fast", dest="fail_fast", action="store_false",
+                        help="keep running remaining evaluations even if one fails")
+    parser.set_defaults(fail_fast=True)
     return parser.parse_args()
 
 
@@ -204,12 +209,20 @@ def main():
             gpu = gpus[i % len(gpus)]
             fut = pool.submit(run_one, cmd, gpu, f"trial_{trial_num} on {lab}")
             future_to_task[fut] = (trial_num, lab)
-        for fut in as_completed(future_to_task):
+        for fut in as_completed(list(future_to_task)):
+            if fut.cancelled():
+                continue
             trial_num, lab = future_to_task[fut]
             rc = fut.result()
             print(f"### trial_{trial_num} on {lab} finished with exit code {rc}", flush=True)
             if rc != 0:
                 failures.append((trial_num, lab, rc))
+                if args.fail_fast:
+                    print("Fail-fast: no further evaluations will be started "
+                          "(running ones finish)", flush=True)
+                    for other in future_to_task:
+                        other.cancel()
+                    break
     print(f"\n{'=' * 60}\nSummary (from {results_jsonl}):")
     print(f"{'dataset':<14}{'trial':<8}{'accuracy':<10}{'miss':<8}{'mismatch':<10}n_frames")
     with open(results_jsonl) as f:

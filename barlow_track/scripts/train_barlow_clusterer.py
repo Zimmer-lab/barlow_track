@@ -176,17 +176,19 @@ def train_barlow_network(args):
                 with torch.no_grad():
                     val_loss, val_loss_original, val_loss_transpose = 0, 0, 0
                     c = None
+                    num_val_batches = 0
                     for val_step, batch in enumerate(data_module.val_dataloader()):
                         loss, loss_original, loss_transpose, _ = _run_forward(model, batch, gpu, use_position)
                         val_loss += loss.item()
                         val_loss_original += loss_original.item()
                         val_loss_transpose += loss_transpose.item()
+                        num_val_batches += 1
                         # Plot validation embedding
                         if run is not None:
                             c_batch = _correlation_for_plot(model, batch, gpu, use_position)
                             c = c_batch if c is None else c + c_batch
-                    if run is not None and c is not None:
-                        c /= val_step  # Plot the average
+                    if run is not None and c is not None and num_val_batches > 0:
+                        c /= num_val_batches  # Plot the average
                         fig = visualize_model_performance(c, save_fname=None, vmin=-0.5, vmax=1)
                         run.log({"validation_chart": fig})
 

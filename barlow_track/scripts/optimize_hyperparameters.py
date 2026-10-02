@@ -256,6 +256,8 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
             # Local and debug jobs don't run until .result() is called.
             if job.done() or type(job) in [LocalJob, DebugJob]:
                 # The log file isn't being produced, so print the stdout instead
+                if type(job) in [LocalJob, DebugJob]:
+                    print(f"Running trial {trial_index} inline ({type(job).__name__})...", flush=True)
                 try:
                     result = job.result()
                     ax_client.complete_trial(trial_index=trial_index, raw_data=result)
@@ -310,13 +312,15 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
             job = executor.submit(evaluate, parameters)
             submitted_jobs += 1
             jobs.append((job, trial_index))
+            print(f"Submitted trial {trial_index} ({type(job).__name__}); "
+                  f"{submitted_jobs}/{total_budget} submitted", flush=True)
             time.sleep(1)
 
-        # Sleep for a bit before checking the jobs again to avoid overloading the cluster.
-        # If you have a large number of jobs, consider adding a sleep statement in the job polling loop as well
-        # Update every couple of minutes, because these jobs are very slow (usually multiple hours)
-        time.sleep(10*60)
-        print(f"Time={time.time()-start_time}. Checking status of {len(jobs)} jobs; {submitted_jobs}/{total_budget} submitted")
+        # Report status BEFORE sleeping, so the log never looks stalled.
+        # Local/debug jobs run inline, so poll fast; slurm jobs are slow.
+        print(f"Time={time.time()-start_time}. Checking status of {len(jobs)} jobs; {submitted_jobs}/{total_budget} submitted",
+              flush=True)
+        time.sleep(10 if (DEBUG or run_locally) else 10*60)
 
     out = ax_client.get_best_parameters()
     if len(out) == 4:

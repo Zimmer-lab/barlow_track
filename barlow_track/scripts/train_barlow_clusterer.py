@@ -38,6 +38,8 @@ def train_barlow_network(args):
                          "Use use_attention (BarlowVolumeAttention) instead.")
     # Attention models need coordinates even if use_position was left false
     use_position = use_position or use_attention
+    print(f"Setting up data module (position={use_position}, "
+          f"frames={args.num_frames})...", flush=True)
     if use_position:
         from barlow_track.utils.volume_data import VolumeCoordsDataModule
         data_module = VolumeCoordsDataModule(
@@ -57,6 +59,7 @@ def train_barlow_network(args):
     cuda_index = os.getenv("CUDA_VISIBLE_DEVICES", 0)
     gpu = torch.device(f"cuda:{cuda_index}" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {gpu}")
+    print(f"Using device: {gpu} (cuda available: {torch.cuda.is_available()})", flush=True)
     # Initialize model, loading from checkpoint if passed
     try:
         pretrained_model_path = args.pretrained_model_path

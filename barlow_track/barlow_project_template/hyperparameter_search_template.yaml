@@ -45,3 +45,15 @@ hyperparameters:
   # - name: lambd_obj
   #   type: range
   #   bounds: [0.0, 1.0]
+
+  # Separate off-diagonal weight for the object-space loss (falls back to
+  # lambd when null); suggested sweep 0.05-0.3 post-LayerNorm.
+  # - name: lambd_obj_offdiag
+  #   type: range
+  #   bounds: [0.05, 0.3]
+  #   log_scale: true
+
+  # Pre-attention volume-mean centering (C2); false = legacy behavior.
+  # - name: center_per_volume
+  #   type: choice
+  #   values: [true, false]

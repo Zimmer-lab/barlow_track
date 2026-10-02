@@ -41,12 +41,12 @@ from barlow_track.utils.superglue import (
 
 def both_correlation_matrices(z1, z2):
     """Feature-space (DxD) and object-space (NxN) cross-correlation matrices."""
-    z1_norm = (z1 - z1.mean(0)) / z1.std(0)
-    z2_norm = (z2 - z2.mean(0)) / z2.std(0)
+    z1_norm = (z1 - z1.mean(0)) / z1.std(0).clamp_min(1e-6)
+    z2_norm = (z2 - z2.mean(0)) / z2.std(0).clamp_min(1e-6)
     c_features = torch.matmul(z1_norm.T, z2_norm) / z1.shape[0]
 
-    z1_t = ((z1.T - z1.mean(1)) / z1.std(1)).T
-    z2_t = ((z2.T - z2.mean(1)) / z2.std(1)).T
+    z1_t = ((z1.T - z1.mean(1)) / z1.std(1).clamp_min(1e-6)).T
+    z2_t = ((z2.T - z2.mean(1)) / z2.std(1).clamp_min(1e-6)).T
     c_objects = torch.matmul(z1_t, z2_t.T) / z1.shape[1]
     return c_features, c_objects
 
@@ -237,7 +237,11 @@ class BarlowWithPosition(BarlowTwins3d):
         embedding_dim = args.embedding_dim
         self.embedding_dim = embedding_dim
         self.fusion = fusion or getattr(args, 'fusion', 'concat')
-        self.fusion_norm = fusion_norm or getattr(args, 'fusion_norm', 'none')
+        # Default 'layernorm': per-branch LayerNorm stops the position branch
+        # from dominating via scale (~25:1 init imbalance with 'none').
+        # 'none' is kept for loading legacy checkpoints (see load_barlow_model
+        # migration, which pins missing fields to legacy values).
+        self.fusion_norm = fusion_norm or getattr(args, 'fusion_norm', 'layernorm')
         layers = keypoint_layers or list(getattr(args, 'keypoint_encoder_layers', [32, 64]))
         self.kenc = KeypointEncoder(embedding_dim, layers)
         self.norm_visual = _make_norm(self.fusion_norm, embedding_dim)
@@ -316,12 +320,13 @@ class BarlowWithPosition(BarlowTwins3d):
         z1, z2 = paired
         c_features, c_objects = both_correlation_matrices(z1, z2)
 
+        feat_w, obj_w = self._offdiag_weights()
         loss_transpose = torch.tensor(0.0, device=y1.device)
         loss_original = torch.tensor(0.0, device=y1.device)
         if self.args.lambd_obj < 1:
-            loss_original = self.loss_from_correlation_matrix(c_features)
+            loss_original = self.loss_from_correlation_matrix(c_features, feat_w)
         if self.args.lambd_obj > 0:
-            loss_transpose = self.loss_from_correlation_matrix(c_objects)
+            loss_transpose = self.loss_from_correlation_matrix(c_objects, obj_w)
 
         loss = (1.0 - self.args.lambd_obj) * loss_original + self.args.lambd_obj * loss_transpose
         return loss, loss_original, loss_transpose
@@ -349,12 +354,16 @@ class BarlowVolumeAttention(BarlowWithPosition):
         self.self_layer_names = ['self'] * n_self
         self.self_gnn = (AttentionalGNN(args.embedding_dim, self.self_layer_names)
                          if n_self > 0 else nn.Identity())
+        # C2: pre-attention volume-mean centering. A shared per-volume
+        # component (c_i ~= m + r_i) is frame identity, not neuron identity:
+        # it cancels within a frame but gates the cross-frame kNN budget and
+        # gets metric-amplified by SVD50. Subtracting the per-volume mean
+        # before self-attention kills the span(1)/DC attractor the softmax
+        # otherwise diffuses toward. Per-row LayerNorm (norm_context) does NOT
+        # do this (it removes per-row means, leaving centered-m shared).
         # Gated residual: attention starts "almost off" (sigmoid(-4) ~= 0.018)
-        # and training must prove it useful. The final LayerNorm also absorbs
-        # the old Priority-4 mean-removal idea: a shared volume-mean component
-        # cannot survive as a huge additive offset through per-row LayerNorm,
-        # so no separate remove_context_mean flag is needed (eval-time
-        # --center_per_volume covers the diagnostic instead).
+        # and training must prove it useful.
+        self.center_per_volume = bool(getattr(args, 'center_per_volume', True))
         gate_init = float(getattr(args, 'attn_gate_init', -4.0))
         self.attn_gate = nn.Parameter(torch.tensor(gate_init))
         self.norm_context = nn.LayerNorm(args.embedding_dim)
@@ -366,16 +375,20 @@ class BarlowVolumeAttention(BarlowWithPosition):
     def contextualize(self, d):
         """(N,D) fused descriptors -> (N,D) volume-contextualized descriptors.
 
-        Single detections bypass attention (nothing to attend to, and the
-        propagation MLP's InstanceNorm needs N > 1).
+        With center_per_volume (default), the per-volume mean is subtracted
+        before self-attention so a shared frame component cannot become the
+        attention attractor; the residual + LayerNorm then operate in centered
+        space. Single detections bypass attention (nothing to attend to, and
+        the propagation MLP's InstanceNorm needs N > 1).
         """
         if d.shape[0] < 2 or isinstance(self.self_gnn, nn.Identity):
             return d
-        batch = d.transpose(0, 1).unsqueeze(0)
+        dc = d - d.mean(dim=0, keepdim=True) if self.center_per_volume else d
+        batch = dc.transpose(0, 1).unsqueeze(0)
         out, _ = self.self_gnn(batch, batch)
         out = out.squeeze(0).transpose(0, 1)
         gate = torch.sigmoid(self.attn_gate)
-        return self.norm_context(d + gate * (out - d))
+        return self.norm_context(dc + gate * (out - dc))
 
     def contextual_descriptors(self, y, kpts, scores=None):
         return self.contextualize(self.fused_descriptors(y, kpts, scores))
@@ -396,12 +409,13 @@ class BarlowVolumeAttention(BarlowWithPosition):
         z1, z2 = paired
         c_features, c_objects = both_correlation_matrices(z1, z2)
 
+        feat_w, obj_w = self._offdiag_weights()
         loss_transpose = torch.tensor(0.0, device=y1.device)
         loss_original = torch.tensor(0.0, device=y1.device)
         if self.args.lambd_obj < 1:
-            loss_original = self.loss_from_correlation_matrix(c_features)
+            loss_original = self.loss_from_correlation_matrix(c_features, feat_w)
         if self.args.lambd_obj > 0:
-            loss_transpose = self.loss_from_correlation_matrix(c_objects)
+            loss_transpose = self.loss_from_correlation_matrix(c_objects, obj_w)
 
         loss = (1.0 - self.args.lambd_obj) * loss_original + self.args.lambd_obj * loss_transpose
         return loss, loss_original, loss_transpose

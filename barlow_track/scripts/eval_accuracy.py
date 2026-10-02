@@ -58,8 +58,8 @@ LABS = {
 }
 
 
-def log_result(rec):
-    with open(RESULTS, 'a') as f:
+def log_result(rec, results_path=None):
+    with open(results_path or RESULTS, 'a') as f:
         f.write(json.dumps(rec) + '\n')
     print(json.dumps(rec, indent=1))
 
@@ -276,6 +276,17 @@ def main():
                     help='subtract the per-frame descriptor mean before saving embeddings')
     ap.add_argument('--l2_per_volume', action='store_true',
                     help='row-wise L2-normalize descriptors before saving embeddings')
+    ap.add_argument('--device', default='cpu',
+                    help="torch device for embedding (use 'cuda' on a GPU node)")
+    ap.add_argument('--project', default=None,
+                    help="override working-copy project for --source project (default: the lab entry)")
+    ap.add_argument('--results_jsonl', default=None,
+                    help='where to append result records (default: /tmp/claude/exp_results.jsonl)')
+    ap.add_argument('--emb_dir', default=None,
+                    help='where to cache embeddings (default: /tmp/claude)')
+    ap.add_argument('--tag', default=None,
+                    help='label recorded with each result and added to embedding cache filenames '
+                         '(use e.g. the trial name so caches from different checkpoints do not collide)')
     args = ap.parse_args()
 
     import warnings
@@ -297,12 +308,12 @@ def main():
     if args.source == 'nwb' and not str(nwb_path).endswith('.nwb'):
         raise ValueError(f"--source nwb needs an NWB file, got {nwb_path!r} (pass --nwb)")
     # Embedding source: working-copy project, or the GT NWB itself.
+    project_path = args.project or spec['project']
     src_data = ProjectData.load_final_project_data(
-        nwb_path if args.source == 'nwb' else spec['project'],
+        nwb_path if args.source == 'nwb' else project_path,
         allow_hybrid_loading=True, verbose=0)
     gpu, paper_model, margs = load_barlow_model(spec['weights'])
-    # Force CPU: no GPU on this machine; keep device explicit
-    device = torch.device('cpu')
+    device = torch.device(args.device)
     paper_model = paper_model.to(device).eval()
     if args.source == 'nwb':
         # Old leifer-script convention: fixed crop size unless a trained
@@ -376,7 +387,10 @@ def main():
             suffix += "_centered"
         if args.l2_per_volume:
             suffix += "_l2"
-        emb_path = f'/tmp/claude/emb_{args.lab}_{suffix}.npz'
+        emb_dir = args.emb_dir or '/tmp/claude'
+        os.makedirs(emb_dir, exist_ok=True)
+        tag_suffix = f"_{args.tag}" if args.tag else ""
+        emb_path = os.path.join(emb_dir, f'emb_{args.lab}_{suffix}{tag_suffix}.npz')
         if args.skip_embed and os.path.exists(emb_path):
             d = np.load(emb_path, allow_pickle=True)
             X, time_to_lin, lin_to_t_seg = d['X'], d['time_to_lin'].item(), d['lin_to_t_seg'].item()
@@ -446,6 +460,7 @@ def main():
                    'posonly': 'position_only', 'trained': getattr(targs, 'fusion', None) if targs else None}.get(mode)
         log_result(dict(lab=args.lab, mode=mode, seed=args.seed, n_frames=n_frames,
                         source=args.source,
+                        tag=args.tag, weights=args.weights,
                         cluster=args.cluster, num_seeds=args.num_seeds,
                         fuse_norm=bool(args.fuse_norm and mode == 'position'),
                         fusion=_fusion,
@@ -457,7 +472,8 @@ def main():
                         misses=int(stats['misses'].sum().sum()),
                         mismatches=int(stats['mismatches'].sum().sum()),
                         total=int(stats['total_ground_truth']),
-                        minutes=(time.time() - t0) / 60))
+                        minutes=(time.time() - t0) / 60),
+                     args.results_jsonl)
 
 
 def _rows_for_names(project_data, t, names, name_to_seg):

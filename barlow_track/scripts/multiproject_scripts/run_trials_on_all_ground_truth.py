@@ -1,0 +1,153 @@
+"""Evaluate trained barlow trial(s) on all hardcoded ground truth datasets.
+
+Lightweight alternative to the full snakemake analysis pipeline: for each
+(trial, dataset) it runs barlow_track/scripts/eval_accuracy.py --mode trained,
+which embeds all frames with the checkpoint's own heads, tracks with label
+propagation, and appends an accuracy record (tagged per trial) to a JSONL file.
+
+Run on a GPU node (embedding is ~10-50x faster than CPU):
+    python run_trials_on_all_ground_truth.py --trial_parent_dir <dir> --trials 0 1 --device cuda
+
+Smoke test first (50 frames per dataset):
+    python run_trials_on_all_ground_truth.py --trial_parent_dir <dir> --trials 0 1 --device cuda --max_frames 50
+
+Split across nodes by passing a subset of datasets, e.g. --labs zimmer_1128 zimmer_1123 zimmer_1210
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+EVAL_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "eval_accuracy.py")
+
+_PAPER_DATA = "/lisc/data/scratch/neurobiology/zimmer/fieseler/wbfm_projects/manually_annotated/paper_data"
+_PAPER_OTHER = "/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper"
+
+# Hardcoded ground truth datasets. zimmer_* use project-frame crops from the GT
+# project itself; the rest crop around GT xyz straight from the GT NWB.
+DATASETS = {
+    "zimmer_1128": dict(source="project",
+                        project=os.path.join(_PAPER_DATA, "ZIM2165_Gcamp7b_worm1-2022_11_28_updated_format"),
+                        gt=os.path.join(_PAPER_DATA, "ZIM2165_Gcamp7b_worm1-2022_11_28_updated_format")),
+    "zimmer_1123": dict(source="project",
+                        project=os.path.join(_PAPER_DATA, "2022-11-23_worm11_updated_format"),
+                        gt=os.path.join(_PAPER_DATA, "2022-11-23_worm11_updated_format")),
+    "zimmer_1210": dict(source="project",
+                        project=os.path.join(_PAPER_DATA, "ZIM2165_Gcamp7b_worm1-2022-12-10_updated_format"),
+                        gt=os.path.join(_PAPER_DATA, "ZIM2165_Gcamp7b_worm1-2022-12-10_updated_format")),
+    "flavell": dict(source="nwb",
+                    nwb=os.path.join(_PAPER_OTHER, "flavell_data/images_for_charlie/flavell_data.nwb")),
+    "leifer": dict(source="nwb",
+                   nwb=os.path.join(_PAPER_OTHER, "leifer_data/Leifer_NeRVE_Worm1.nwb")),
+    "samuel": dict(source="nwb",
+                   nwb=os.path.join(_PAPER_OTHER, "samuel_data/153.nwb")),
+}
+
+# eval_accuracy.py addresses projects by lab; nwb-source datasets reuse the
+# matching lab entry and override the NWB path.
+LAB_FOR_DATASET = {"zimmer_1128": "zimmer", "zimmer_1123": "zimmer", "zimmer_1210": "zimmer",
+                   "flavell": "flavell", "leifer": "leifer", "samuel": "samuel"}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate trained trials on all ground truth datasets.")
+    parser.add_argument("--trial_parent_dir", required=True,
+                        help="Folder with trial_N subfolders (each with resnet50.pth)")
+    parser.add_argument("--trials", nargs="+", type=int, default=None,
+                        help="Which trials to run, e.g. --trials 0 1 (default: all with a model file)")
+    parser.add_argument("--labs", nargs="+", default=None, choices=list(DATASETS),
+                        help="Subset of datasets (default: all)")
+    parser.add_argument("--model_fname", default="resnet50.pth")
+    parser.add_argument("--device", default="cuda", help="torch device for embedding")
+    parser.add_argument("--results_jsonl", default=None,
+                        help="Where to append results (default: <trial_parent_dir>/exp_results.jsonl)")
+    parser.add_argument("--emb_dir", default=None,
+                        help="Embedding cache dir (default: <trial_parent_dir>/emb_cache)")
+    parser.add_argument("--max_frames", type=int, default=None, help="Frame cap per dataset (smoke test)")
+    parser.add_argument("--cluster", default="labelprop", choices=["labelprop", "global"])
+    parser.add_argument("--num_seeds", type=int, default=25)
+    parser.add_argument("--descriptor_stage", default="auto",
+                        choices=["auto", "backbone", "fused", "contextual", "projected"])
+    parser.add_argument("--dryrun", action="store_true", help="Print commands without running")
+    return parser.parse_args()
+
+
+def resolve_trials(trial_parent_dir, trials, model_fname):
+    if trials is None:
+        trials = sorted(int(m.group(1)) for d in os.listdir(trial_parent_dir)
+                        if os.path.isdir(os.path.join(trial_parent_dir, d))
+                        for m in [re.match(r"trial_(\d+)", d)] if m)
+    selected = []
+    for trial_num in sorted(trials):
+        model_path = os.path.join(trial_parent_dir, f"trial_{trial_num}", model_fname)
+        if not os.path.isfile(model_path):
+            print(f"trial_{trial_num}: no model file at {model_path}; skipping")
+            continue
+        selected.append(trial_num)
+    return selected
+
+
+def main():
+    args = parse_args()
+    trial_parent_dir = os.path.abspath(args.trial_parent_dir)
+    parent_base = os.path.basename(trial_parent_dir.rstrip("/"))
+    results_jsonl = args.results_jsonl or os.path.join(trial_parent_dir, "exp_results.jsonl")
+    emb_dir = args.emb_dir or os.path.join(trial_parent_dir, "emb_cache")
+    labs = args.labs or list(DATASETS)
+
+    trials = resolve_trials(trial_parent_dir, args.trials, args.model_fname)
+    if not trials:
+        raise SystemExit("No runnable trials found.")
+    print(f"Trials: {trials}\nDatasets: {labs}\nResults: {results_jsonl}\n")
+
+    tags = []
+    failures = []
+    for trial_num in trials:
+        for lab in labs:
+            tag = f"{parent_base}_trial{trial_num}_{lab}"
+            tags.append((lab, trial_num, tag))
+            weights = os.path.join(trial_parent_dir, f"trial_{trial_num}", args.model_fname)
+            spec = DATASETS[lab]
+            cmd = [sys.executable, "-u", EVAL_SCRIPT, "--lab", LAB_FOR_DATASET[lab],
+                   "--source", spec["source"], "--mode", "trained",
+                   "--weights", weights, "--device", args.device,
+                   "--cluster", args.cluster, "--num_seeds", str(args.num_seeds),
+                   "--descriptor_stage", args.descriptor_stage,
+                   "--tag", tag, "--results_jsonl", results_jsonl, "--emb_dir", emb_dir]
+            if spec["source"] == "nwb":
+                cmd += ["--nwb", spec["nwb"]]
+            else:
+                cmd += ["--project", os.path.join(spec["project"], "project_config.yaml")]
+            if args.max_frames is not None:
+                cmd += ["--max_frames", str(args.max_frames)]
+            print(f"\n### trial_{trial_num} on {lab}\n{' '.join(cmd)}", flush=True)
+            if args.dryrun:
+                continue
+            rc = subprocess.call(cmd)
+            if rc != 0:
+                failures.append((trial_num, lab, rc))
+
+    if args.dryrun:
+        return
+    print(f"\n{'=' * 60}\nSummary (from {results_jsonl}):")
+    print(f"{'dataset':<14}{'trial':<8}{'accuracy':<10}{'miss':<8}{'mismatch':<10}n_frames")
+    with open(results_jsonl) as f:
+        records = [json.loads(line) for line in f if line.strip()]
+    for lab, trial_num, tag in tags:
+        matches = [r for r in records if r.get("tag") == tag]
+        rec = matches[-1] if matches else None
+        if rec is None:
+            print(f"{lab:<14}{trial_num:<8}{'MISSING':<10}")
+        else:
+            print(f"{lab:<14}{trial_num:<8}{rec['accuracy']:<10.4f}{rec['misses']:<8d}"
+                  f"{rec['mismatches']:<10d}{rec['n_frames']}")
+    if failures:
+        print(f"\nFAILED: {failures}")
+
+
+if __name__ == "__main__":
+    main()

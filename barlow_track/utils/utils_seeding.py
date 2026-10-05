@@ -62,6 +62,35 @@ def numpy_rng(seed):
     return np.random.RandomState(None if seed is None else derive_seed(seed))
 
 
+def replicate_seed(base_seed, repetition):
+    """Seed for replicate number ``repetition`` of one configuration.
+
+    Hyperparameter sweeps keep one ``base_seed`` for every configuration so the
+    differences between configs stay attributable to the hyperparameters, and
+    only re-runs of the *same* config need a fresh seed. Replicate 0 keeps
+    ``base_seed`` unchanged (a plain sweep reproduces the template seed); later
+    replicates get derived seeds, which is what turns them into real
+    measurements of init/data noise rather than identical jobs.
+    """
+    base_seed = int(base_seed)
+    repetition = int(repetition)
+    if repetition < 0:
+        raise ValueError(f"repetition must be >= 0, got {repetition}")
+    return base_seed if repetition == 0 else derive_seed(base_seed, 'rep', repetition)
+
+
+def search_trial_seed(base_seed, trial_index):
+    """Distinct seed per trial of a Bayesian (Ax/BoTorch) search.
+
+    A constant seed across trials makes the objective look noise-free: the GP
+    then over-trusts a configuration that happened to draw a lucky init or a
+    favorable volume selection. Deriving one seed per trial (a fixed function of
+    the trial index, so the whole search still reproduces) decorrelates that
+    nuisance randomness from the hyperparameters being optimized.
+    """
+    return derive_seed(int(base_seed), 'trial', int(trial_index))
+
+
 def seed_all(seed, include_cuda=False):
     """Seed python's ``random``, numpy and torch from one integer.
 

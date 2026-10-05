@@ -18,6 +18,8 @@ from barlow_track.utils.utils_seeding import (
     derive_seed,
     numpy_rng,
     python_rng,
+    replicate_seed,
+    search_trial_seed,
     seed_all,
 )
 from barlow_track.utils.utils_label_propagation import build_knn_graph
@@ -93,6 +95,26 @@ def test_rng_helpers_are_private_and_leave_globals_alone():
     assert py_state == random.getstate()
     # None means unseeded, i.e. historical behaviour (never a silent 0)
     assert python_rng(None).random() != python_rng(None).random()
+
+
+def test_replicate_seed_only_moves_between_replicates():
+    # Grid/ablation sweeps: configs share one seed, replicates must not.
+    assert replicate_seed(43, 0) == 43
+    reps = [replicate_seed(43, r) for r in range(4)]
+    assert reps[0] == 43 and len(set(reps)) == 4
+    assert reps == [replicate_seed(43, r) for r in range(4)]
+    assert all(0 <= s < 2 ** NUMPY_SEED_BITS for s in reps)
+    with pytest.raises(ValueError):
+        replicate_seed(43, -1)
+
+
+def test_search_trial_seeds_are_distinct_and_reproducible():
+    seeds = [search_trial_seed(43, i) for i in range(25)]
+    assert len(set(seeds)) == 25
+    assert seeds == [search_trial_seed(43, i) for i in range(25)]
+    assert set(seeds) != set(search_trial_seed(11, i) for i in range(25))
+    # Ax draws seeds in the 32-bit range sklearn/pynndescent expect
+    assert all(0 <= s < 2 ** NUMPY_SEED_BITS for s in seeds)
 
 
 # ------------------------------------------------------- kNN graph / seed times

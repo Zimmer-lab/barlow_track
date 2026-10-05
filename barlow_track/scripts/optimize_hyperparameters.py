@@ -3,6 +3,16 @@
 import argparse
 import logging
 import os
+# This script only dispatches jobs; its own BLAS thread pools must stay tiny
+# or imports (scipy via ax/botorch) can exhaust threads on login nodes
+# ("pthread_create failed ... Resource temporarily unavailable").
+# setdefault: an explicit export in the shell still wins (e.g. for workers).
+# _DISPATCH_THREAD_VARS tracks the ones WE set, so submissions can strip them
+# again -- trial workers must not inherit the dispatcher cap.
+_THREAD_VARS = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
+_DISPATCH_THREAD_VARS = [v for v in _THREAD_VARS if v not in os.environ]
+for _v in _DISPATCH_THREAD_VARS:
+    os.environ[_v] = "1"
 import time
 import numpy as np
 from pathlib import Path
@@ -306,8 +316,14 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
             # Add the baseline parameters, and save in this folder
             parameters = {**baseline_params, **parameters}
             YAML().dump(parameters, open(os.path.join(this_folder, 'train_config.yaml'), 'w'))
-            # Actually submit
+            # Actually submit. Strip the dispatcher-only thread caps first: slurm
+            # jobs capture this process's environment at submission, and trial
+            # workers must choose their own threading (or the user's export).
+            for _v in _DISPATCH_THREAD_VARS:
+                os.environ.pop(_v, None)
             job = executor.submit(evaluate, parameters)
+            for _v in _DISPATCH_THREAD_VARS:
+                os.environ[_v] = "1"
             submitted_jobs += 1
             jobs.append((job, trial_index))
             print(f"Submitted trial {trial_index} ({type(job).__name__}); "

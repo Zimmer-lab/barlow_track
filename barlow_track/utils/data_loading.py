@@ -36,6 +36,8 @@ def get_bbox_data_for_volume(project_data, t, target_sz=np.array([8, 64, 64]), r
 
         # Expand to get the neighborhood
         dat, _ = get_3d_crop_using_bbox_or_centroid(bbox_or_centroid, sz, target_sz, this_red)
+        if dat is None:
+            continue
         all_dat.append(dat)  # TODO: preallocate
         all_bbox.append(bbox_or_centroid)
 
@@ -97,11 +99,35 @@ def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 
                 continue
             else:
                 # Make a unique name for this untracked object, but keep the correct label
+                ind_in_list = None
                 try:
                     ind_in_list = project_data.segmentation_metadata.mask_index_to_i_in_array(t, this_seg_label)
-                except FileNotFoundError:
-                    ind_in_list = int(row['raw_neuron_ind_in_list'])
+                except (FileNotFoundError, KeyError, IndexError, TypeError, ValueError) as e:
+                    logging.warning(f"mask_index_to_i_in_array failed for seg {this_seg_label} at t={t}: {e}")
+                    ind_in_list = None
+                if ind_in_list is None or (isinstance(ind_in_list, float) and np.isnan(ind_in_list)):
+                    try:
+                        ind_in_list = int(row['raw_neuron_ind_in_list'])
+                    except (KeyError, ValueError, TypeError):
+                        logging.warning(
+                            f"No mappable index for untracked seg {this_seg_label} at t={t}, "
+                            f"falling back to row position {i}"
+                        )
+                        ind_in_list = i
+                try:
+                    ind_in_list = int(ind_in_list)
+                except (ValueError, TypeError):
+                    logging.warning(f"Unmappable index {ind_in_list!r}, falling back to row position {i}")
+                    ind_in_list = i
                 this_name = f"untracked_time_{t}_{ind_in_list:04d}_{this_seg_label:04d}"
+                if this_name in all_dat_dict or any(n == this_name for n, _ in specs):
+                    logging.warning(f"Duplicate untracked name {this_name}, making unique")
+                    suffix = 1
+                    base = this_name
+                    existing = set(all_dat_dict) | {n for n, _ in specs}
+                    while this_name in existing:
+                        this_name = f"{base}_dup{suffix:02d}"
+                        suffix += 1
         zxy = [row['z'], row['x'], row['y']]
         specs.append((this_name, zxy))
 
@@ -117,6 +143,15 @@ def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 
         # Repeat to be zxyzxy
         zxyzxy = [zxy[0], zxy[1], zxy[2], zxy[0], zxy[1], zxy[2]]
         dat, _ = get_3d_crop_using_bbox_or_centroid(zxyzxy, sz, target_sz, this_red)
+        if dat is None:
+            continue
+        if this_name in all_dat_dict:
+            logging.warning(f"Duplicate crop name {this_name}, making unique")
+            suffix = 1
+            base = this_name
+            while this_name in all_dat_dict:
+                this_name = f"{base}_dup{suffix:02d}"
+                suffix += 1
         all_dat_dict[this_name] = dat
 
     return all_dat_dict, seg2name, which_neurons
@@ -155,6 +190,8 @@ def get_bbox_data_for_volume_lazy(project_data, t, target_sz=np.array([8, 64, 64
 
         this_name = seg2name[this_label]
         dat, _ = get_3d_crop_using_bbox_or_centroid(bbox, sz, target_sz, this_red)
+        if dat is None:
+            continue
 
         yield this_name, dat
 
@@ -172,7 +209,10 @@ def get_3d_crop_using_bbox_or_centroid(zxyzxy, sz, target_sz, this_red):
 
     Returns
     -------
-
+    (dat, new_bbox) or (None, None) if the centroid is out of range.
+    Out-of-range centroids are skipped with a warning instead of returning
+    a silent full-size zero-padded crop. Only when the whole volume is
+    smaller than the target is zero-padding applied.
     """
     if len(zxyzxy) == 3:
         z_mean = int(np.round(zxyzxy[0]))
@@ -186,22 +226,38 @@ def get_3d_crop_using_bbox_or_centroid(zxyzxy, sz, target_sz, this_red):
     else:
         raise ValueError(f"Unknown bbox or centroid format; {zxyzxy}")
 
-    z0 = np.clip(z_mean - int(target_sz[0] / 2), a_min=0, a_max=sz[1])
-    z1 = np.clip(z_mean + int(target_sz[0] / 2), a_min=0, a_max=sz[1])
-    if z1 - z0 > target_sz[0]:
-        z1 = z0 + target_sz[0]
-    x0 = np.clip(x_mean - int(target_sz[1] / 2), a_min=0, a_max=sz[2])
-    x1 = np.clip(x_mean + int(target_sz[1] / 2), a_min=0, a_max=sz[2])
-    if x1 - x0 > target_sz[1]:
-        x1 = x0 + target_sz[1]
-    y0 = np.clip(y_mean - int(target_sz[2] / 2), a_min=0, a_max=sz[3])
-    y1 = np.clip(y_mean + int(target_sz[2] / 2), a_min=0, a_max=sz[3])
-    if y1 - y0 > target_sz[2]:
-        y1 = y0 + target_sz[2]
+    Z, X, Y = int(sz[1]), int(sz[2]), int(sz[3])
+    tz, tx, ty = int(target_sz[0]), int(target_sz[1]), int(target_sz[2])
+
+    # Out-of-range centroids would previously clip to an empty slice and be
+    # padded into a misleading full-size all-zero crop. Skip them instead.
+    if not (0 <= z_mean < Z and 0 <= x_mean < X and 0 <= y_mean < Y):
+        logging.warning(
+            f"Centroid {(z_mean, x_mean, y_mean)} outside volume {(Z, X, Y)}, skipping crop"
+        )
+        return None, None
+
+    def _clamp_window(mean, dim, target):
+        if dim <= 0 or target <= 0:
+            return 0, 0
+        if dim <= target:
+            # Whole volume smaller than target: take all, pad the rest
+            return 0, target
+        start = mean - target // 2
+        start = max(0, min(start, dim - target))
+        return start, start + target
+
+    z0, z1 = _clamp_window(z_mean, Z, tz)
+    x0, x1 = _clamp_window(x_mean, X, tx)
+    y0, y1 = _clamp_window(y_mean, Y, ty)
+    if z1 <= z0 or x1 <= x0 or y1 <= y0:
+        logging.warning(f"Empty crop window for centroid {(z_mean, x_mean, y_mean)}, skipping")
+        return None, None
     dat = this_red[z0:z1, x0:x1, y0:y1]
-    # Pad, if needed, to the beginning
-    diff_sz = np.clip(target_sz - np.array(dat.shape), a_min=0, a_max=np.max(target_sz))
-    pad_sz = list(zip(diff_sz, np.zeros(len(diff_sz), dtype=int)))
-    dat = np.pad(dat, pad_sz)
+    # Pad only when the volume itself is smaller than the target
+    diff_sz = np.clip(np.array([tz, tx, ty]) - np.array(dat.shape), a_min=0, a_max=max(tz, tx, ty))
+    if np.any(diff_sz > 0):
+        pad_sz = list(zip(diff_sz, np.zeros(len(diff_sz), dtype=int)))
+        dat = np.pad(dat, pad_sz)
     new_bbox = [z0, x0, y0, z1, x1, y1]
     return dat, new_bbox

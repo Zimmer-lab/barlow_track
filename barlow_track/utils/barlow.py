@@ -17,6 +17,7 @@ import math
 import logging
 
 from barlow_track.utils.data_loading import get_bbox_data_for_volume_with_label
+from barlow_track.utils.volume_data import apply_stack_affine, sample_global_affine
 
 
 def off_diagonal(x):
@@ -202,6 +203,13 @@ class Transform:
         self.final_normalization = tio.RescaleIntensity(percentiles=(5, 99.5))
         self.final_normalization_no_copy = tio.RescaleIntensity(percentiles=(5, 99.5), copy=False)
 
+        # View-consistent ("global") geometry, shared by the whole crop stack
+        # per view (same R, t for all crops, preserving relative layout).
+        # Active whenever the global_augment settings are present -- including
+        # for the image-only path, where the legacy per-crop transforms below
+        # still apply afterwards. Absent settings = legacy behavior unchanged.
+        self.global_args = args.get('global_augment', None)
+
         self.transform = tio.transforms.Compose([
             tio.RandomAffine(degrees=(180, 0, 0), p=args.get('p_RandomAffine_base', 1.0)),
             tio.RandomBlur(p=args.get('p_RandomBlur_base', 0.1)),
@@ -223,9 +231,21 @@ class Transform:
         print([(_t.name, _t.probability) for _t in self.transform_prime])
 
     def __call__(self, x):
-        y1 = self.transform(x)
-        y2 = self.transform_prime(x)
+        y1 = self.transform(self._global_view(x))
+        y2 = self.transform_prime(self._global_view(x))
         return y1, y2
+
+    def _global_view(self, x):
+        """One view-consistent affine over the whole (N, Z, X, Y) crop stack.
+
+        Returns x unchanged when the global_augment settings are absent (or
+        its Bernoulli draw fails), so configs without the key behave exactly
+        as before.
+        """
+        if not self.global_args:
+            return x
+        R, t = sample_global_affine(np.random, **self.global_args)
+        return apply_stack_affine(x, R, t)
 
     def normalize(self, img):
         return self.final_normalization(img)

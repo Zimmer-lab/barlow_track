@@ -87,6 +87,42 @@ def sample_global_affine(rng, p_global_affine=1.0, max_degrees_z=180.0, scale_ji
     return R, t
 
 
+def apply_stack_affine(crops, R, t, order=1):
+    """Apply one forward map x' = R(x - C) + C + t to a (N, Z, X, Y) crop stack.
+
+    Same convention as apply_global_affine (rotation about the crop center,
+    border-extended like ndimage mode='nearest'), but batched over the stack
+    with grid_sample so the legacy image-only path gets view-consistent
+    ("global") geometry without needing the full volume. Returns same
+    shape/dtype/device as the input.
+    """
+    import torch.nn.functional as F
+    N, Z, X, Y = crops.shape
+    dev = crops.device
+    f64 = torch.float64
+    Rm = torch.as_tensor(np.asarray(R, dtype=np.float64), device=dev, dtype=f64)
+    tm = torch.as_tensor(np.asarray(t, dtype=np.float64), device=dev, dtype=f64)
+    # grid_sample orders the trailing grid dim as (x, y, z) = (W, H, D), but
+    # R/t are in (z, x, y); permute everything to (y, x, z) to match.
+    P = torch.tensor([2, 1, 0], device=dev)
+    Rinv = torch.linalg.inv(Rm)[P][:, P]
+    tm = tm[P]
+    C = torch.tensor([(Z - 1) / 2.0, (X - 1) / 2.0, (Y - 1) / 2.0], device=dev, dtype=f64)[P]
+    s = torch.tensor([Z, X, Y], device=dev, dtype=f64)[P]
+    one = torch.ones(3, device=dev, dtype=f64)
+    off = C - Rinv @ (C + tm)
+    # Normalized grid: un = (2x + 1) / s - 1  <=>  x = ((un + 1) s - 1) / 2,
+    # with x_in = Rinv x_out + off.
+    A = Rinv * s[None, :] / s[:, None]
+    b = (Rinv @ (s - one) + 2.0 * off + one) / s - one
+    theta = torch.cat([A, b[:, None]], dim=1).to(crops.dtype).expand(N, 3, 4)
+    grid = F.affine_grid(theta, (N, 1, Z, X, Y), align_corners=False)
+    out = F.grid_sample(crops.unsqueeze(1).to(crops.dtype), grid,
+                        mode='bilinear' if order == 1 else 'nearest',
+                        padding_mode='border', align_corners=False)
+    return out.squeeze(1)
+
+
 def apply_global_affine(volume, points_zxy, R, t, order=1):
     """Apply forward transform x' = R(x - C) + C + t to volume and points.
 

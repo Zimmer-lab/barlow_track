@@ -8,6 +8,12 @@ propagation, and appends an accuracy record (tagged per trial) to a JSONL file.
 Run on a GPU node (embedding is ~10-50x faster than CPU):
     python run_trials_on_all_ground_truth.py --trial_parent_dir <dir> --trials 0 1 --device cuda
 
+Top-K sweep winners on all datasets (default set):
+    python run_trials_on_all_ground_truth.py --trial_parent_dir <sweep_dir> --top_k 3 --device cuda
+
+Same, but one Slurm job per evaluation (keeps the local-GPU flags for --debug preview):
+    python run_trials_on_all_ground_truth.py --trial_parent_dir <sweep_dir> --top_k 3 --device cuda --slurm
+
 Smoke test first (50 frames per dataset):
     python run_trials_on_all_ground_truth.py --trial_parent_dir <dir> --trials 0 1 --device cuda --max_frames 50
 
@@ -92,6 +98,14 @@ def parse_args():
                         help="Max concurrent evaluations (default: one per GPU in --gpus)")
     parser.add_argument("--sequential", action="store_true",
                         help="Run evaluations one at a time (equivalent to --jobs 1)")
+    parser.add_argument("--slurm", action="store_true",
+                        help="Submit one Slurm job per evaluation instead of running locally "
+                             "(--jobs/--gpus/--sequential then only affect the debug preview)")
+    parser.add_argument("--slurm_time", default="01:00:00",
+                        help="Slurm wall time per evaluation job")
+    parser.add_argument("--slurm_cpus", type=int, default=16,
+                        help="CPUs per evaluation job (tracking is CPU-bound)")
+    parser.add_argument("--slurm_mem", default="32G", help="Memory per evaluation job")
     parser.add_argument("--gpus", default="auto",
                         help="GPUs to round-robin jobs over, e.g. '0,1' (default: all visible via nvidia-smi)")
     parser.add_argument("--fail_fast", dest="fail_fast", action="store_true",
@@ -187,11 +201,75 @@ def resolve_gpus(gpus_arg):
 
 
 def run_one(cmd, gpu, label):
-    """Run one evaluation with only the assigned GPU visible."""
-    env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu))
-    print(f"\n### {label} [gpu {gpu}]\n{' '.join(cmd)}", flush=True)
+    """Run one evaluation, optionally pinned to a single visible GPU.
+
+    gpu=None leaves GPU selection to the environment (e.g. Slurm-assigned).
+    Must stay module-level and picklable for submitit.
+    """
+    if gpu is None:
+        env = dict(os.environ)
+        where = "slurm-assigned GPU"
+    else:
+        env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu))
+        where = f"gpu {gpu}"
+    print(f"\n### {label} [{where}]\n{' '.join(cmd)}", flush=True)
     rc = subprocess.call(cmd, env=env)
     return rc
+
+
+def run_slurm(tasks, results_jsonl, args):
+    """Submit one Slurm job per evaluation; poll until all finish.
+
+    Returns a list of (trial_num, lab, exit_code) failures.
+    """
+    import time
+    from submitit import AutoExecutor
+    folder = os.path.dirname(os.path.abspath(results_jsonl))
+    executor = AutoExecutor(folder=folder, cluster="slurm")
+    executor.update_parameters(
+        timeout_min=180,
+        slurm_time=args.slurm_time,
+        cpus_per_task=args.slurm_cpus,
+        slurm_mem=args.slurm_mem,
+        slurm_gres="gpu:1",
+        slurm_job_name="barlow_benchmark",
+    )
+    future_to_task = {}
+    for lab, trial_num, tag, cmd in tasks:
+        fut = executor.submit(run_one, cmd, None, tag)
+        future_to_task[fut] = (trial_num, lab, tag)
+        print(f"Submitted {tag} (job {fut.job_id})", flush=True)
+    failures = []
+    pending = dict(future_to_task)
+    while pending:
+        for fut in list(pending):
+            try:
+                finished = fut.done()
+            except Exception:
+                finished = False
+            if not finished:
+                continue
+            trial_num, lab, tag = pending.pop(fut)
+            try:
+                rc = fut.result()
+            except Exception as e:
+                print(f"### {tag} raised: {e}", flush=True)
+                rc = 1
+            print(f"### {tag} finished with exit code {rc}", flush=True)
+            if rc != 0:
+                failures.append((trial_num, lab, rc))
+                if args.fail_fast:
+                    print("Fail-fast: cancelling remaining jobs", flush=True)
+                    for other in pending:
+                        try:
+                            other.cancel()
+                        except Exception:
+                            pass
+                    pending.clear()
+                    break
+        if pending:
+            time.sleep(30)
+    return failures
 
 
 def main():
@@ -248,32 +326,38 @@ def main():
 
     if args.debug:
         for i, (lab, trial_num, tag, cmd) in enumerate(tasks):
-            print(f"\n### {tag} [gpu {gpus[i % len(gpus)]}]\n{' '.join(cmd)}", flush=True)
+            where = "slurm" if args.slurm else f"gpu {gpus[i % len(gpus)]}"
+            print(f"\n### {tag} [{where}]\n{' '.join(cmd)}", flush=True)
         check_device(args.device)
         return
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    failures = []
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        future_to_task = {}
-        for i, (lab, trial_num, tag, cmd) in enumerate(tasks):
-            gpu = gpus[i % len(gpus)]
-            fut = pool.submit(run_one, cmd, gpu, tag)
-            future_to_task[fut] = (trial_num, lab, tag)
-        for fut in as_completed(list(future_to_task)):
-            if fut.cancelled():
-                continue
-            trial_num, lab, tag = future_to_task[fut]
-            rc = fut.result()
-            print(f"### {tag} finished with exit code {rc}", flush=True)
-            if rc != 0:
-                failures.append((trial_num, lab, rc))
-                if args.fail_fast:
-                    print("Fail-fast: no further evaluations will be started "
-                          "(running ones finish)", flush=True)
-                    for other in future_to_task:
-                        other.cancel()
-                    break
+    if args.slurm:
+        print(f"Submitting {len(tasks)} evaluations as Slurm jobs "
+              f"({args.slurm_cpus} cpus, {args.slurm_mem}, {args.slurm_time} each)", flush=True)
+        failures = run_slurm(tasks, results_jsonl, args)
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        failures = []
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            future_to_task = {}
+            for i, (lab, trial_num, tag, cmd) in enumerate(tasks):
+                gpu = gpus[i % len(gpus)]
+                fut = pool.submit(run_one, cmd, gpu, tag)
+                future_to_task[fut] = (trial_num, lab, tag)
+            for fut in as_completed(list(future_to_task)):
+                if fut.cancelled():
+                    continue
+                trial_num, lab, tag = future_to_task[fut]
+                rc = fut.result()
+                print(f"### {tag} finished with exit code {rc}", flush=True)
+                if rc != 0:
+                    failures.append((trial_num, lab, rc))
+                    if args.fail_fast:
+                        print("Fail-fast: no further evaluations will be started "
+                              "(running ones finish)", flush=True)
+                        for other in future_to_task:
+                            other.cancel()
+                        break
     print(f"\n{'=' * 60}\nSummary (from {results_jsonl}):")
     print(f"{'dataset':<14}{'trial':<8}{'accuracy':<10}{'miss':<8}{'mismatch':<10}n_frames")
     with open(results_jsonl) as f:

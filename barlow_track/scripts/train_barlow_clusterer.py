@@ -24,7 +24,14 @@ from wbfm.utils.general.utils_filenames import get_sequential_filename
 
 def train_barlow_network(args):
 
-    torch.manual_seed(43)
+    # One seed for the whole run. seed_all is the entry-point fallback for code
+    # that still reads global streams (the legacy crop pipeline uses random /
+    # torchio); the data module and the model get the seed explicitly.
+    # See barlow_track/utils/utils_seeding.py.
+    from barlow_track.utils.utils_seeding import seed_all
+    seed = getattr(args, 'seed', None)
+    seed = 43 if seed is None else int(seed)
+    seed_all(seed)
 
     # Load ground truth
     project_data1 = ProjectData.load_final_project_data(args.project_path, allow_hybrid_loading=True)
@@ -48,7 +55,8 @@ def train_barlow_network(args):
             target_sz=target_sz,
             global_args=getattr(args, 'global_augment', None),
             photometric_args=getattr(args, 'crop_photometric', None),
-            position_args=getattr(args, 'position_augment', None))
+            position_args=getattr(args, 'position_augment', None),
+            seed=seed, num_workers=int(getattr(args, 'num_workers', 0) or 0))
     else:
         data_module = NeuronCropImageDataModule(project_data=project_data1, num_frames=args.num_frames, batch_size=1,
                                                 train_fraction=args.train_fraction,

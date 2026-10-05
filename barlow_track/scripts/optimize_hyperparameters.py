@@ -33,6 +33,7 @@ except ImportError as e:
         "pip install --no-deps -e <path-to-barlow_track-checkout>"
     ) from e
 from barlow_track.utils.utils_ground_truth import check_training_finished, discover_trials, extract_val_from_json
+from barlow_track.utils.utils_seeding import replicate_seed, search_trial_seed
 
 
 def _to_yaml_safe(obj):
@@ -109,6 +110,12 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         experiment_parent_folder = Path(hyperparameter_path).parent
         if run_locally and baseline_params['wandb_name'] is None:
             baseline_params['wandb_name'] = 'barlow-hyperparameter-search-local'
+
+    # Seed policy for the search (see barlow_track/utils/utils_seeding.py): the
+    # baseline train_config.yaml carries one `seed`, and each trial gets a seed
+    # derived from it (see the submission loop). The derived value is written
+    # into the trial's own train_config.yaml, so any single trial reproduces.
+    base_seed = int(baseline_params.get('seed', 43))
 
     def evaluate(parameters):
         # Add the baseline parameters
@@ -243,7 +250,10 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         total_budget = 5 if DEBUG else 30
 
     if direct_parameter_sweep or one_at_a_time_sweep:
-        # Directly duplicate planned jobs
+        # Directly duplicate planned jobs. Remember how many configs there are
+        # before duplicating: job i is replicate i // n_unique_configs of config
+        # i % n_unique_configs, and the replicate index drives the seed policy.
+        n_unique_configs = len(all_combinations)
         all_combinations = all_combinations * repetitions
         total_budget = len(all_combinations)
 
@@ -283,6 +293,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 print(exp_to_df(ax_client.experiment))
                 
         # Schedule new jobs if there is availablity
+        trial_seeds = {}
         if direct_parameter_sweep or one_at_a_time_sweep:
             # Get a new trial manually, without using the AxClient's internal logic (it can't do a grid search)
             # Use the submitted_jobs index as the start point of the next batch of trials
@@ -294,9 +305,21 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 trial = ax_client.experiment.new_trial()
                 parameters = all_combinations[i]
                 trial_index_to_param[trial.index] = parameters
+                # Grid/ablation sweeps: every config shares the base seed, so the
+                # differences between configs stay attributable to the
+                # hyperparameter. Only a *replicate* of a config (the
+                # --repetitions duplicates) gets a fresh seed; before this, N
+                # repetitions were literally the same job, which made Ax see
+                # zero variance where there should be measurement noise.
+                trial_seeds[trial.index] = replicate_seed(base_seed, i // n_unique_configs)
         else:
             trial_index_to_param, _ = ax_client.get_next_trials(
                 max_trials=min(num_parallel_jobs - len(jobs), total_budget - submitted_jobs))
+            # Bayesian search: one distinct seed per trial. A seed fixed across
+            # trials makes each observation look noise-free, so the GP
+            # over-trusts a config that drew a lucky init/volume selection.
+            for trial_index in trial_index_to_param:
+                trial_seeds[trial_index] = search_trial_seed(base_seed, trial_index)
         
         for trial_index, parameters in trial_index_to_param.items():
             # Make a new folder in the parent folder
@@ -313,8 +336,15 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
             os.makedirs(os.path.join(this_folder, 'log'), exist_ok=False)
             os.makedirs(os.path.join(this_folder, 'checkpoints'), exist_ok=False)
             parameters['project_dir'] = this_folder
-            # Add the baseline parameters, and save in this folder
-            parameters = {**baseline_params, **parameters}
+            # Add the baseline parameters, and save in this folder. The seed is
+            # set BEFORE the dump: the saved train_config.yaml is the config
+            # that actually ran, so a single trial can be re-run standalone with
+            # train_barlow_clusterer.py -p <trial>/train_config.yaml. A sweep
+            # that samples `seed` itself wins over the policy.
+            sampled = parameters
+            parameters = {**baseline_params, **sampled}
+            if 'seed' not in sampled:
+                parameters['seed'] = trial_seeds.get(trial_index, base_seed)
             YAML().dump(parameters, open(os.path.join(this_folder, 'train_config.yaml'), 'w'))
             # Actually submit. Strip the dispatcher-only thread caps first: slurm
             # jobs capture this process's environment at submission, and trial

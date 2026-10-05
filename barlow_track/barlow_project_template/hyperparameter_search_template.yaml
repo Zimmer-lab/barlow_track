@@ -5,6 +5,14 @@
 # focuses on the attention/fusion anti-collapse parameters instead. All names
 # below must be top-level train_config.yaml keys (the runner merges them flat
 # over the baseline; nested dicts like position_augment cannot be swept).
+#
+# Seeding is also NOT searched by default. The runner derives each trial's seed
+# from the baseline train_config.yaml `seed`: grid / one-at-a-time sweeps keep
+# one seed across configs (so config differences are not confounded with init
+# luck) and give each --repetitions duplicate a fresh seed; Ax (Bayesian) trials
+# get one distinct seed each. Each trial's seed is written into its own
+# train_config.yaml. Sample `seed` here explicitly only if you want it as a
+# search axis; then the policy above steps aside.
 
 baseline_params_path: null
 

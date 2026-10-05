@@ -369,7 +369,8 @@ def main():
     ap.add_argument('--weights', default=None, help='trained checkpoint for mode=trained (load_barlow_model)')
     ap.add_argument('--cluster', choices=['global', 'labelprop'], default='labelprop')
     ap.add_argument('--num_seeds', type=int, default=25)
-    ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--seed', type=int, default=0,
+                    help='single seed for every random step: head init, SVD, seed times, kNN graph')
     ap.add_argument('--skip_embed', action='store_true',
                     help='reuse saved embeddings from a previous run instead of re-embedding')
     ap.add_argument('--fuse_norm', action='store_true',
@@ -396,8 +397,11 @@ def main():
 
     import warnings
     warnings.filterwarnings('ignore')
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+    # One seed for everything. seed_all covers the parts that still read global
+    # streams (random head init below, sklearn's SVD); the tracker and the kNN
+    # graph get the seed explicitly (see barlow_track/utils/utils_seeding.py).
+    from barlow_track.utils.utils_seeding import seed_all
+    seed_all(args.seed)
 
     from wbfm.utils.projects.finished_project_data import ProjectData
     from barlow_track.utils.barlow import load_barlow_model
@@ -535,8 +539,10 @@ def main():
             np.savez(emb_path, X=X, time_to_lin=dict(time_to_lin), lin_to_t_seg=lin_to_t_seg, n_frames=n_frames)
 
         from sklearn.decomposition import TruncatedSVD
-        Xs = TruncatedSVD(n_components=min(50, X.shape[1] - 1)).fit_transform(X)
-        tracker = WormClusterTracker(Xs, dict(time_to_lin), linear_ind_to_t_and_seg_id=lin_to_t_seg)
+        Xs = TruncatedSVD(n_components=min(50, X.shape[1] - 1),
+                          random_state=args.seed).fit_transform(X)
+        tracker = WormClusterTracker(Xs, dict(time_to_lin), linear_ind_to_t_and_seg_id=lin_to_t_seg,
+                                     seed=args.seed)
         t2 = time.time()
         # Label propagation is the paper's final clustering step (global mode
         # only for quick debugging).

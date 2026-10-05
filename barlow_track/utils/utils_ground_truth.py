@@ -36,6 +36,29 @@ def pad_with_nan_rows(df: pd.DataFrame, target_length: int) -> pd.DataFrame:
     return df
 
 
+def align_gt_pred_time_index(df_gt: pd.DataFrame, df_pred: pd.DataFrame):
+    """Restrict GT and predictions to their shared time index.
+
+    Quick eval runs (e.g. ``--max_frames N``) only embed/predict the first N
+    frames, while GT spans the whole video. Padding predictions with NaN for
+    all unevaluated frames would count every later GT detection as a miss,
+    scaling reported accuracy by ~(N / total_frames). Intersecting on the
+    time index ensures only actually-evaluated frames contribute.
+
+    Returns (df_gt_sub, df_pred_sub) with identical, sorted, shared indices.
+    """
+    common = df_gt.index.intersection(df_pred.index)
+    if len(common) == 0:
+        # Disjoint time ranges: keep inputs unchanged (old behavior) rather
+        # than producing empty frames that crash downstream matching.
+        return df_gt, df_pred
+    try:
+        common = common.sort_values()
+    except TypeError:
+        pass
+    return df_gt.loc[common], df_pred.loc[common]
+
+
 def calculate_accuracy(df_gt: pd.DataFrame, df_pred: pd.DataFrame) -> dict:
     """
     Calculate overall, per-neuron, and per-timepoint accuracy,
@@ -91,8 +114,8 @@ def calculate_accuracy(df_gt: pd.DataFrame, df_pred: pd.DataFrame) -> dict:
     mismatches_per_timepoint_norm = mismatches.sum(axis=1) / gt_valid_per_time
 
     return {
-        "misses": int(total_misses),
-        "mismatches": int(total_mismatches),
+        "total_misses": int(total_misses),
+        "total_mismatches": int(total_mismatches),
         "total_ground_truth": int(total_gt_detections),
         "accuracy": accuracy,
 
@@ -104,8 +127,8 @@ def calculate_accuracy(df_gt: pd.DataFrame, df_pred: pd.DataFrame) -> dict:
         "mismatches_per_neuron_norm": mismatches_per_neuron_norm,
         "mismatches_per_timepoint_norm": mismatches_per_timepoint_norm,
 
-        "misses": misses,
-        "mismatches": mismatches,
+        "misses_df": misses,
+        "mismatches_df": mismatches,
         "gt_valid": gt_valid,
         "gt_valid_and_correct": gt_valid_and_correct
     }
@@ -142,7 +165,9 @@ def process_trial(trial: int, df_gt: pd.DataFrame, res_file: Union[str, pd.DataF
             print(f"{trial}: No final tracks found in {res_file}")
             return {"trial": trial, "error": "No final tracks found"}
 
-        # Match lengths
+        # Match lengths on the shared time index (a short prediction must
+        # not be scored against unevaluated GT frames)
+        df_gt, df_res = align_gt_pred_time_index(df_gt, df_res)
         max_len = max(len(df_res), len(df_gt))
         df_res = pad_with_nan_rows(df_res, max_len)
         df_gt_padded = pad_with_nan_rows(df_gt, max_len)
@@ -292,6 +317,13 @@ def build_accuracy_dict(gt_path, project_dir, trial_dir=None, check_if_training_
             continue
         project_path = os.path.join(project_dir, project_path, "project_config.yaml")
 
+        # Build one complete per-trial record, then append exactly once per
+        # key. Partial appends on exception paths used to create ragged,
+        # misaligned columns (e.g. accuracy without trial).
+        rec = {k: None for k in result_dict}
+        det = {k: None for k in detailed_result_dict}
+        rec["trial"] = trial_num
+
         try:
             with open(network_config_path, "r") as f:
                 config = yaml.safe_load(f)
@@ -300,14 +332,12 @@ def build_accuracy_dict(gt_path, project_dir, trial_dir=None, check_if_training_
                 print(f"{trial_name}: training was not finished; skipping")
                 continue
 
-            result_dict["trial"].append(trial_num)
             for k in result_dict.keys():
                 if k in ["trial", "accuracy", "val_loss"]:
                     continue
-                result_dict[k].append(config.get(k))
+                rec[k] = config.get(k)
 
-            val_loss = extract_val_from_json(trial_path)
-            result_dict["val_loss"].append(val_loss)
+            rec["val_loss"] = extract_val_from_json(trial_path)
 
         except FileNotFoundError:
             print(f"{trial_name}: train_config.yaml not found.")
@@ -318,18 +348,24 @@ def build_accuracy_dict(gt_path, project_dir, trial_dir=None, check_if_training_
                 # print("Processing trials")
                 stats = process_trial(trial_num, df_gt, project_path)
                 # print(stats)
-                result_dict["accuracy"].append(stats.get("accuracy"))
-                
-                for k in detailed_result_dict.keys():
-                    detailed_result_dict[k].append(stats.get(k))
+                rec["accuracy"] = stats.get("accuracy")
+
+                det["per_neuron_accuracy"] = stats.get("accuracy_per_neuron")
+                det["per_timepoint_accuracy"] = stats.get("accuracy_per_timepoint")
+                det["misses_per_neuron_norm"] = stats.get("misses_per_neuron_norm")
+                det["misses_per_timepoint_norm"] = stats.get("misses_per_timepoint_norm")
+                det["mismatches_per_neuron_norm"] = stats.get("mismatches_per_neuron_norm")
+                det["mismatches_per_timepoint_norm"] = stats.get("mismatches_per_timepoint_norm")
             else:
                 print(f"{trial_name}: project_config.yaml not found.")
-                result_dict["accuracy"].append(None)
-                detailed_result_dict["per_neuron_accuracy"].append(None)
-                detailed_result_dict["per_timepoint_accuracy"].append(None)
 
         except ValueError as e:
             print(f"{trial_name}: ERROR -> {e}")
+
+        for k in result_dict:
+            result_dict[k].append(rec[k])
+        for k in detailed_result_dict:
+            detailed_result_dict[k].append(det[k])
 
     return result_dict, detailed_result_dict
 
@@ -374,7 +410,7 @@ def main():
         if "error" in res:
             print(f"Trial {res['trial']}: ERROR -> {res['error']}")
         else:
-            print(f"Trial {res['trial']}: Accuracy {res['accuracy']:.4f} (Misses: {res['misses']}, Mismatches: {res['mismatches']})")
+            print(f"Trial {res['trial']}: Accuracy {res['accuracy']:.4f} (Misses: {res['total_misses']}, Mismatches: {res['total_mismatches']})")
 
 
 if __name__ == "__main__":

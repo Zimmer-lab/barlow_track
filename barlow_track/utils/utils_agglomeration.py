@@ -34,7 +34,6 @@ After running you can inspect:
 - unassigned points (neither assigned nor outlier) = set(range(n_points)) - assigned_map.keys() - outliers
 """
 
-from cProfile import label
 from typing import Dict, List, Tuple, Set, Iterable, Optional
 import numpy as np
 import pandas as pd
@@ -54,7 +53,6 @@ def compute_time_purity_for_indices(indices: Iterable[int],
       - kept_indices: enforce strict one-per-time by selecting the single highest-confidence
                       index for each timepoint
       - purity = len(kept_indices) / len(indices)  (float in [0,1])
-      - conflicted_times: list of timepoints that had >1 candidate
     Parameters:
       - indices: iterable of linear indices (point-level)
       - linear_ind_to_t_and_seg_id: mapping from index -> (t, seg_id, other_id)
@@ -89,7 +87,6 @@ def compute_time_purity_for_indices(indices: Iterable[int],
         time_to_indices.setdefault(t, []).append(i)
 
     kept_indices = set()
-    conflicted_times = []
     for t, cand_list in time_to_indices.items():
         if len(cand_list) == 1:
             kept_indices.add(cand_list[0])
@@ -113,7 +110,6 @@ def compute_time_purity_for_indices(indices: Iterable[int],
         else:
             chosen = cand_list_sorted[0]
         kept_indices.add(chosen)
-        conflicted_times.append(t)
 
     purity = float(len(kept_indices)) / float(len(indices)) if len(indices) > 0 else 0.0
     return kept_indices, purity, time_to_indices
@@ -121,12 +117,14 @@ def compute_time_purity_for_indices(indices: Iterable[int],
 
 
 def initialize_timepoint_seeds_with_prior(
-    clusterer, time_index_to_linear_feature_indices, linear_ind_to_t_and_seg_id, template_timepoint, cluster_label2node, t_max, G, leaves_under, assigned_index_to_cluster={}
+    clusterer, time_index_to_linear_feature_indices, linear_ind_to_t_and_seg_id, template_timepoint, cluster_label2node, t_max, G, leaves_under, assigned_index_to_cluster=None,
+    outliers=None,
 ):
     """
     Initialize seeds from a single template time point, skipping:
       - Noise points in HDBSCAN
       - Points already assigned to a cluster in a previous iteration
+      - Points previously marked as outliers (partition invariant)
 
     Parameters
     ----------
@@ -138,12 +136,18 @@ def initialize_timepoint_seeds_with_prior(
         The time point to use as template for seeding.
     assigned_index_to_cluster : dict[int, any]
         Mapping from linear index to existing cluster (from prior merges).
+    outliers : set[int] | None
+        Indices previously discarded as same-time losers; never re-seeded.
 
     Returns
     -------
     dict[seed_id -> set[int]]
         Seeds to start agglomeration. Each seed corresponds to a unique HDBSCAN cluster.
     """
+    if assigned_index_to_cluster is None:
+        assigned_index_to_cluster = {}
+    if outliers is None:
+        outliers = set()
     labels = clusterer.labels_
     seeds = {}
 
@@ -151,11 +155,12 @@ def initialize_timepoint_seeds_with_prior(
     num_leaves, num_hdbscan, num_maximal = 0, 0, 0
 
     for idx in tqdm(linear_idx, desc="Checking clusters of objects at this time point"):
-        if idx in assigned_index_to_cluster:
+        if idx in assigned_index_to_cluster or idx in outliers:
             num_maximal += 1
-            continue  # skip points already part of maximal clusters
+            continue  # skip points already part of maximal clusters or discarded as outliers
 
-        if labels[idx] > 0:
+        # HDBSCAN uses -1 for noise; 0 is a valid cluster label.
+        if labels[idx] >= 0:
             # Already has an hdbscan cluster, but need to check if it's good
             start_node = cluster_label2node[labels[idx]]
             idx_boolean = clusterer.labels_ == labels[idx]
@@ -194,6 +199,21 @@ def initialize_timepoint_seeds_with_prior(
     return seeds
 
 
+def _max_temporal_gap(kept_indices, linear_ind_to_t_and_seg_id) -> int:
+    """Largest number of missing timepoints inside the span of kept indices.
+
+    Returns 0 for empty / single-time candidates. A merge of temporally
+    disjoint neurons (e.g. times {0,1} + {7,8}) yields a large gap and can
+    therefore be rejected even though its one-per-time purity is 1.0.
+    """
+    if len(kept_indices) <= 1:
+        return 0
+    times = sorted({int(linear_ind_to_t_and_seg_id[int(i)][0]) for i in kept_indices})
+    if len(times) <= 1:
+        return 0
+    return max(b - a - 1 for a, b in zip(times, times[1:]))
+
+
 def agglomerate_by_time_purity(clusterer,
                                G,
                                leaves_under,
@@ -203,28 +223,36 @@ def agglomerate_by_time_purity(clusterer,
                                min_kept_size: int = 2,
                                patience=5,
                                eps_increase: float = 1e-6,
-                              min_goodness=0.5):
+                               min_goodness=0.5,
+                               min_purity: float = 0.8,
+                               max_temporal_gap: int = 2,
+                               seed: Optional[int] = 0):
     """
     Main function to run the greedy, time-seeded agglomeration over the HDBSCAN condensed tree.
 
     Strategy implemented:
     - Build condensed tree graph and map every node -> set of leaf point indices under it.
-    - Iterate over timepoints (seed order: descending by #points in that timepoint).
+    - Iterate over timepoints (seed order: shuffled deterministically when `seed` is set).
     - For each point index at that timepoint:
         - Ascend the condensed tree from that point (point node id) and consider each ancestor node
           (candidate cluster = all leaves under that ancestor).
         - Compute time-purity for candidate cluster (kept indices after de-duplication).
-        - Select the ancestor that yields the highest purity. Ties broken toward larger kept size.
+        - Select the ancestor that yields the highest goodness, where
+          ``goodness = purity * coverage``. Candidates must also satisfy
+          ``purity >= min_purity`` and ``max_temporal_gap <= max_temporal_gap`` so that
+          merges of distinct (co-existing or temporally disjoint) neurons are rejected.
         - Accept the candidate *only if*:
-            * purity is strictly > current best purity for that specific seed (by eps_purity_increase), and
-            * none of kept_indices are already assigned to an accepted cluster (we keep disjoint clusters).
-          If any kept_index already assigned, the candidate is skipped to avoid index re-use.
+            * goodness is strictly > current best goodness for that specific seed (by eps_increase), and
+            * none of kept_indices are already assigned to an accepted cluster or marked as
+              outliers (we keep a strict partition).
+          If any kept_index already taken, the candidate is skipped to avoid index re-use.
         - Upon acceptance: add an accepted_cluster record; mark kept indices as assigned; mark
           the other raw indices in the candidate (those not in kept_indices) as outliers.
     - Return accepted clusters, assigned map, and outliers set.
 
     Notes:
-    - This greedy approach is deterministic given deterministic traversal order and ties rules.
+    - This greedy approach is deterministic given deterministic traversal order and ties rules
+      (set `seed` to an int; `seed=None` restores legacy non-deterministic shuffling).
     - You can easily change the seeding order (e.g., based on within-timepoint cluster quality).
     """
     print("Generating networkx version of tree...")
@@ -256,14 +284,18 @@ def agglomerate_by_time_purity(clusterer,
     outliers: Set[int] = set()
 
     # Order timepoints by descending number of points (you can change this ordering easily).
-    
+
     timepoints = list(time_index_to_linear_feature_indices.keys())
-    random.shuffle(timepoints)
+    if seed is None:
+        random.shuffle(timepoints)
+    else:
+        random.Random(seed).shuffle(timepoints)
     num_timepoints = len(timepoints)
     max_initial_cluster_size = 1.2*num_timepoints
 
-    alpha = 0.9
-    goodness = lambda purity, coverage: (1-alpha)*purity + alpha*coverage
+    def goodness(purity, coverage):
+        # Product (not coverage-dominated weighted sum): both must be high.
+        return float(purity) * float(coverage)
     # timepoints = sorted(list(time_index_to_linear_feature_indices.keys()),
     #                     key=lambda t: len(time_index_to_linear_feature_indices[t]),
     #                     reverse=True)
@@ -272,9 +304,13 @@ def agglomerate_by_time_purity(clusterer,
     used_cluster_labels = []
     print(f"Initial number of unique clusters: {current_cluster_label - 1}")
 
-    # Small helper to test if any of given indices already assigned:
+    # Small helpers to enforce the partition invariant:
+    # an index is either unassigned, assigned-kept, or outlier -- never reused.
     def any_assigned(indices):
         return any((idx in assigned_index_to_cluster) for idx in indices)
+
+    def any_taken(indices):
+        return any((idx in assigned_index_to_cluster or idx in outliers) for idx in indices)
 
     # Iterate seeds
     for t in tqdm(timepoints, desc="Iteratively clustering from time points"):
@@ -286,10 +322,11 @@ def agglomerate_by_time_purity(clusterer,
         point_indices_for_t = sorted(point_indices_for_t)
 
         seeds = initialize_timepoint_seeds_with_prior(
-            clusterer, time_index_to_linear_feature_indices, linear_ind_to_t_and_seg_id, t, cluster_label2node, max_initial_cluster_size, G, leaves_under, assigned_index_to_cluster
+            clusterer, time_index_to_linear_feature_indices, linear_ind_to_t_and_seg_id, t, cluster_label2node, max_initial_cluster_size, G, leaves_under, assigned_index_to_cluster,
+            outliers,
         )
 
-        for idx, seed_info in tqdm(seeds.items(), desc="Looping through seed points", leave=False):
+        for seed_idx, seed_info in tqdm(seeds.items(), desc="Looping through seed points", leave=False):
             # ancestor nodes (including the point node itself)
             # networkx.ancestors gives strict ancestors; include node itself:
             # ancestors = list(nx.ancestors(G, pt_idx))
@@ -305,7 +342,7 @@ def agglomerate_by_time_purity(clusterer,
             best_candidate = None
             best_purity = -1.0
             best_coverage = -1.0
-            best_goodness = goodness(best_purity, best_coverage)
+            best_goodness = -1.0
             best_kept_size = -1
             candidate_cluster_label = current_cluster_label
             if len(start_indices) == 1:
@@ -323,16 +360,25 @@ def agglomerate_by_time_purity(clusterer,
                                                                                  linear_ind_to_t_and_seg_id,
                                                                                  clusterer.probabilities_,
                                                                                  assigned_indices=set(assigned_index_to_cluster.keys()))
-                best_purity = purity
-                best_coverage = len(kept_indices) / num_timepoints
-                best_goodness = goodness(purity, best_coverage)
-                best_candidate = (anc, start_indices, kept_indices, purity, best_coverage)
-                best_kept_size = len(kept_indices)
-                print(f"Initializing a cluster with hdbscan cluster ({seed_info['original_label']}, size={len(start_indices)}, goodness={best_goodness})")
-            
+                init_coverage = len(kept_indices) / num_timepoints
+                init_goodness = goodness(purity, init_coverage)
+                print(f"Initializing a cluster with hdbscan cluster ({seed_info['original_label']}, size={len(start_indices)}, goodness={init_goodness})")
+                # Only seed with the HDBSCAN cluster if it already satisfies the
+                # acceptance gates; otherwise leave best empty so the merge loop
+                # is not blocked by an invalid high-coverage start.
+                if (len(kept_indices) >= min_kept_size
+                        and purity >= min_purity
+                        and _max_temporal_gap(kept_indices, linear_ind_to_t_and_seg_id) <= max_temporal_gap
+                        and not any_taken(kept_indices)):
+                    best_purity = purity
+                    best_coverage = init_coverage
+                    best_goodness = init_goodness
+                    best_candidate = (anc, start_indices, kept_indices, purity, init_coverage)
+                    best_kept_size = len(kept_indices)
+
             checked_merges = 0
-            for anc in tqdm(seed_info['ancestors'], desc="Checking merges", leave=False):
-                raw_indices = leaves_under.get(anc, set())
+            for cand_node in tqdm(seed_info['ancestors'], desc="Checking merges", leave=False):
+                raw_indices = leaves_under.get(cand_node, set())
                 if len(raw_indices) == 0 or len(raw_indices) > 2*len(timepoints):
                     # Don't even check if the candidate is too big
                     continue
@@ -348,14 +394,23 @@ def agglomerate_by_time_purity(clusterer,
                 # We only consider candidates that will keep at least min_kept_size items
                 if kept_size < min_kept_size:
                     continue
+                # Purity floor: reject merges of distinct co-existing neurons even
+                # when coverage is high.
+                if purity < min_purity:
+                    continue
+                # Temporal-continuity gate: reject merges of temporally disjoint
+                # neurons that only look good because purity ignores gaps.
+                if _max_temporal_gap(kept_indices, linear_ind_to_t_and_seg_id) > max_temporal_gap:
+                    continue
 
                 this_goodness = goodness(purity, coverage)
                 # Candidate tie-breaking:
                 # prefer higher purity; on equal purity prefer larger kept size
                 if this_goodness > best_goodness + eps_increase:
                     # For intermediate steps, do not allow clusters that will not be accepted later
-                    if not any_assigned(kept_indices):
-                        best_candidate = (anc, raw_indices, kept_indices, purity, coverage)
+                    # (partition invariant: exclude both assigned and outlier indices).
+                    if not any_taken(kept_indices):
+                        best_candidate = (cand_node, raw_indices, kept_indices, purity, coverage)
                         best_purity = purity
                         best_goodness = this_goodness
                         best_kept_size = kept_size
@@ -364,10 +419,16 @@ def agglomerate_by_time_purity(clusterer,
                     #     print(f"Found good cluster candidate, but it overlapped with an existing cluster; skipping")
 
             # If we found a viable best candidate, check conflicts with already assigned indices
-            if best_candidate is not None and best_goodness > min_goodness:
+            if best_candidate is not None and best_goodness > min_goodness and best_purity >= min_purity:
                 anc_node, raw_indices, kept_indices, purity, coverage = best_candidate
-                # Do not re-use indices already assigned to prior accepted clusters 
-                if any_assigned(kept_indices):
+                # Reject temporally gapped winners (e.g. HDBSCAN-seeded initial
+                # candidate that bypassed the merge loop gates).
+                if _max_temporal_gap(kept_indices, linear_ind_to_t_and_seg_id) > max_temporal_gap:
+                    print(f"Skipping candidate with temporal gap (purity={purity}, coverage={coverage})")
+                    continue
+                # Do not re-use indices already assigned to prior accepted clusters
+                # or discarded as outliers (partition invariant).
+                if any_taken(kept_indices):
                     # skip candidate to keep clusters disjoint. Alternatively, we could drop assigned indices
                     # and recompute purity, but that adds complexity. For now we skip such candidates.
                     print(f"Found good cluster candidate, but it overlapped with an existing cluster; skipping")
@@ -382,17 +443,18 @@ def agglomerate_by_time_purity(clusterer,
                     'coverage': float(coverage)
                 })
                 # mark kept indices as assigned
-                for idx in kept_indices:
-                    assigned_index_to_cluster[int(idx)] = candidate_cluster_label
-                # mark all raw but not-kept indices as outliers
-                for idx in raw_indices:
-                    if idx not in kept_indices:
-                        outliers.add(idx)
+                for kept_idx in kept_indices:
+                    assigned_index_to_cluster[int(kept_idx)] = candidate_cluster_label
+                # mark all raw but not-kept indices as outliers (never reassign
+                # an already-assigned index to outliers).
+                for raw_idx in raw_indices:
+                    if raw_idx not in kept_indices and raw_idx not in assigned_index_to_cluster:
+                        outliers.add(raw_idx)
                 used_cluster_labels.append(candidate_cluster_label)
                 current_cluster_label += 1
 
                 if is_updated:
-                    print(f"Accepted a modified cluster of size {len(kept_indices)}/{len(raw_indices)} with goodness {best_goodness} for object {idx} at t {t} (Current number accepted: {len(used_cluster_labels)})")
+                    print(f"Accepted a modified cluster of size {len(kept_indices)}/{len(raw_indices)} with goodness {best_goodness} for object {seed_idx} at t {t} (Current number accepted: {len(used_cluster_labels)})")
                     num_clusters_changed += 1
                 # else:
                 #     print("Accepting cluster without modification")

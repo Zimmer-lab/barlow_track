@@ -41,12 +41,12 @@ from barlow_track.utils.superglue import (
 
 def both_correlation_matrices(z1, z2):
     """Feature-space (DxD) and object-space (NxN) cross-correlation matrices."""
-    z1_norm = (z1 - z1.mean(0)) / z1.std(0).clamp_min(1e-6)
-    z2_norm = (z2 - z2.mean(0)) / z2.std(0).clamp_min(1e-6)
+    z1_norm = (z1 - z1.mean(0)) / z1.std(0, unbiased=False).clamp_min(1e-6)
+    z2_norm = (z2 - z2.mean(0)) / z2.std(0, unbiased=False).clamp_min(1e-6)
     c_features = torch.matmul(z1_norm.T, z2_norm) / z1.shape[0]
 
-    z1_t = ((z1.T - z1.mean(1)) / z1.std(1).clamp_min(1e-6)).T
-    z2_t = ((z2.T - z2.mean(1)) / z2.std(1).clamp_min(1e-6)).T
+    z1_t = ((z1.T - z1.mean(1)) / z1.std(1, unbiased=False).clamp_min(1e-6)).T
+    z2_t = ((z2.T - z2.mean(1)) / z2.std(1, unbiased=False).clamp_min(1e-6)).T
     c_objects = torch.matmul(z1_t, z2_t.T) / z1.shape[1]
     return c_features, c_objects
 
@@ -280,7 +280,13 @@ class BarlowWithPosition(BarlowTwins3d):
         return self.kenc(k, s).squeeze(0).transpose(0, 1)
 
     def fused_descriptors(self, y, kpts, scores=None):
-        pos = self.norm_pos(self.encode_position(kpts, scores))
+        if kpts.shape[0] < 2:
+            # Truly visual-only fallback: skip norm_pos entirely. LayerNorm
+            # of a zero vector would otherwise inject the learned bias as a
+            # constant offset after training.
+            pos = self.encode_position(kpts, scores)
+        else:
+            pos = self.norm_pos(self.encode_position(kpts, scores))
         if self.fusion == 'position_only':
             return pos  # visual branch unused: pure geometry benchmark
         visual = self.norm_visual(self.backbone(y))

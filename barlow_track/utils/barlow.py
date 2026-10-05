@@ -107,9 +107,11 @@ class BarlowTwins3d(nn.Module):
     def calculate_correlation_matrix(self, y1, y2):
         z1 = self.embed(y1)
         z2 = self.embed(y2)
-        # empirical cross-correlation matrix
-        z1_norm = (z1 - z1.mean(0)) / z1.std(0).clamp_min(1e-6)
-        z2_norm = (z2 - z2.mean(0)) / z2.std(0).clamp_min(1e-6)
+        # empirical cross-correlation matrix; unbiased=False so that
+        # identical views give exactly 1 on the diagonal (std with N-1
+        # would give (N-1)/N and a spurious on-diagonal loss).
+        z1_norm = (z1 - z1.mean(0)) / z1.std(0, unbiased=False).clamp_min(1e-6)
+        z2_norm = (z2 - z2.mean(0)) / z2.std(0, unbiased=False).clamp_min(1e-6)
         this_batch_sz = z1.shape[0]
 
         c = torch.matmul(z1_norm.T, z2_norm) / this_batch_sz  # D x D (feature space)
@@ -132,14 +134,14 @@ class BarlowTwins3d(nn.Module):
         z1 = self.embed(y1)
         z2 = self.embed(y2)
         # empirical cross-correlation matrix
-        z1_norm = (z1 - z1.mean(0)) / z1.std(0).clamp_min(1e-6)
-        z2_norm = (z2 - z2.mean(0)) / z2.std(0).clamp_min(1e-6)
+        z1_norm = (z1 - z1.mean(0)) / z1.std(0, unbiased=False).clamp_min(1e-6)
+        z2_norm = (z2 - z2.mean(0)) / z2.std(0, unbiased=False).clamp_min(1e-6)
         this_batch_sz = z1.shape[0]
         c_features = torch.matmul(z1_norm.T, z2_norm) / this_batch_sz  # D x D (feature space)
 
         # empirical cross-correlation matrix
-        z1_norm = ((z1.T - z1.mean(1)) / z1.std(1).clamp_min(1e-6)).T
-        z2_norm = ((z2.T - z2.mean(1)) / z2.std(1).clamp_min(1e-6)).T
+        z1_norm = ((z1.T - z1.mean(1)) / z1.std(1, unbiased=False).clamp_min(1e-6)).T
+        z2_norm = ((z2.T - z2.mean(1)) / z2.std(1, unbiased=False).clamp_min(1e-6)).T
         this_num_features = z1.shape[1]
         c_objects = torch.matmul(z1_norm, z2_norm.T) / this_num_features  # N x N (object space)
 
@@ -539,9 +541,17 @@ def load_barlow_model(model_fname, expected_args=None):
     args = pickle_load_binary(args_fname)
     logging.info(f"Loaded args from {args_fname}: {args}")
     # Legacy migration: checkpoints predating a field must keep legacy
-    # behavior, not the current fresh-training default.
+    # behavior, not the current fresh-training default. For fusion_norm,
+    # infer from the weights when possible: new checkpoints carry
+    # norm_visual/norm_pos params, legacy ones do not.
     if _get_arg(args, 'fusion_norm', None) is None:
-        _set_arg(args, 'fusion_norm', 'none')
+        _has_norm = any(
+            k in ('norm_visual.weight', 'norm_pos.weight')
+            or k.endswith('.norm_visual.weight')
+            or k.endswith('.norm_pos.weight')
+            for k in state_dict.keys()
+        )
+        _set_arg(args, 'fusion_norm', 'layernorm' if _has_norm else 'none')
     if _get_arg(args, 'center_per_volume', None) is None:
         _set_arg(args, 'center_per_volume', False)
     if expected_args is not None:

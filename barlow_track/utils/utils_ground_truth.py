@@ -188,11 +188,13 @@ def extract_val_from_json(trial_path, key='val_loss'):
     try:
         with open(stats_path, "r") as f:
             stats = json.load(f)
-        if len(stats) >= 2 and key in stats[-2]:
-            return stats[-2][key]
-        else:
-            print(f"{stats_path} too short or missing {key}")
-            return None
+        # Scan from the end: the requested key may live in the final entry
+        # only (e.g. test_loss), not in stats[-2].
+        for s in reversed(stats):
+            if key in s and s[key] is not None:
+                return s[key]
+        print(f"{stats_path} too short or missing {key}")
+        return None
     except Exception as e:
         print(f"Error reading {stats_path}: {e}")
         return None

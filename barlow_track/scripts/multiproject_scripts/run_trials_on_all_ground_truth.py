@@ -63,6 +63,9 @@ def parse_args():
                         help="Folder with trial_N subfolders (each with resnet50.pth)")
     parser.add_argument("--trials", nargs="+", type=int, default=None,
                         help="Which trials to run, e.g. --trials 0 1 (default: all with a model file)")
+    parser.add_argument("--top_k", type=int, default=None,
+                        help="Take the top-K trials by test_loss (fallback: last val_loss) from the "
+                             "sweep in --trial_parent_dir instead of --trials (trained mode only)")
     parser.add_argument("--labs", nargs="+", default=None, choices=list(DATASETS),
                         help="Subset of datasets (default: all)")
     parser.add_argument("--model_fname", default="resnet50.pth")
@@ -135,6 +138,31 @@ def resolve_trials(trial_parent_dir, trials, model_fname):
     return selected
 
 
+def top_k_trials(trial_parent_dir, k, model_fname):
+    """Trial numbers with the lowest test_loss (fallback: last val_loss).
+
+    Only trials with a model file and a usable loss are ranked.
+    """
+    from barlow_track.utils.utils_ground_truth import discover_trials, extract_val_from_json
+    scored = []
+    for trial_num in discover_trials(trial_parent_dir):
+        trial_dir = os.path.join(trial_parent_dir, f"trial_{trial_num}")
+        if not os.path.isfile(os.path.join(trial_dir, model_fname)):
+            print(f"trial_{trial_num}: no model file; skipping")
+            continue
+        val = extract_val_from_json(trial_dir, key="test_loss")
+        if val is None:
+            val = extract_val_from_json(trial_dir, key="val_loss")
+        if val is None or val != val:  # None or NaN
+            print(f"trial_{trial_num}: no usable loss; skipping")
+            continue
+        scored.append((float(val), trial_num))
+    scored.sort()
+    top = [t for _, t in scored[:k]]
+    print(f"Top {k} by loss: {[(t, round(v, 6)) for v, t in scored[:k]]}")
+    return top
+
+
 def resolve_gpus(gpus_arg):
     """Return a list of GPU indices; 'auto' queries nvidia-smi."""
     if gpus_arg != "auto":
@@ -174,7 +202,14 @@ def main():
     emb_dir = args.emb_dir or os.path.join(trial_parent_dir, "emb_cache")
     labs = args.labs or DEFAULT_LABS
 
-    trials = resolve_trials(trial_parent_dir, args.trials, args.model_fname)
+    if args.top_k is not None:
+        if args.mode != "trained":
+            raise SystemExit("--top_k only applies to --mode trained")
+        if args.trials is not None:
+            print("WARNING: --trials ignored because --top_k was given")
+        trials = top_k_trials(trial_parent_dir, args.top_k, args.model_fname)
+    else:
+        trials = resolve_trials(trial_parent_dir, args.trials, args.model_fname)
     if args.mode == "trained" and not trials:
         raise SystemExit("No runnable trials found.")
     trial_str = trials if args.mode == "trained" else "(untrained baselines; no checkpoints)"

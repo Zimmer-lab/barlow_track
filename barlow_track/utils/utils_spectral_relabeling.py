@@ -54,25 +54,36 @@ def greedy_top1_timewise(labels_topk, probs_topk, time_index_to_linear_feature_i
     probs_out = np.zeros((N, 1), dtype=probs_topk.dtype)
 
     for t, rows in time_index_to_linear_feature_indices.items():
-        # rows = torch.tensor(rows, dtype=torch.long)
-        # Extract relevant rows
-        row_labels = labels_topk[rows, 0]      # shape: len(rows) x K
-        row_probs = probs_topk[rows, 0]        # same shape
+        rows = np.asarray(list(rows))
+        if len(rows) == 0:
+            continue
+        # Use all top-k candidates: flatten (object, candidate) entries so an
+        # object whose top-1 label is taken can fall back to top-2, etc.
+        L_block = labels_topk[rows, :]    # M x topk
+        P_block = probs_topk[rows, :]     # M x topk
 
-        # Keep track of assigned labels at this time
+        # Keep track of assigned labels/objects at this time
         assigned_labels = set()
-        sorted_idx = np.argsort(-row_probs)
+        assigned_objects = set()
+        candidates = []
+        for m in range(len(rows)):
+            for kk in range(K):
+                candidate_label = int(L_block[m, kk])
+                if candidate_label == -1:
+                    continue
+                candidates.append((float(P_block[m, kk]), m, candidate_label))
+        # Highest probability first
+        candidates.sort(key=lambda x: -x[0])
 
-        # Flatten the probabilities to pick the top-1 while respecting uniqueness
-        # argsort descending
-        for idx in sorted_idx:
-            candidate_label = int(row_labels[idx])
-            if candidate_label == -1:
-                continue  # skip invalid labels
-            if candidate_label not in assigned_labels:
-                labels_out[rows[idx], 0] = candidate_label
-                probs_out[rows[idx], 0] = row_probs[idx]
-                assigned_labels.add(candidate_label)
+        for prob, m, candidate_label in candidates:
+            if m in assigned_objects:
+                continue
+            if candidate_label in assigned_labels:
+                continue
+            labels_out[rows[m], 0] = candidate_label
+            probs_out[rows[m], 0] = prob
+            assigned_labels.add(candidate_label)
+            assigned_objects.add(m)
             # If no valid label found, labels_out remains -1, probs_out=0
 
     return labels_out, probs_out
@@ -326,13 +337,20 @@ def enforce_temporal_uniqueness_hungarian(consensus_probs, time_index_to_linear_
 
     # Process each time point independently
     for time_idx, object_indices in tqdm(time_index_to_linear_feature_indices.items(), desc="Enforcing temporal uniqueness"):
-        if len(object_indices) <= 1:
-            continue  # No conflict possible with 0 or 1 objects
+        object_indices = np.asarray(list(object_indices))
+        if len(object_indices) == 0:
+            continue  # No conflict possible with 0 objects; single objects still get labeled
             
         # Extract probabilities for objects at this time point
         time_probs = consensus_probs[object_indices, :]  # shape: (n_objects, K)
         n_objects = len(object_indices)
         
+        # NOTE on units: consensus_probs entries are summed over runs (range
+        # ~[0, R]), while min_prob_threshold is a per-run fraction (e.g. 0.02
+        # = 2% of runs agreeing). Null/dummy costs must therefore be scaled
+        # by R to be comparable; otherwise the null option is effectively
+        # zero and never wins for R >> 1.
+        null_level = min_prob_threshold * R
         # Create cost matrix for Hungarian algorithm
         # Cost = -probability (since Hungarian finds minimum cost)
         cost_matrix = -time_probs
@@ -341,13 +359,13 @@ def enforce_temporal_uniqueness_hungarian(consensus_probs, time_index_to_linear_
         if n_objects > K:
             # More objects than labels - some objects will get no assignment
             # Pad cost matrix with high cost "null" assignments
-            null_cost = -min_prob_threshold  # Small positive cost for null assignment
+            null_cost = -null_level  # cost of leaving an object unlabeled
             cost_matrix = np.hstack([cost_matrix, 
                                    np.full((n_objects, n_objects - K), null_cost)])
         elif n_objects < K:
             # More labels than objects - some labels won't be assigned
             # Pad with dummy objects that have high cost for all labels
-            dummy_cost = -min_prob_threshold
+            dummy_cost = -null_level
             dummy_rows = np.full((K - n_objects, K), dummy_cost)
             cost_matrix = np.vstack([cost_matrix, dummy_rows])
             

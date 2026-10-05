@@ -102,6 +102,9 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
 
     else:
         # Next try: load metadata
+        # Note: save_intermediate_results writes linear_ind_to_t_and_seg_id.pickle
+        # (plus linear_ind_to_gt_ind.pickle); older runs may only have the legacy
+        # linear_ind_to_raw_neuron_ind.pickle, so fall back to it.
         embedding_fname = os.path.join(results_subfolder_full, 'embedding.zarr')
         if Path(embedding_fname).exists():
             project_data.logger.info("Found already saved embedding files, loading...")
@@ -109,17 +112,38 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
 
             fname = os.path.join(results_subfolder_full, 'time_index_to_linear_feature_indices.pickle')
             time_index_to_linear_feature_indices = pickle_load_binary(fname)
-            fname = os.path.join(results_subfolder_full, 'linear_ind_to_raw_neuron_ind.pickle')
-            linear_ind_to_raw_neuron_ind = pickle_load_binary(fname)
+            fname_t_and_seg = os.path.join(results_subfolder_full, 'linear_ind_to_t_and_seg_id.pickle')
+            fname_legacy = os.path.join(results_subfolder_full, 'linear_ind_to_raw_neuron_ind.pickle')
+            if Path(fname_t_and_seg).exists():
+                linear_ind_to_t_and_seg_id = pickle_load_binary(fname_t_and_seg)
+                tracker_kwargs = dict(linear_ind_to_t_and_seg_id=linear_ind_to_t_and_seg_id)
+            elif Path(fname_legacy).exists():
+                project_data.logger.warning(f"Resume metadata {fname_t_and_seg} not found; "
+                                            f"falling back to legacy {fname_legacy}")
+                tracker_kwargs = dict(
+                    linear_ind_to_raw_neuron_ind=pickle_load_binary(fname_legacy))
+            else:
+                raise FileNotFoundError(
+                    f"Resume needs {fname_t_and_seg} (or legacy {fname_legacy}); "
+                    f"re-run embedding to regenerate resume artifacts.")
 
             svd_components = 50 if project_data.num_frames > 500 else int(project_data.num_frames / 10)
+
+            # Mirror the fresh path: it stores SVD-reduced features in the tracker
+            # when do_svd=True. embedding.zarr holds raw features, so reduce here
+            # to keep resume and fresh shapes/normalization consistent.
+            if X.shape[1] > svd_components:
+                project_data.logger.info(
+                    f"Reducing resumed embedding with SVD to {svd_components} components "
+                    f"(raw shape: {X.shape}) to match fresh path")
+                X = _robust_svd(X, svd_components)
 
             opt = dict(time_index_to_linear_feature_indices=time_index_to_linear_feature_indices,
                        svd_components=svd_components,
                        cluster_directly_on_svd_space=True,
                        n_clusters_per_window=3,
-                       n_volumes_per_window=120,
-                       linear_ind_to_raw_neuron_ind=linear_ind_to_raw_neuron_ind)
+                       n_volumes_per_window=120)
+            opt.update(tracker_kwargs)
             tracker = WormClusterTracker(X, **opt)
         else:
             tracker = None
@@ -230,12 +254,12 @@ def cluster_embeddings_from_config(project_config: ModularProjectConfig,
     # Do the clustering
     project_config.logger.info(f"Tracking using mode: {tracking_mode}")
     if tracking_mode == 'global':
-        # Check for svd
+        # Check for svd (tracker stores features in X_svd; embedding.zarr holds raw)
         svd_components = 50
-        if tracker.X.shape[1] > svd_components:
+        if tracker.X_svd.shape[1] > svd_components:
             project_config.logger.info(f"Truncating feature space using {svd_components} PCA components "
-                                    f"(original matrix size: {tracker.X.shape})")
-            tracker.X = _robust_svd(tracker.X, svd_components)
+                                    f"(original matrix size: {tracker.X_svd.shape})")
+            tracker.X_svd = _robust_svd(tracker.X_svd, svd_components)
             project_config.logger.info(f"Finished truncation")
         df_combined = tracker.track_using_global_clusterer()
     elif tracking_mode == 'overlapping_windows':
@@ -342,6 +366,8 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
 
     else:
         # Next try: load metadata
+        # Note: save_intermediate_results writes linear_ind_to_t_and_seg_id.pickle;
+        # fall back to the legacy linear_ind_to_raw_neuron_ind.pickle if needed.
         embedding_fname = os.path.join(results_subfolder_full, 'embedding.zarr')
         if Path(embedding_fname).exists():
             project_data.logger.info("Found already saved embedding files, loading...")
@@ -349,17 +375,36 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
 
             fname = os.path.join(results_subfolder_full, 'time_index_to_linear_feature_indices.pickle')
             time_index_to_linear_feature_indices = pickle_load_binary(fname)
-            fname = os.path.join(results_subfolder_full, 'linear_ind_to_raw_neuron_ind.pickle')
-            linear_ind_to_raw_neuron_ind = pickle_load_binary(fname)
+            fname_t_and_seg = os.path.join(results_subfolder_full, 'linear_ind_to_t_and_seg_id.pickle')
+            fname_legacy = os.path.join(results_subfolder_full, 'linear_ind_to_raw_neuron_ind.pickle')
+            if Path(fname_t_and_seg).exists():
+                linear_ind_to_t_and_seg_id = pickle_load_binary(fname_t_and_seg)
+                tracker_kwargs = dict(linear_ind_to_t_and_seg_id=linear_ind_to_t_and_seg_id)
+            elif Path(fname_legacy).exists():
+                project_data.logger.warning(f"Resume metadata {fname_t_and_seg} not found; "
+                                            f"falling back to legacy {fname_legacy}")
+                tracker_kwargs = dict(
+                    linear_ind_to_raw_neuron_ind=pickle_load_binary(fname_legacy))
+            else:
+                raise FileNotFoundError(
+                    f"Resume needs {fname_t_and_seg} (or legacy {fname_legacy}); "
+                    f"re-run embedding to regenerate resume artifacts.")
 
-            svd_components = 50 if project_data.num_frames > 500 else int(project_data.num_frames / 10)
+            # Fresh path below always reduces to 50 components; embedding.zarr holds
+            # raw features, so reduce here for resume/fresh consistency.
+            svd_components = 50
+            if X.shape[1] > svd_components:
+                project_data.logger.info(
+                    f"Reducing resumed embedding with SVD to {svd_components} components "
+                    f"(raw shape: {X.shape}) to match fresh path")
+                X = _robust_svd(X, svd_components)
 
             opt = dict(time_index_to_linear_feature_indices=time_index_to_linear_feature_indices,
                        svd_components=svd_components,
                        cluster_directly_on_svd_space=True,
                        n_clusters_per_window=3,
-                       n_volumes_per_window=120,
-                       linear_ind_to_raw_neuron_ind=linear_ind_to_raw_neuron_ind)
+                       n_volumes_per_window=120)
+            opt.update(tracker_kwargs)
             tracker = WormClusterTracker(X, **opt)
         else:
             tracker = None
@@ -465,7 +510,10 @@ def embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space
     use_projection_space - if True, uses the post-projection head space; most SSL approaches discard the projector (i.e. set this to False)
     """
     from barlow_track.utils.barlow import NeuronImageWithGTDataset
-    num_frames = project_data.num_frames - 1  # Why am I subtracting 1?
+    # NeuronImageWithGTDataset takes a frame COUNT (__len__ returns num_frames,
+    # __getitem__ allows 0..num_frames-1), so pass the full count to cover the
+    # last frame (index num_frames-1).
+    num_frames = project_data.num_frames
     if DEBUG:
         num_frames = min(10, num_frames)
         logging.info(f"DEBUG mode: only embedding {num_frames} frames")
@@ -477,6 +525,9 @@ def embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
         for t, (batch, ids) in tqdm(enumerate(dataset), total=len(dataset)):
+            if len(ids) == 0:
+                logging.warning(f"Skipping frame {t}: no detections (0 neurons); leaving gap in embeddings")
+                continue
             # Move entire batch to gpu initially
             batch = batch.to(gpu)
 
@@ -538,6 +589,7 @@ def embed_volumes_with_position(gpu, model, project_data, frame_indices, target_
             vol = load_volume(project_data, t)
             zxy, seg = get_centroids_for_volume(project_data, t)
             if len(zxy) == 0:
+                logging.warning(f"Skipping frame {t}: no detections (0 centroids); leaving gap in embeddings")
                 continue
             crops = torch.from_numpy(extract_crops(vol, zxy, target_sz)).float()
             crops = normalizer(crops).unsqueeze(1)  # tio needs 4D; model needs (N,1,Z,X,Y)
@@ -671,13 +723,17 @@ class BarlowProject:
             return self.all_embeddings
 
         # TODO: Refactor NeuronImageWithGTDataset to not need wbfm classes
-        dataset = NeuronImageWithGTDataset(self.project_data, self.num_frames - 1, self.target_sz,
+        # num_frames here is a COUNT (dataset covers 0..num_frames-1).
+        dataset = NeuronImageWithGTDataset(self.project_data, self.num_frames, self.target_sz,
                                            include_untracked=True)
         self.all_embeddings = defaultdict(dict)
         self.logger.info("Embedding using Barlow model")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
             for t, (batch, ids) in tqdm(enumerate(dataset), total=len(dataset)):
+                if len(ids) == 0:
+                    logging.warning(f"Skipping frame {t}: no detections (0 neurons); leaving gap in embeddings")
+                    continue
                 batch = batch.to(self.gpu)
 
                 def _parallel_func(name):
@@ -687,12 +743,12 @@ class BarlowProject:
                         emb = self.model.embed(crop) if use_projection_space else self.model.backbone(crop)
                     self.all_embeddings[name][t] = emb.cpu().detach().numpy()
 
-            # no_grad is thread-local
-            # https://github.com/pytorch/pytorch/issues/20528
-            # with torch.no_grad():
-            futures = {executor.submit(_parallel_func, n): n for n in ids}
-            for future in concurrent.futures.as_completed(futures):
-                future.result()
+                # no_grad is thread-local
+                # https://github.com/pytorch/pytorch/issues/20528
+                # with torch.no_grad():
+                futures = {executor.submit(_parallel_func, n): n for n in ids}
+                for future in concurrent.futures.as_completed(futures):
+                    future.result()
 
         self.logger.info(f"Finished embedding {len(self.all_embeddings)} neurons")
 
@@ -701,9 +757,11 @@ class BarlowProject:
             self.logger.info("Embedding metadata already exists. Returning existing metadata.")
             return self.linear_ind_to_gt_ind, self.linear_ind_to_raw_neuron_ind, self.time_index_to_linear_feature_indices
 
-        # Collect metadata
+        # Collect metadata (mirror module-level build_embedding_metadata: one
+        # linear index per (neuron, time) detection, not per neuron name)
         df_gt_tracks = self.df_gt_tracks
         X = []
+        i_linear_ind = 0
         for name, vols_all_times in self.all_embeddings.items():
             t_list = list(vols_all_times.keys())
             vols_array = np.vstack(list(vols_all_times.values()))
@@ -719,16 +777,17 @@ class BarlowProject:
                     pass
 
             for t_global in t_list:
-                self.time_index_to_linear_feature_indices[t_global].append(len(X))
-                self.linear_ind_to_gt_ind[len(X)] = gt_ind
+                self.time_index_to_linear_feature_indices[t_global].append(i_linear_ind)
+                self.linear_ind_to_gt_ind[i_linear_ind] = gt_ind
                 if has_gt:
-                    self.linear_ind_to_raw_neuron_ind[len(X)] = int(df_this_neuron[t_global])
+                    self.linear_ind_to_raw_neuron_ind[i_linear_ind] = int(df_this_neuron[t_global])
                 else:
                     # Based on an expected name like: untracked_time_0_1234, where the last number is the raw_neuron_ind
                     # i.e. using segmentation_metadata.mask_index_to_i_in_array for that object
                     assert 'neuron' not in name, \
                         f"Found neuron in object named: {name}; this branch should only be for untracked objects"
-                    self.linear_ind_to_raw_neuron_ind[len(X)] = int(name.split('_')[-1])
+                    self.linear_ind_to_raw_neuron_ind[i_linear_ind] = int(name.split('_')[-1])
+                i_linear_ind += 1
             X.append(vols_array)
 
         self.X = np.vstack(X)

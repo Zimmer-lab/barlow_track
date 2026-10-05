@@ -5,7 +5,8 @@ import numpy as np
 from collections import defaultdict
 from wbfm.utils.projects.finished_project_data import ProjectData
 from barlow_track.utils.utils_tracking import WormClusterTracker
-from barlow_track.utils.utils_ground_truth import calculate_accuracy, pad_with_nan_rows
+from barlow_track.utils.utils_ground_truth import (
+    calculate_accuracy, pad_with_nan_rows, align_gt_pred_time_index)
 from wbfm.utils.neuron_matching.utils_candidate_matches import rename_columns_using_matching
 from sklearn.decomposition import TruncatedSVD
 
@@ -29,10 +30,13 @@ for seed in [0, 1, 2]:
     df_pred = tr.track_using_global_clusterer()
     from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind
     df_pred = add_metadata_to_df_raw_ind(df_pred, proj.segmentation_metadata)
+    df_gt, df_pred = align_gt_pred_time_index(df_gt, df_pred)
     max_len = max(len(df_gt), len(df_pred))
     df_r, _, _, _ = rename_columns_using_matching(
         pad_with_nan_rows(df_gt, max_len), pad_with_nan_rows(df_pred, max_len),
-        column='raw_segmentation_id')
+        column='raw_segmentation_id', try_to_fix_inf=True)
+    if 'unmatched_neuron' in df_r.columns.get_level_values(0):
+        df_r = df_r.drop(columns='unmatched_neuron')
     cgt = pad_with_nan_rows(df_gt, max_len).loc[:, (slice(None), 'raw_segmentation_id')].droplevel(1, axis=1)
     cpr = df_r.loc[:, (slice(None), 'raw_segmentation_id')].droplevel(1, axis=1)
     s = calculate_accuracy(cgt, cpr)

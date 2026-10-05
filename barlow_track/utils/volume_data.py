@@ -231,11 +231,23 @@ def in_bounds_mask(points_zxy, vol_shape):
 
 
 def extract_crops(volume, points_zxy, target_sz):
-    """Extract a target_sz crop centered on each (z, x, y) point."""
+    """Extract a target_sz crop centered on each (z, x, y) point.
+
+    Preserves input order/N so callers can index by original position
+    (viewer/inference). Points that fail (out-of-range) yield a zero crop
+    with a warning instead of a silent edge-duplicate; training callers
+    already drop out-of-bounds points via `in_bounds_mask` before calling.
+    """
+    target_sz = np.array(target_sz)
     sz = np.array([1, *volume.shape])  # mimic full-video 4d shape for clipping
-    crops = [get_3d_crop_using_bbox_or_centroid(p, sz, np.array(target_sz), volume)[0]
-             for p in points_zxy]
-    return np.stack(crops, 0) if crops else np.zeros((0, *target_sz), dtype=np.float32)
+    crops = []
+    for p in points_zxy:
+        dat, _ = get_3d_crop_using_bbox_or_centroid(p, sz, target_sz, volume)
+        if dat is None:
+            logging.warning(f"extract_crops: skipping out-of-range point {np.asarray(p)}; using zero placeholder")
+            dat = np.zeros(tuple(int(v) for v in target_sz), dtype=np.float32)
+        crops.append(dat)
+    return np.stack(crops, 0) if crops else np.zeros((0, *tuple(int(v) for v in target_sz)), dtype=np.float32)
 
 
 @contextlib.contextmanager
@@ -338,7 +350,9 @@ class VolumeCoordsDataset(Dataset):
         # Drop objects rotated/translated completely out of frame: their
         # clipped crops would be edge duplicates with out-of-range keypoints.
         # Keep original indices so the loss can still align the intersection.
+        n_raw = len(pts_aug)
         valid = in_bounds_mask(pts_aug, vol_aug.shape)
+        n_inbounds = int(np.asarray(valid).sum()) if n_raw else 0
         valid_orig_idx = np.where(valid)[0]
         pts_valid = pts_aug[valid] if len(pts_aug) else pts_aug
         # Position-only dropout: independent subset per view (of survivors)
@@ -348,6 +362,10 @@ class VolumeCoordsDataset(Dataset):
             min_keep=self.position_args.get('min_keep', 2))
         keep_idx = valid_orig_idx[keep_rel] if len(valid_orig_idx) else valid_orig_idx
         pts_kept = pts_valid[keep_rel] if len(pts_valid) else pts_valid
+        logging.debug(
+            f"_augmented_view: raw={n_raw} in_bounds={n_inbounds} "
+            f"dropped_bounds={n_raw - n_inbounds} kept_after_dropout={len(pts_kept)}"
+        )
         crops = extract_crops(vol_aug, pts_kept, self.target_sz)
         # 4D (N,Z,X,Y) with N as the channel dim, exactly like the legacy
         # NeuronAugmentedImagePairDataset path (torchio Image convention)
@@ -396,6 +414,25 @@ def make_worker_init_fn(base_seed, epoch):
         torch.manual_seed(derive_seed(base_seed, epoch, worker_id, 'torch',
                                       bits=TORCH_SEED_BITS))
     return _init
+  
+  
+def _resolve_split_count(frac_or_count, n, name="split"):
+    """Fraction (<=1.0) -> int(n * f); absolute count (>1) -> int(f), clamped to n."""
+    try:
+        f = float(frac_or_count)
+    except (TypeError, ValueError):
+        logging.warning(f"Invalid {name}={frac_or_count!r}, using 0")
+        return 0
+    if f < 0:
+        logging.warning(f"Negative {name}={f}, clamping to 0")
+        return 0
+    if f <= 1.0:
+        return int(n * f)
+    count = int(f)
+    if count > n:
+        logging.warning(f"{name}={count} exceeds dataset size {n}, clamping")
+        return n
+    return count
 
 
 class VolumeCoordsDataModule(LightningDataModule):
@@ -451,13 +488,32 @@ class VolumeCoordsDataModule(LightningDataModule):
                                       position_args=self.position_args, seed=self.seed,
                                       epoch=self._current_epoch())
         n = len(alldata)
-        n_train = int(n * self.train_fraction) if self.train_fraction < 1.0 else int(self.train_fraction)
-        n_val = int(n * self.val_fraction) if self.val_fraction < 1.0 else int(self.val_fraction)
-        splits = [n_train, n_val, n - n_train - n_val]
+        if n == 0:
+            raise ValueError("VolumeCoordsDataModule.setup: no valid frames found")
+        
+        n_train = _resolve_split_count(self.train_fraction, n, name="train_fraction")
+        n_val = _resolve_split_count(self.val_fraction, n, name="val_fraction")
+        if n_train >= n:
+            if n_train > n:
+                logging.warning(f"train split {n_train} > n={n}, clamping")
+            n_train = n
+            n_val = 0
+            n_test = 0
+            logging.warning("train_fraction takes the full dataset; val and test splits are empty")
+        else:
+            if n_train + n_val > n:
+                logging.warning(
+                    f"train ({n_train}) + val ({n_val}) > n ({n}), clamping val to {n - n_train}"
+                )
+                n_val = n - n_train
+            n_test = n - n_train - n_val
+        splits = [n_train, n_val, n_test]
+        
         # random_split draws from a torch Generator; without one the split
         # changes every run even with a fixed seed.
         split_gen = torch.Generator()
         split_gen.manual_seed(derive_seed(self.seed, 'split', bits=TORCH_SEED_BITS))
+        
         self.train_dataset, self.val_dataset, self.test_dataset = random_split(
             alldata, splits, generator=split_gen)
         self.alldata = alldata

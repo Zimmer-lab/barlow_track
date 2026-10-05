@@ -275,20 +275,25 @@ def _iter_project_frames(project_data, target_sz, normalizer, frame_list, device
             try:
                 raw_ind = int(project_data.segmentation_metadata.mask_index_to_i_in_array(t, seg))
             except (FileNotFoundError, IndexError, KeyError):
-                raw_ind = seg
+                # Do NOT substitute the mask/segmentation id: it lives in a
+                # different ID space than the array index and would misjoin
+                # (or IndexError) in add_metadata_to_df_raw_ind, which
+                # skips NaN raw_ind gracefully (counts as a miss).
+                raw_ind = np.nan
             meta.append((raw_ind, seg))
         yield dict(t=t, crops=crops, kpts=kpts, meta=meta)
 
 
-def _load_nwb_arrays(nwb_project):
-    """Vectorized GT access for an NWB project (per-cell iloc is ~50ms)."""
+def _ensure_ind_level(df_gt):
+    """Expose segmentation ids as 'raw_neuron_ind_in_list' when missing.
+
+    Some NWBs (e.g. flavell) only carry raw_segmentation_id. The tracker
+    output always uses a 'raw_neuron_ind_in_list' level, so expose the
+    segmentation ids under that standard name to keep matching working.
+    """
     import pandas as pd
-    df_gt = nwb_project.final_tracks
     level1 = set(df_gt.columns.get_level_values(1).unique())
     if 'raw_neuron_ind_in_list' not in level1:
-        # Some NWBs (e.g. flavell) only carry raw_segmentation_id. The tracker
-        # output always uses a 'raw_neuron_ind_in_list' level, so expose the
-        # segmentation ids under that standard name to keep matching working.
         if 'raw_segmentation_id' not in level1:
             raise ValueError(f"GT final_tracks has no usable neuron-id column; level1={sorted(level1)}")
         ids = df_gt.loc[:, (slice(None), 'raw_segmentation_id')]
@@ -296,6 +301,12 @@ def _load_nwb_arrays(nwb_project):
             [ids.columns.get_level_values(0),
              ['raw_neuron_ind_in_list'] * len(ids.columns)])
         df_gt = pd.concat([df_gt, ids], axis=1)
+    return df_gt
+
+
+def _load_nwb_arrays(nwb_project):
+    """Vectorized GT access for an NWB project (per-cell iloc is ~50ms)."""
+    df_gt = _ensure_ind_level(nwb_project.final_tracks)
     neurons = list(df_gt.columns.get_level_values(0).unique())
     return dict(
         df_gt=df_gt,
@@ -545,7 +556,19 @@ def main():
         if args.source == 'nwb':
             # GT ids come straight from the NWB; match on neuron index, no
             # segmentation-metadata join (GT lacks seg ids at match time).
+            # Mirror the project path's finished-neuron semantics when the
+            # source exposes them; otherwise fall back to full final_tracks.
             df_gt = arrays['df_gt']
+            gt_filter = 'full final_tracks'
+            try:
+                _df_fin, _ = src_data.get_final_tracks_only_finished_neurons()
+            except Exception:
+                _df_fin = None
+            if _df_fin is not None and not _df_fin.empty:
+                df_gt = _ensure_ind_level(_df_fin)
+                gt_filter = 'finished neurons'
+            print(f"[{args.lab}/nwb] GT: {len(df_gt.columns.get_level_values(0).unique())} neurons "
+                  f"({gt_filter}), {len(df_gt)} frames", flush=True)
             match_col = 'raw_neuron_ind_in_list'
         else:
             from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind
@@ -555,12 +578,23 @@ def main():
             df_gt = gt_data.get_final_tracks_only_finished_neurons()[0]
             if df_gt is None or df_gt.empty:
                 df_gt = gt_data.final_tracks
+            print(f"[{args.lab}/project] GT: {len(df_gt.columns.get_level_values(0).unique())} neurons, "
+                  f"{len(df_gt)} frames; pred: {len(df_pred)} frames", flush=True)
             match_col = 'raw_segmentation_id'
-        from barlow_track.utils.utils_ground_truth import pad_with_nan_rows
+        from barlow_track.utils.utils_ground_truth import pad_with_nan_rows, align_gt_pred_time_index
+        # Restrict GT to the actually-evaluated time range (e.g. --max_frames):
+        # without this, every unevaluated GT frame counts as a miss and
+        # accuracy scales as ~(n_frames / total_frames) * true_accuracy.
+        df_gt, df_pred = align_gt_pred_time_index(df_gt, df_pred)
         max_len = max(len(df_gt), len(df_pred))
         df_pred = pad_with_nan_rows(df_pred, max_len)
         df_gt = pad_with_nan_rows(df_gt, max_len)
-        df_pred_r, _, _, _ = rename_columns_using_matching(df_gt, df_pred, column=match_col)
+        df_pred_r, _, _, _ = rename_columns_using_matching(
+            df_gt, df_pred, column=match_col, try_to_fix_inf=True)
+        if 'unmatched_neuron' in df_pred_r.columns.get_level_values(0):
+            # Defensive: wbfm drops these when pred has more columns than GT,
+            # but a residual duplicate label would crash reindex below.
+            df_pred_r = df_pred_r.drop(columns='unmatched_neuron')
         col_gt = df_gt.loc[:, (slice(None), match_col)].droplevel(1, axis=1)
         col_pr = df_pred_r.loc[:, (slice(None), match_col)].droplevel(1, axis=1)
         stats = calculate_accuracy(col_gt, col_pr)
@@ -589,8 +623,8 @@ def main():
                         center_per_volume=bool(args.center_per_volume),
                         l2_per_volume=bool(args.l2_per_volume),
                         accuracy=float(stats['accuracy']),
-                        misses=int(stats['misses'].sum().sum()),
-                        mismatches=int(stats['mismatches'].sum().sum()),
+                        misses=int(stats['total_misses']),
+                        mismatches=int(stats['total_mismatches']),
                         total=int(stats['total_ground_truth']),
                         minutes=(time.time() - t0) / 60),
                      args.results_jsonl)

@@ -133,8 +133,12 @@ class WormClusterTracker:
 
     @property
     def all_start_volumes(self):
-        all_start_volumes = list(np.arange(0, self.num_frames - self.n_volumes_per_window, step=self.tracker_stride))
-        all_start_volumes.append(self.num_frames - self.n_volumes_per_window - 1)
+        # Valid window starts are 0..(num_frames - n_volumes_per_window) inclusive,
+        # so the final window ends exactly on the last frame (num_frames - 1).
+        last_start = self.num_frames - self.n_volumes_per_window
+        all_start_volumes = list(np.arange(0, last_start + 1, step=self.tracker_stride))
+        if len(all_start_volumes) == 0 or all_start_volumes[-1] != last_start:
+            all_start_volumes.append(last_start)
         return all_start_volumes
 
     def get_raw_neuron_ind_from_linear_ind(self, linear_ind):
@@ -335,8 +339,11 @@ class WormClusterTracker:
             print(f"Doing UMAP projection with options: {opt_umap}")
             from umap import UMAP
             umap = UMAP(**opt_umap)
-            X_umap = umap.fit_transform(self.X_svd)
+            # Project this window only, so labels align with linear_ind
+            X_umap = umap.fit_transform(X)
             self.X_umap = X_umap
+            Y_tsne_svd = X_umap
+            db_svd = HDBSCAN(**opt_db).fit(Y_tsne_svd)
 
         return db_svd, Y_tsne_svd, linear_ind
 
@@ -426,7 +433,7 @@ class WormClusterTracker:
         all_dfs = [fill_missing_indices_with_nan(df, expected_max_t=self.num_frames)[0] for df in all_dfs]
         df_global = fill_missing_indices_with_nan(df_global, expected_max_t=self.num_frames)[0]
         all_dfs_renamed = [df_global]
-        for df in tqdm(all_dfs[1:], leave=False):
+        for df in tqdm(all_dfs, leave=False):
             df_renamed, *_ = rename_columns_using_matching(df_global, df, try_to_fix_inf=True)
             all_dfs_renamed.append(df_renamed)
 

@@ -84,8 +84,8 @@ def calculate_track_metrics(project_data_gt, project_data_barlow, use_traces=Fal
         if col in df_barlow_renamed.columns.get_level_values(0).unique():
             if use_traces:
                 correlations[col] = df_gt_traces[col].corr(df_barlow_traces_renamed[col])
-            num_misses[col] = results['misses'][col].sum()
-            num_mismatches[col] = results['mismatches'][col].sum()
+            num_misses[col] = results['misses_df'][col].sum()
+            num_mismatches[col] = results['mismatches_df'][col].sum()
             num_nan[col] = df_barlow_renamed.shape[0] - df_barlow_renamed[col][gt_column].count()
             num_detections[col] = df_gt[col][gt_column].count()
 

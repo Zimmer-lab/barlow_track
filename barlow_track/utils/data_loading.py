@@ -70,7 +70,7 @@ def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 
     seg2name = {}
     for k, v in name2seg.items():
         seg2name[cast_int_or_nan(v)] = k
-    # tracked_segs = set(seg2name.keys())
+    tracked_segs = set(seg2name.keys())
 
     # Get a bbox for all neurons in 3d, but optionally skip the untracked mask indices
     all_dat_dict = {}

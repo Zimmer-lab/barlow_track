@@ -1,7 +1,6 @@
 from pynndescent import NNDescent
 from tqdm.auto import tqdm
 import torch
-from torch_geometric.nn.models import LabelPropagation
 from torch_sparse import spmm
 import plotly.express as px
 import numpy as np
@@ -55,21 +54,6 @@ def make_seed_labels_no_dict(mask, num_timepoints):
     return y
 
 
-def run_label_propagation(edge_index, y, num_layers=50, alpha=0.9):
-    """
-    edge_index: graph edges
-    y: seed labels (-1 for unlabeled)
-    """
-    mask = (y != -1)  # seeds
-    y_filled = y.clone()
-    y_filled[~mask] = 0  # dummy for unlabeled
-    
-    lp = LabelPropagation(num_layers=num_layers, alpha=alpha)
-    out = lp(y_filled, edge_index, mask=mask)  # (N, C)
-    pred = out.argmax(dim=-1)
-    return pred
-
-
 def normalized_adjacency(edge_index):
     """Symmetric-normalized adjacency weights, on edge_index's device.
 
@@ -102,10 +86,18 @@ def clamped_label_propagation(edge_index, y, num_layers=50, norm=None, DEBUG=Tru
         edge_index, norm = normalized_adjacency(edge_index)
 
     # seed mask
+    # NOTE: seed labels are 1-based (from make_seed_labels_no_dict). Use
+    # zero-based columns internally so there is no unused "ghost" class 0
+    # that disconnected nodes could argmax to. Column c corresponds to
+    # label c+1, so callers must add 1 to argmax/topk indices.
     mask = (y != -1)
-    num_classes = int(y.max().item() + 1)
+    if not bool(mask.any().item()):
+        return torch.zeros(y.size(0), 0, device=y.device)
+    num_classes = int(y.max().item())
+    if num_classes <= 0:
+        return torch.zeros(y.size(0), 0, device=y.device)
     Y = torch.zeros(y.size(0), num_classes, device=y.device)
-    Y[mask, y[mask]] = 1.0
+    Y[mask, y[mask] - 1] = 1.0
 
     H = Y.clone()
 
@@ -151,13 +143,22 @@ def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k
 
     # Threshold purely chance labelings
     if prob_thresh is None:
-        prob_thresh = 1.1*(1.0 / mask.sum().item())
+        n_seeds = int(mask.sum().item())
+        prob_thresh = 1.1 * (1.0 / n_seeds) if n_seeds > 0 else 1.0
 
     if DEBUG:
         print(f"Seeds found: {mask.sum().item()}")
-        print(f"Unique labels: {torch.unique(y[mask]).tolist()}")
+        print(f"Unique labels: {torch.unique(y[mask]).tolist()}" if int(mask.sum().item()) > 0 else "Unique labels: []")
         print("Probability threshold: ", prob_thresh)
-    
+
+    if int(mask.sum().item()) == 0:
+        N = y.size(0)
+        if return_top_k == 1:
+            return torch.full((N,), -1, dtype=torch.long, device=y.device), torch.zeros((N,), device=y.device)
+        else:
+            return (torch.full((N, return_top_k), -1, dtype=torch.long, device=y.device),
+                    torch.zeros((N, return_top_k), device=y.device))
+
     # lp = LabelPropagation(num_layers=num_layers, alpha=alpha)
     # out = lp(y_filled, edge_index, mask=mask)  # (N, C)
     out = clamped_label_propagation(edge_index, y, num_layers=num_layers, norm=edge_norm, DEBUG=DEBUG)
@@ -165,11 +166,13 @@ def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k
     if return_top_k == 1:
         probs = torch.softmax(out, dim=-1)
         max_probs, pred_labels = torch.max(probs, dim=-1)
-        
-        # Set low-confidence predictions to -1
+
+        # out columns are zero-based; seeds are 1-based, so shift to 1-based labels
+        pred_labels = pred_labels + 1
+
+        # Set low-confidence predictions to -1 (return the thresholded labels)
         pred_labels[max_probs < prob_thresh] = -1
-        pred = out.argmax(dim=-1)
-        return pred, max_probs
+        return pred_labels, max_probs
     else:
         if softmax:
             probs = torch.softmax(out / tau, dim=-1)
@@ -177,12 +180,15 @@ def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k
             # Generates very confident labels
             row_sums = out.sum(dim=-1, keepdims=True)
             probs = torch.where(row_sums > 0, out / row_sums, torch.zeros_like(out))
-        
+
         top_probs, top_labels = torch.topk(probs, return_top_k, dim=-1)
+        # out columns are zero-based; convert to 1-based labels before thresholding
+        top_labels = top_labels + 1
         # Threshold small labels
-        top_probs[top_probs < prob_thresh] = 0
-        top_labels[top_probs < prob_thresh] = -1
-        
+        low_conf = top_probs < prob_thresh
+        top_probs[low_conf] = 0
+        top_labels[low_conf] = -1
+
         return top_labels, top_probs  # (N, k), (N, k)
 
 
@@ -232,10 +238,16 @@ def fuse_labels_per_time(aligned_labelings, time_index_to_linear_feature_indices
         num_objects, num_labelings = votes.shape
         if DEBUG:
             print(votes.shape)
+
+        # Nothing to fuse if every vote is -1 (avoids empty vectorize/Hungarian)
+        if not np.any(votes != -1):
+            continue
         
         # Unique labels across all runs at this time slice
         unique_labels = np.unique(votes[votes != -1])
         num_labels = len(unique_labels)
+        if num_labels == 0:
+            continue
         label_to_col = {l: i for i, l in enumerate(unique_labels)}
         
         # Flatten object indices and their votes
@@ -245,8 +257,10 @@ def fuse_labels_per_time(aligned_labelings, time_index_to_linear_feature_indices
         valid = lab_vals != -1
         obj_idx = obj_idx[valid]
         lab_vals = lab_vals[valid]
+        if len(lab_vals) == 0:
+            continue
         
-        lab_idx = np.vectorize(label_to_col.get)(lab_vals)
+        lab_idx = np.vectorize(label_to_col.get, otypes=[np.int64])(lab_vals)
         
         cm = np.zeros((num_objects, num_labels), dtype=int)
         np.add.at(cm, (obj_idx, lab_idx), 1)
@@ -319,7 +333,12 @@ def align_pair(ref_labels, y_new):
 
     # build confusion matrix for Hungarian matching
     labels_ref = np.unique(ref_labels[valid])
-    labels_new = np.unique(y_new[valid])
+    # Include new labels that never co-occur with a valid reference label
+    # (e.g. clusters existing only where the reference is -1); otherwise they
+    # would fall through mapping.get(v, -1) and be silently discarded.
+    labels_new_cooccurring = np.unique(y_new[valid])
+    labels_new_all = np.unique(y_new[y_new != -1])
+    labels_new = labels_new_cooccurring
     n_ref = len(labels_ref)
     n_new = len(labels_new)
 
@@ -328,21 +347,37 @@ def align_pair(ref_labels, y_new):
     new_idx = {l: i for i, l in enumerate(labels_new)}
 
     cm = np.zeros((n_ref, n_new), dtype=int)
-    for i, j in zip(np.where(valid)[0], np.where(valid)[0]):
+    for i in np.where(valid)[0]:
         r = ref_idx[ref_labels[i]]
         c = new_idx[y_new[i]]
         cm[r, c] += 1
 
-    # Hungarian matching (maximize total votes)
+    # Hungarian matching (maximize total votes), but do not force
+    # zero-evidence matches: a complete matching may pair a new cluster with
+    # an unrelated old label when cm[r, c] == 0. Route those through the
+    # unmatched-new path so they get fresh global IDs.
     row_ind, col_ind = linear_sum_assignment(-cm)
-    mapping = {labels_new[c]: labels_ref[r] for r, c in zip(row_ind, col_ind)}
+    mapping = {}
+    for r, c in zip(row_ind, col_ind):
+        if cm[r, c] > 0:
+            mapping[labels_new[c]] = labels_ref[r]
 
-    # assign new label IDs for unmatched columns
+    # assign new label IDs for unmatched columns (including zero-overlap pairs)
     unmatched_new = set(labels_new) - set(mapping.keys())
+    # plus labels that never co-occurred with the reference at all
+    unmatched_new |= set(labels_new_all) - set(labels_new)
     new_label_id = ref_labels.max() + 1 if np.any(ref_labels != -1) else 0
-    for lb in unmatched_new:
-        mapping[lb] = new_label_id
+    # Keep fresh IDs clear of any existing reference label (ref IDs need not
+    # be contiguous).
+    existing = set(np.unique(ref_labels[ref_labels != -1]).tolist()) | set(mapping.values())
+    while new_label_id in existing:
         new_label_id += 1
+    for lb in sorted(unmatched_new):
+        mapping[lb] = new_label_id
+        existing.add(new_label_id)
+        new_label_id += 1
+        while new_label_id in existing:
+            new_label_id += 1
 
     # apply mapping
     y_new_aligned = np.array([mapping.get(v, -1) if v != -1 else -1 for v in y_new])
@@ -354,16 +389,20 @@ def align_all(labelings, time_index_to_linear_feature_indices):
     """
     Align multiple labelings using a rolling reference.
     Assumes all labelings are equal-length arrays (N,), -1 = unlabeled.
-    
+
     Returns:
         aligned: list of np.arrays, each aligned to rolling reference
+        ref_labels: np.array (N,) fused reference labeling
+        ref_confidence: np.array (N,) per-node agreement fraction
     """
     if not labelings:
-        return []
+        return [], np.array([], dtype=int), np.array([], dtype=float)
 
     # Start with the first labeling as reference
     ref_labels = labelings[0].copy()
     all_aligned_labelings = [ref_labels]
+    # Default confidence for the single-labeling case (no fusion yet).
+    ref_confidence = (ref_labels != -1).astype(float)
 
     # Rolling alignment
     for y in tqdm(labelings[1:], desc="Aligning all labelings"):
@@ -372,5 +411,5 @@ def align_all(labelings, time_index_to_linear_feature_indices):
 
         # Do fusion of the reference with this new aligned labeling and all prior ones, to be used for the next iteration
         ref_labels, ref_confidence = fuse_labels_per_time(all_aligned_labelings, time_index_to_linear_feature_indices)
-        
+
     return all_aligned_labelings, ref_labels, ref_confidence

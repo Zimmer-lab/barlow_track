@@ -72,13 +72,21 @@ def test_centroids_available(project_data):
 @requires_project
 def test_dataset_getitem_shapes(project_data):
     ds = VolumeCoordsDataset(project_data, [0, 1, 2], target_sz=(4, 32, 32), seed=0)
-    y1, y2, k1, k2 = ds[0][:4]
+    y1, y2, k1, k2, i1, i2 = ds[0]
     n = ds.num_objects(0)
-    assert y1.shape == (n, 1, 4, 32, 32) and y2.shape == y1.shape
-    assert k1.shape == (n, 3) and k2.shape == (n, 3)
+    n1, n2 = len(i1), len(i2)
+    assert y1.shape == (n1, 1, 4, 32, 32)
+    assert y2.shape == (n2, 1, 4, 32, 32)
+    assert k1.shape == (n1, 3) and k2.shape == (n2, 3)
+    assert 0 < n1 <= n
+    assert 0 < n2 <= n
     assert torch.isfinite(y1).all() and torch.isfinite(k1).all()
-    assert not torch.allclose(y1, y2)  # two stochastic global views differ
-    assert not torch.allclose(k1, k2)
+    if n1 == n2:
+        assert not torch.allclose(y1, y2)  # two stochastic global views differ
+        assert not torch.allclose(k1, k2)
+    else:
+        # Different surviving N already proves the views diverged
+        assert True
 
 
 @requires_project

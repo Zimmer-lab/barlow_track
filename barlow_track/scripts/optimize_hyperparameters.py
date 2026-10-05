@@ -7,9 +7,7 @@ import time
 import numpy as np
 from pathlib import Path
 from types import SimpleNamespace
-from IPython.core.display_functions import display
 from ax.service.ax_client import AxClient, ObjectiveProperties
-from ax.utils.notebook.plotting import render
 from ax.service.utils.report_utils import exp_to_df
 import yaml  # We are only using this for reading
 from ruamel.yaml import YAML
@@ -272,7 +270,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
 
                 jobs.remove((job, trial_index))
                 # Display the current and completed trials
-                display(exp_to_df(ax_client.experiment))
+                print(exp_to_df(ax_client.experiment))
                 
         # Schedule new jobs if there is availablity
         if direct_parameter_sweep or one_at_a_time_sweep:

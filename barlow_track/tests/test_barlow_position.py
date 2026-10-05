@@ -83,7 +83,14 @@ def test_encode_position_single_detection_falls_back(batch):
         assert z.shape == (1, 16)
         assert torch.allclose(z, torch.zeros_like(z))  # visual-only fallback, no crash
         fused = model.fused_descriptors(y1[:1], k1[:1])
-        assert torch.allclose(fused, model.backbone(y1[:1]))
+        # Default fusion_norm='layernorm': visual branch is normalized, and
+        # the position branch must contribute nothing (no learned bias leak).
+        assert torch.allclose(fused, model.norm_visual(model.backbone(y1[:1])))
+        # Independence from trained norm_pos.bias
+        if hasattr(model.norm_pos, 'bias') and model.norm_pos.bias is not None:
+            model.norm_pos.bias.fill_(5.0)
+            fused_biased = model.fused_descriptors(y1[:1], k1[:1])
+            assert torch.allclose(fused, fused_biased)
 
 
 def test_position_changes_embedding(batch):
@@ -373,12 +380,16 @@ def test_old_batchnorm_checkpoint_loads_leniently(tmp_path, batch):
     _a.model_type = 'attention'
     _a.target_sz_z, _a.target_sz_xy = 4, 16
     _a.backbone_kwargs = dict(num_levels=2, f_maps=2)
+    _a.fusion_norm = 'layernorm'
+    _a.center_per_volume = True
     with open(tmp_path / 'args.pickle', 'wb') as f:
         pickle.dump(_a, f)
     from barlow_track.utils.barlow import load_barlow_model
     _, reloaded, _ = load_barlow_model(str(wpath))
     assert type(reloaded).__name__ == 'BarlowVolumeAttention'
     reloaded.eval()
+    _dev = next(reloaded.parameters()).device
+    y1, k1 = y1.to(_dev), k1.to(_dev)
     with torch.no_grad():
         d = reloaded.contextual_descriptors(y1, k1)
         assert torch.isfinite(d).all()

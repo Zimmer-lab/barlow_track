@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from barlow_track.utils.utils_3dunet import number_of_features_per_level, ResNetBlockSE, create_encoders
 
@@ -120,8 +121,23 @@ class Abstract3DEncoder(nn.Module):
         # in the last layer a 1×1 convolution reduces the number of output
         # channels to the number of labels
         self.final_conv = nn.Conv3d(f_maps[-1], 1, 1)
-        # Final conv should have
-        self.projection = nn.Sequential(nn.Linear(int(crop_sz.prod()/8), embedding_dim), nn.Sigmoid())
+        # Flatten size depends on depth: each encoder level after the first
+        # halves each spatial dim (MaxPool3d(2)), so the old hardcoded
+        # `crop_sz.prod()/8` was only valid for num_levels=2. Probe the true
+        # size with a dummy forward so any num_levels works.
+        try:
+            _spatial = tuple(int(v) for v in list(crop_sz))
+        except TypeError:
+            raise ValueError(
+                f"crop_sz must be an array-like of spatial dims, got {crop_sz!r}"
+            )
+        with torch.no_grad():
+            _dummy = torch.zeros(1, in_channels, *_spatial)
+            for _enc in self.encoders:
+                _dummy = _enc(_dummy)
+            _dummy = self.final_conv(_dummy)
+            _flat = _dummy.numel() // _dummy.shape[0]
+        self.projection = nn.Sequential(nn.Linear(_flat, embedding_dim), nn.Sigmoid())
 
         self.embedding_dim = embedding_dim
         # for m in self.modules():

@@ -3,7 +3,8 @@ warnings.filterwarnings('ignore')
 import pandas as pd
 from wbfm.utils.projects.finished_project_data import ProjectData
 from wbfm.utils.neuron_matching.utils_candidate_matches import rename_columns_using_matching
-from barlow_track.utils.utils_ground_truth import calculate_accuracy, pad_with_nan_rows
+from barlow_track.utils.utils_ground_truth import (
+    calculate_accuracy, pad_with_nan_rows, align_gt_pred_time_index)
 
 pairs = {
     'zimmer': ('/lisc/data/scratch/neurobiology/zimmer/fieseler/wbfm_projects/manually_annotated/paper_data/ZIM2165_Gcamp7b_worm1-2022_11_28_updated_format/project_config.yaml',
@@ -21,12 +22,16 @@ for lab, (gt_cfg, pred_h5) in pairs.items():
         df_gt = g.final_tracks
     print(f'loading {lab} pred...', flush=True)
     df_pred = pd.read_hdf(pred_h5)
+    df_gt, df_pred = align_gt_pred_time_index(df_gt, df_pred)
     max_len = max(len(df_pred), len(df_gt))
     df_pred = pad_with_nan_rows(df_pred, max_len)
     df_gt = pad_with_nan_rows(df_gt, max_len)
-    df_r, _, _, _ = rename_columns_using_matching(df_gt, df_pred, column='raw_segmentation_id')
+    df_r, _, _, _ = rename_columns_using_matching(
+        df_gt, df_pred, column='raw_segmentation_id', try_to_fix_inf=True)
+    if 'unmatched_neuron' in df_r.columns.get_level_values(0):
+        df_r = df_r.drop(columns='unmatched_neuron')
     cgt = df_gt.loc[:, (slice(None), 'raw_segmentation_id')].droplevel(1, axis=1)
     cpr = df_r.loc[:, (slice(None), 'raw_segmentation_id')].droplevel(1, axis=1)
     s = calculate_accuracy(cgt, cpr)
     print(f'{lab}: STORED untrained accuracy = {float(s["accuracy"]):.4f} '
-          f'(miss={s["misses"]}, mismatch={s["mismatches"]}, total={s["total_ground_truth"]})', flush=True)
+          f'(miss={s["total_misses"]}, mismatch={s["total_mismatches"]}, total={s["total_ground_truth"]})', flush=True)

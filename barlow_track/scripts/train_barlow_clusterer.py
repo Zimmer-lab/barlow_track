@@ -148,17 +148,17 @@ def train_barlow_network(args):
 
                 if step % args.print_freq == 0 or step == 0:
                     if args.rank == 0:
-                        # Just print
+                        # Just print (train_* keys match the val_*/test_* convention)
                         stats = dict(epoch=epoch, step=step,
-                                     loss=loss.item(), loss_original=loss_original.item(), loss_transpose=loss_transpose.item(),
+                                     train_loss=loss.item(), train_loss_original=loss_original.item(), train_loss_transpose=loss_transpose.item(),
                                      time=int(time.time() - start_time))
                         if loss_match is not None:
-                            stats['loss_match'] = loss_match.item()
+                            stats['train_loss_match'] = loss_match.item()
                         print(json.dumps(stats))
                         json_stats.append(stats)
 
                         # wandb logging
-                        train_losses = {"loss": loss.item(), "loss_original": loss_original.item(), "loss_transpose": loss_transpose.item()}
+                        train_losses = {"train_loss": loss.item(), "train_loss_original": loss_original.item(), "train_loss_transpose": loss_transpose.item()}
                         if run is not None:
                             run.log(train_losses)
 

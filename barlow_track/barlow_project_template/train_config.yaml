@@ -40,6 +40,16 @@ train_fraction: 0.8  # If > 1, interpreted as number of volumes not a fraction
 val_fraction: 0.15    # 0.15 of 200 = 30 val volumes; 10 was too noisy an objective
 # Remainder is test set
 
+# Reproducibility. One seed fixes the volume selection, the train/val/test
+# split, the augmentation stream of every view and the model initialization:
+# rerunning with the same seed reproduces the run (dataloader order and GPU
+# non-determinism aside). Change it for an independent replicate.
+seed: 43
+# Loader processes for step-1 augmentation. Safe w.r.t. reproducibility
+# (augmentation is keyed by seed+epoch+index, not by a per-worker stream), but
+# each worker holds one volume in memory, so raise it only when RAM allows.
+num_workers: 0
+
 # Hyperparameters for the new (transposed) BarlowTrack loss
 lambd_obj: 0.67  # Set to 1 to only use the transposed loss; 0 means only original BarlowTwins loss
 # Optional separate off-diagonal weight for the object-space loss (default: falls back to lambd).

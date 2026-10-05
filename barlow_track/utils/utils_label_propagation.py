@@ -8,13 +8,17 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 
-def build_knn_graph(X, k=20):
+def build_knn_graph(X, k=20, random_state=None):
     """
     X: np.ndarray (N, d) embeddings
     k: number of neighbors
+    random_state: seed for NNDescent's initial random forest / random projections.
+        None leaves pynndescent unseeded, i.e. the SAME input can give a
+        different graph on every run (pynndescent only needs the seed to be
+        fixed; the propagation downstream is deterministic given the graph).
     Returns PyTorch Geometric edge_index
     """
-    index = NNDescent(X, n_neighbors=k, metric="euclidean")
+    index = NNDescent(X, n_neighbors=k, metric="euclidean", random_state=random_state)
     neighbors, _ = index.neighbor_graph
 
     rows, cols = [], []
@@ -186,14 +190,18 @@ def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k
         return top_labels, top_probs  # (N, k), (N, k)
 
 
-def multi_seed_propagation(X, slices, time_index_to_linear_feature_indices, k=20, device=None, **kwargs):
+def multi_seed_propagation(X, slices, time_index_to_linear_feature_indices, k=20, device=None,
+                           random_state=None, **kwargs):
     """Propagate labels from each seed time; device=None keeps the CPU backup path.
 
     The kNN graph is built once on CPU; with a device, edge weights move there
     once (adjacency normalization hoisted out of the per-seed loop) and results
     come back as numpy either way.
+
+    random_state is forwarded to the kNN graph builder: the graph is the only
+    random step here, so fixing it makes the whole multi-seed run reproducible.
     """
-    edge_index = build_knn_graph(X, k=k)
+    edge_index = build_knn_graph(X, k=k, random_state=random_state)
     if device is not None:
         edge_index = edge_index.to(device)
     edge_index, edge_norm = normalized_adjacency(edge_index)

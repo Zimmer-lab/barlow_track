@@ -1,7 +1,6 @@
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-import random
 import numpy as np
 import pandas as pd
 from backports.cached_property import cached_property
@@ -16,7 +15,26 @@ from wbfm.utils.neuron_matching.utils_candidate_matches import rename_columns_us
 from wbfm.utils.external.utils_neuron_names import int2name_neuron
 
 from barlow_track.utils.utils_label_propagation import align_all, multi_seed_propagation
+from barlow_track.utils.utils_seeding import python_rng
 from barlow_track.utils.utils_spectral_relabeling import spectral_sync_from_topk
+
+
+def select_seed_times(time_index_to_linear_feature_indices, num_seeds=None, seed=None):
+    """Deterministically pick the time points label propagation starts from.
+
+    Same seed -> same list (in the same order); different seeds -> different
+    subsets. ``seed=None`` is deliberately unseeded (historical behaviour), so
+    callers that want reproducibility must pass a seed rather than rely on a
+    global ``random.seed``.
+    """
+    timepoints = list(time_index_to_linear_feature_indices.keys())
+    if not timepoints:
+        return []
+    if num_seeds is None:
+        num_seeds = min(100, int(0.5 * (max(timepoints) + 1)))
+    rng = python_rng(seed)
+    rng.shuffle(timepoints)
+    return timepoints[:num_seeds]
 
 
 @dataclass
@@ -34,6 +52,12 @@ class WormClusterTracker:
     opt_umap: dict = None
     opt_db: dict = None
     svd_components: int = 50
+
+    # Single seed for every random choice this tracker makes: the seed times of
+    # label propagation, the kNN graph (pynndescent), and the UMAP projection.
+    # None (default) keeps the historical unseeded behaviour; set it (directly
+    # or via a config file) and repeated runs give identical tracks.
+    seed: int = None
 
     # Saving info after the tracking is done
     df_global: pd.DataFrame = None
@@ -74,7 +98,7 @@ class WormClusterTracker:
 
         if self.opt_umap is not None:
             default_opt_umap.update(self.opt_umap)
-        self.opt_umap = default_opt_umap
+        self.opt_umap = self.seeded_umap_options(default_opt_umap)
 
         if self.tracker_stride is None:
             self.tracker_stride = int(0.5 * self.n_volumes_per_window)
@@ -83,6 +107,21 @@ class WormClusterTracker:
             logging.warning(f"n_volumes_per_window ({self.n_volumes_per_window}) is greater than num_frames "
                             f"({self.num_frames}); setting to num_frames.")
             self.n_volumes_per_window = self.num_frames
+
+    def seeded_umap_options(self, opt_umap):
+        """UMAP kwargs with `random_state` pinned to the tracker seed.
+
+        UMAP is stochastic (random initial layout + negative sampling), so the
+        same embeddings project differently on every run unless random_state is
+        fixed. A random_state already present in the config always wins, and
+        trackers without a seed are left unseeded (historical behaviour).
+        HDBSCAN, by contrast, has no RNG, so it needs nothing here.
+        """
+        if self.seed is None:
+            return opt_umap
+        if opt_umap.get('random_state', None) is None:
+            opt_umap = {**opt_umap, 'random_state': int(self.seed)}
+        return opt_umap
 
     @property
     def global_vol_ind(self):
@@ -448,6 +487,7 @@ class WormClusterTracker:
             opt_umap = self.opt_umap
         else:
             self.opt_umap = opt_umap
+        opt_umap = self.seeded_umap_options(opt_umap)
 
         # Do umap projection
         if umap_projection:
@@ -476,32 +516,41 @@ class WormClusterTracker:
         return df_cluster
     
     def track_using_label_propagation_clusterer(self, num_seeds=None, num_neighbors=20, umap_projection=False, use_spectral_relabeling=True,
-                                                return_top_k=2, num_layers=100, softmax=False, tau=0.02, device=None):
+                                                return_top_k=2, num_layers=100, softmax=False, tau=0.02, device=None,
+                                                seed=None):
         """
         Tracks objects by generating clusters via label propagation, starting with detected objects at random seed time points
 
         These clusters are then aligned via two-step hungarian matching. For each labeling:
             Match labels to a reference labeling
             Then update the reference labeling by matching for each time slice
+
+        The two random steps are the seed-time draw and the kNN graph. Both are
+        driven by one seed: the `seed` argument wins over the tracker's `seed`
+        attribute, and if neither is set the run stays unseeded (as before).
         """
-        timepoints = list(self.time_index_to_linear_feature_indices.keys())
-        random.shuffle(timepoints)
+        run_seed = self.seed if seed is None else seed
         if num_seeds is None:
+            # Historical default, kept as-is: it is a fraction of num_frames,
+            # not of the number of keys in the time index.
             num_seeds = min(100, int(0.5 * self.num_frames))
-        seed_times = timepoints[:num_seeds]
+        seed_times = select_seed_times(self.time_index_to_linear_feature_indices,
+                                       num_seeds=num_seeds, seed=run_seed)
 
         if umap_projection:
-            print(f"Doing UMAP projection with options: {self.opt_umap}")
+            opt_umap = self.seeded_umap_options(self.opt_umap)
+            print(f"Doing UMAP projection with options: {opt_umap}")
             from umap import UMAP
-            umap = UMAP(**self.opt_umap)
+            umap = UMAP(**opt_umap)
             X_umap = umap.fit_transform(self.X_svd)
             self.X_umap = X_umap
+            X = X_umap
         else:
             X = self.X_svd
 
         # All the labelings, starting from different seeds
         labelings, probabilities = multi_seed_propagation(X, seed_times, self.time_index_to_linear_feature_indices, k=num_neighbors,
-                                                          device=device,
+                                                          device=device, random_state=run_seed,
                                                           return_top_k=return_top_k, num_layers=num_layers, softmax=softmax, tau=tau)
 
         # Align all of the different labelings

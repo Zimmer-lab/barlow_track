@@ -150,7 +150,11 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
         # Get tracker parameters from yaml file
         tracker_cfg = project_config.get_tracking_config()
         tracker_opt = dict(opt_umap=tracker_cfg.config.get('opt_umap', dict()),
-                        opt_db=tracker_cfg.config.get('opt_db', dict()))
+                        opt_db=tracker_cfg.config.get('opt_db', dict()),
+                        # A `seed` in the tracking config makes the run reproducible:
+                        # it fixes the label-propagation seed times, the kNN graph and
+                        # the UMAP projection. No seed = unseeded, as before.
+                        seed=tracker_cfg.config.get('seed', None))
 
         # Save embeddings and trackers
         svd_components = 50 if project_data.num_frames > 500 else int(project_data.num_frames / 10)
@@ -166,7 +170,7 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
         if do_svd:
             project_config.logger.info(f"Truncating feature space using {svd_components} PCA components "
                                     f"(original matrix size: {X.shape})")
-            X_svd = _robust_svd(X, svd_components)
+            X_svd = _robust_svd(X, svd_components, random_state=tracker_opt['seed'])
             project_config.logger.info(f"Finished truncation")
 
             tracker = WormClusterTracker(X_svd, **opt)
@@ -181,7 +185,7 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
                                   subfolder=results_subfolder_full)
 
 
-def _robust_svd(X, svd_components):
+def _robust_svd(X, svd_components, random_state=None):
 
     # Use dask to do the SVD, because it may be very very tall
     if X.shape[0] > 10000:
@@ -190,7 +194,10 @@ def _robust_svd(X, svd_components):
         u, s, v = da.linalg.svd(X_dask)
         X_svd = np.array(u[:, :svd_components].compute())
     else:
-        alg = TruncatedSVD(n_components=svd_components)
+        # The randomized solver starts from a random projection: without
+        # random_state the descriptor space (and hence every track) moves
+        # slightly between runs on identical input.
+        alg = TruncatedSVD(n_components=svd_components, random_state=random_state)
         X_svd = alg.fit_transform(X)
     return X_svd
 
@@ -377,6 +384,13 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
         linear_ind_to_gt_ind, linear_ind_to_t_and_seg_id, time_index_to_linear_feature_indices, X = build_embedding_metadata(
             all_embeddings, project_data)
 
+        # Get tracker parameters from yaml file (read before the SVD: its seed
+        # is reused for the randomized SVD below)
+        tracker_cfg = project_config.get_tracking_config()
+        tracker_opt = dict(opt_umap=tracker_cfg.config.get('opt_umap', dict()),
+                        opt_db=tracker_cfg.config.get('opt_db', dict()),
+                        seed=tracker_cfg.config.get('seed', None))
+
         svd_components = 50
         X = np.vstack(X)
         # X = np.vstack([np.vstack(list(emb.values())) for emb in all_embeddings.values()])
@@ -389,14 +403,9 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
             u, s, v = da.linalg.svd(X_dask)
             X_svd = np.array(u[:, :svd_components].compute())
         else:
-            alg = TruncatedSVD(n_components=svd_components)
+            alg = TruncatedSVD(n_components=svd_components, random_state=tracker_opt['seed'])
             X_svd = alg.fit_transform(X)
         project_config.logger.info(f"Finished truncation")
-
-        # Get tracker parameters from yaml file
-        tracker_cfg = project_config.get_tracking_config()
-        tracker_opt = dict(opt_umap=tracker_cfg.config.get('opt_umap', dict()),
-                        opt_db=tracker_cfg.config.get('opt_db', dict()))
 
         # Save embeddings and trackers
         opt = dict(time_index_to_linear_feature_indices=time_index_to_linear_feature_indices,

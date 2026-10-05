@@ -16,7 +16,7 @@ wandb_username: null  # Account name
 ####
 
 # Architecture
-projector: '2048-2048'  # Original paper argued that larger final size is better
+projector: '1024-1024'  # Halved from the paper's 2048: full size memorizes small (<200 vol) training sets
 projector_final: 512
 embedding_dim: 64  # Projector also gets an additional first layer of size 'embedding_dim'
 
@@ -47,13 +47,13 @@ std_RandomNoise: 0.25
 # Optimization hyperparameters
 lambd: 0.0051
 batch_size: 1  # This should stay; one volume = one batch
-weight_decay: 1.0e-6  # Actually passed to Adam (previously listed but ignored); NOTE: must keep the decimal point so yaml.safe_load parses it as float, not str
+weight_decay: 1.0e-4  # Actually passed to Adam (previously listed but ignored); NOTE: must keep the decimal point so yaml.safe_load parses it as float, not str
 epochs: 20
 lr: 0.0001
 
-num_frames: 100
+num_frames: 200  # More volumes resist memorization; val scales with it below
 train_fraction: 0.8  # If > 1, interpreted as number of volumes not a fraction
-val_fraction: 0.1    # If > 1, interpreted as number of volumes not a fraction
+val_fraction: 0.15    # 0.15 of 200 = 30 val volumes; 10 was too noisy an objective
 # Remainder is test set
 
 # Hyperparameters for the new (transposed) BarlowTrack loss
@@ -92,7 +92,7 @@ crop_photometric:
 # per view and the loss is computed on the surviving intersection.
 position_augment:
   jitter_std: 1.0
-  dropout_p: 0.2
+  dropout_p: 0.1
   min_keep: 2
 
 # Debugging and logging parameters

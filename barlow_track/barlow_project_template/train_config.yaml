@@ -18,7 +18,7 @@ wandb_username: null  # Account name
 # Architecture
 projector: '1024-1024'  # Halved from the paper's 2048: full size memorizes small (<200 vol) training sets
 projector_final: 512
-projector_norm: layernorm  # hidden-layer norm: 'layernorm' (current default) | 'batchnorm' (paper regime) | 'none'
+projector_norm: batchnorm  # hidden-layer norm: 'batchnorm' (paper regime, default) | 'layernorm' | 'none'
 embedding_dim: 64  # Projector also gets an additional first layer of size 'embedding_dim'
 
 backbone_kwargs:

@@ -3,6 +3,7 @@ import concurrent.futures
 import gc
 from operator import is_
 from pathlib import Path
+import re
 import numpy as np
 import torch
 from torch import nn, optim
@@ -42,14 +43,11 @@ class BarlowTwins3d(nn.Module):
             # Otherwise assume it's all in the original projector string
             sizes += [args.projector_final]
         # NOTE: hidden-layer norm is switchable (projector_norm). The paper
-        # era used BatchNorm1d; Oct-2026 switched the default to LayerNorm on
-        # the theory that BN across a single volume destroys volume-level
-        # information. Empirically the LN era stalls (flat high loss), so both
-        # are kept: 'batchnorm' reproduces the paper regime (batch stats in
-        # train, running stats in eval), 'layernorm' is per-neuron (no batch
-        # interaction, train==eval). The Barlow loss standardizes per-dim
-        # downstream either way; 'none' is accepted for ablations.
-        proj_norm = getattr(args, 'projector_norm', 'layernorm')
+        # era used BatchNorm1d, which is the default (batch stats in train,
+        # running stats in eval). 'layernorm' is per-neuron (no batch
+        # interaction, train==eval); 'none' is accepted for ablations. The
+        # Barlow loss standardizes per-dim downstream either way.
+        proj_norm = getattr(args, 'projector_norm', 'batchnorm')
         layers = []
         for i in range(len(sizes) - 2):
             layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
@@ -483,6 +481,12 @@ def compare_model_architecture(expected_args, pretrained_args):
         curr, pre = _get_arg(expected_args, field), _get_arg(pretrained_args, field)
         if curr is not None and pre is not None and curr != pre:
             mismatches.append(f"{field}: config={curr!r} vs checkpoint={pre!r}")
+    # Fresh-training default is batchnorm (paper regime); checkpoints without
+    # the field are pinned from their weights in load_barlow_model.
+    curr_pn, pre_pn = _get_arg(expected_args, 'projector_norm', 'batchnorm'), \
+        _get_arg(pretrained_args, 'projector_norm', 'batchnorm')
+    if curr_pn != pre_pn:
+        mismatches.append(f"projector_norm: config={curr_pn!r} vs checkpoint={pre_pn!r}")
     curr_lv, curr_fm = _backbone_params(expected_args)
     pre_lv, pre_fm = _backbone_params(pretrained_args)
     if curr_lv != pre_lv:
@@ -510,6 +514,10 @@ def compare_model_architecture(expected_args, pretrained_args):
             list(_get_arg(pretrained_args, 'keypoint_encoder_layers', [32, 64]))
         if curr_k != pre_k:
             mismatches.append(f"keypoint_encoder_layers: config={curr_k!r} vs checkpoint={pre_k!r}")
+        curr_pe, pre_pe = _get_arg(expected_args, 'position_encoder', 'keypoint_mlp'), \
+            _get_arg(pretrained_args, 'position_encoder', 'keypoint_mlp')
+        if curr_pe != pre_pe:
+            mismatches.append(f"position_encoder: config={curr_pe!r} vs checkpoint={pre_pe!r}")
     if exp_type == 'attention' or pre_type == 'attention':
         curr_s, pre_s = int(_get_arg(expected_args, 'self_layers', 2)), \
             int(_get_arg(pretrained_args, 'self_layers', 2))
@@ -561,6 +569,14 @@ def load_barlow_model(model_fname, expected_args=None):
         _set_arg(args, 'fusion_norm', 'layernorm' if _has_norm else 'none')
     if _get_arg(args, 'center_per_volume', None) is None:
         _set_arg(args, 'center_per_volume', False)
+    if _get_arg(args, 'projector_norm', None) is None:
+        # Infer from the weights: BN checkpoints carry running-stat buffers
+        # under projector.*, LN ones carry projector.1.weight without them,
+        # and 'none' has no projector.1 params at all.
+        _has_bn = any('projector.' in k and '.running_mean' in k for k in state_dict.keys())
+        _has_norm = any(re.fullmatch(r'(.*\.)?projector\.1\.weight', k or '')
+                        for k in state_dict.keys())
+        _set_arg(args, 'projector_norm', 'batchnorm' if _has_bn else ('layernorm' if _has_norm else 'none'))
     if expected_args is not None:
         mismatches = compare_model_architecture(expected_args, args)
         if mismatches:

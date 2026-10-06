@@ -271,6 +271,36 @@ def canonicalize_keypoints(kpts, eps=1e-6):
     return (kpts - mu) / s
 
 
+class ViSNetPositionEncoder(nn.Module):
+    """Rotation/translation-invariant position descriptors via ViSNet.
+
+    Each neuron is an "atom" of a single pseudo-element; invariant scalar
+    node features from ViSNetBlock (relative vectors + spherical harmonics)
+    are projected to the descriptor dim. Invariant to translation and
+    rotation by construction; NOT scale-invariant (inputs are the usual
+    volume-normalized keypoints, so scale is fixed per dataset -- combine
+    with canonicalize_keypoints for scale removal). Replaces KeypointEncoder
+    when position_encoder='visnet'. cutoff covers the normalized volume
+    diameter, so the graph is fully connected (no isolated nodes).
+    """
+    def __init__(self, output_dim, hidden_channels=64, num_layers=3, cutoff=4.0,
+                 max_num_neighbors=64):
+        super().__init__()
+        from torch_geometric.nn.models import ViSNet
+        self.repr = ViSNet(lmax=1, num_heads=4, num_layers=num_layers,
+                           hidden_channels=hidden_channels, cutoff=cutoff,
+                           max_num_neighbors=max_num_neighbors).representation_model
+        self.head = nn.Linear(hidden_channels, output_dim)
+
+    def forward(self, kpts):
+        # kpts: (N, 3) float; returns (N, output_dim)
+        dev = kpts.device
+        z = torch.zeros(kpts.shape[0], dtype=torch.long, device=dev)
+        batch = torch.zeros(kpts.shape[0], dtype=torch.long, device=dev)
+        x, _ = self.repr(z, kpts.float(), batch)
+        return self.head(x)
+
+
 class BarlowWithPosition(BarlowTwins3d):
     """BarlowTwins3d + KeypointEncoder position fusion (Step 2)."""
 
@@ -287,6 +317,16 @@ class BarlowWithPosition(BarlowTwins3d):
         self.fusion_norm = fusion_norm or getattr(args, 'fusion_norm', 'layernorm')
         layers = keypoint_layers or list(getattr(args, 'keypoint_encoder_layers', [32, 64]))
         self.kenc = KeypointEncoder(embedding_dim, layers)
+        # Alternate rotation-invariant position branch (default keypoint_mlp
+        # keeps legacy behavior; see ViSNetPositionEncoder).
+        self.pos_encoder = getattr(args, 'position_encoder', 'keypoint_mlp')
+        if self.pos_encoder == 'visnet':
+            self.visnet_enc = ViSNetPositionEncoder(
+                embedding_dim,
+                hidden_channels=int(getattr(args, 'visnet_hidden', 64)),
+                num_layers=int(getattr(args, 'visnet_layers', 3)))
+        elif self.pos_encoder != 'keypoint_mlp':
+            raise ValueError(f"Unknown position_encoder '{self.pos_encoder}'; use 'keypoint_mlp' or 'visnet'")
         self.norm_visual = _make_norm(self.fusion_norm, embedding_dim)
         self.norm_pos = _make_norm(self.fusion_norm, embedding_dim)
         if self.fusion == 'concat':
@@ -318,6 +358,8 @@ class BarlowWithPosition(BarlowTwins3d):
             return kpts.new_zeros((kpts.shape[0], self.embedding_dim))
         if getattr(self.args, 'canonicalize_keypoints', False):
             kpts = canonicalize_keypoints(kpts)
+        if getattr(self, 'pos_encoder', 'keypoint_mlp') == 'visnet':
+            return self.visnet_enc(kpts)
         if scores is None:
             scores = kpts.new_ones(kpts.shape[0])
         k = kpts.reshape(1, 1, -1, 3)

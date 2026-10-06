@@ -12,6 +12,7 @@ extraction; those are position-agnostic.
 
 Legacy classes are untouched; use `VolumeCoordsDataModule` to opt in.
 """
+import contextlib
 import logging
 import random
 from typing import Optional
@@ -27,6 +28,7 @@ from tqdm.auto import tqdm
 
 from barlow_track.utils.data_loading import get_3d_crop_using_bbox_or_centroid
 from barlow_track.utils.superglue import normalize_keypoints
+from barlow_track.utils.utils_seeding import TORCH_SEED_BITS, derive_seed
 
 
 DEFAULT_GLOBAL_ARGS = dict(
@@ -248,6 +250,19 @@ def extract_crops(volume, points_zxy, target_sz):
     return np.stack(crops, 0) if crops else np.zeros((0, *tuple(int(v) for v in target_sz)), dtype=np.float32)
 
 
+@contextlib.contextmanager
+def _seeded_torch_rng(seed):
+    """Deterministic GLOBAL torch RNG for the wrapped block.
+
+    Needed because torchio's random transforms (blur/noise) draw from torch's
+    global stream, not from a RandomState we own. `devices=[]` keeps the fork
+    CPU-only; the crop tensors are CPU here.
+    """
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(seed)
+        yield
+
+
 class VolumeCoordsDataset(Dataset):
     """Lazy dataset of full volumes + coordinates; crops extracted AFTER augmentation.
 
@@ -260,16 +275,29 @@ class VolumeCoordsDataset(Dataset):
             transformed centroid falls outside the volume are also dropped
             here (same idx mechanism), so N1/N2 vary with the augmentation.
     Volumes are loaded on demand (NOT pre-stacked) so RAM stays ~1 volume.
+
+    Reproducibility: every augmentation draw for item `i` comes from a private
+    ``np.random.RandomState`` derived from (seed, epoch, i), and the torchio
+    photometrics from a torch seed derived the same way. So one (seed, epoch,
+    index) always produces the same two views, whatever the DataLoader worker
+    count or sampling order. A single long-lived RandomState would not: each
+    DataLoader worker would fork an identical copy (workers duplicating each
+    other's augmentation) and the stream would drift with the number of
+    workers. ``set_epoch`` is what rotates augmentation between epochs.
     """
 
     def __init__(self, project_data, frame_indices, target_sz,
-                 global_args=None, photometric_args=None, position_args=None, seed=0):
+                 global_args=None, photometric_args=None, position_args=None, seed=0, epoch=0):
         self.project_data = project_data
         self.frame_indices = list(frame_indices)
         self.target_sz = np.array(target_sz)
         self.global_args = {**DEFAULT_GLOBAL_ARGS, **(global_args or {})}
         self.position_args = {**DEFAULT_POSITION_ARGS, **(position_args or {})}
-        self.rng = np.random.RandomState(seed)
+        self.seed = int(seed)
+        self.epoch = int(epoch)
+        # Kept only as a fallback for anything reading self.rng outside
+        # __getitem__; the per-item stream is set there.
+        self.rng = np.random.RandomState(derive_seed(self.seed, self.epoch))
         self.crop_transform = build_photometric_transform(photometric_args)
         # Precompute (cheap) centroids; volumes stay on disk until __getitem__
         self._centroids, self._seg_ids = [], []
@@ -288,12 +316,29 @@ class VolumeCoordsDataset(Dataset):
     def num_objects(self, idx):
         return len(self._centroids[idx])
 
+    def set_epoch(self, epoch):
+        """Rotate the augmentation stream for a new epoch (see class docstring)."""
+        self.epoch = int(epoch)
+
+    def _item_seeds(self, idx):
+        """(numpy, torch) seeds for this item: (base seed, epoch, index)."""
+        # Modulo folds negative indices (Dataset allows them) onto positions.
+        pos = int(idx) % max(len(self.frame_indices), 1)
+        return (derive_seed(self.seed, self.epoch, pos),
+                derive_seed(self.seed, self.epoch, pos, 'torch', bits=TORCH_SEED_BITS))
+
     def __getitem__(self, idx):
         t = int(self.frame_indices[idx])
         volume = load_volume(self.project_data, t)
         points = self._centroids[idx].astype(float)
-        y1, k1, i1 = self._augmented_view(volume, points)
-        y2, k2, i2 = self._augmented_view(volume, points)
+        np_seed, torch_seed = self._item_seeds(idx)
+        # Fresh, index-specific RNGs (see class docstring): the two views still
+        # differ from each other because they draw from the same fresh stream
+        # in sequence, but the pair is reproducible across workers and epochs.
+        self.rng = np.random.RandomState(np_seed)
+        with _seeded_torch_rng(torch_seed):
+            y1, k1, i1 = self._augmented_view(volume, points)
+            y2, k2, i2 = self._augmented_view(volume, points)
         return y1, y2, k1, k2, i1, i2
 
     def _augmented_view(self, volume, points):
@@ -353,6 +398,24 @@ def _num_centroids_safe(project_data, t):
         return 0
 
 
+def make_worker_init_fn(base_seed, epoch):
+    """`worker_init_fn` factory: reseed each worker's GLOBAL streams.
+
+    The dataset's own geometry RNG is per-item and needs nothing here, but
+    torchio transforms and the legacy paths read the global numpy / python /
+    torch streams, which every worker would otherwise inherit identically from
+    the forking parent. (torch seeds its workers too, but from the main
+    process's torch stream, which is only reproducible if the entry point seeded
+    it -- see utils_seeding.seed_all.)
+    """
+    def _init(worker_id):
+        np.random.seed(derive_seed(base_seed, epoch, worker_id))
+        random.seed(derive_seed(base_seed, epoch, worker_id, 'py'))
+        torch.manual_seed(derive_seed(base_seed, epoch, worker_id, 'torch',
+                                      bits=TORCH_SEED_BITS))
+    return _init
+  
+  
 def _resolve_split_count(frac_or_count, n, name="split"):
     """Fraction (<=1.0) -> int(n * f); absolute count (>1) -> int(f), clamped to n."""
     try:
@@ -373,11 +436,17 @@ def _resolve_split_count(frac_or_count, n, name="split"):
 
 
 class VolumeCoordsDataModule(LightningDataModule):
-    """Train/val/test splits over frames, mirroring NeuronCropImageDataModule."""
+    """Train/val/test splits over frames, mirroring NeuronCropImageDataModule.
+
+    One `seed` fixes the frame selection, the train/val/test split, and the
+    augmentation stream (`num_workers` included, since augmentation is keyed by
+    (seed, epoch, index) rather than by a stream that workers fork).
+    """
 
     def __init__(self, project_data=None, num_frames=100, batch_size=1,
                  train_fraction=0.8, val_fraction=0.1, target_sz=(8, 64, 64),
-                 global_args=None, photometric_args=None, position_args=None, seed=0):
+                 global_args=None, photometric_args=None, position_args=None, seed=0,
+                 num_workers=0):
         super().__init__()
         self.project_data = project_data
         self.num_frames = num_frames
@@ -388,7 +457,18 @@ class VolumeCoordsDataModule(LightningDataModule):
         self.global_args = global_args
         self.photometric_args = photometric_args
         self.position_args = position_args
-        self.seed = seed
+        self.seed = int(seed)
+        self.num_workers = int(num_workers)
+
+    def _current_epoch(self):
+        """Epoch Lightning is currently in; 0 before/without a trainer."""
+        trainer = getattr(self, 'trainer', None)
+        return int(getattr(trainer, 'current_epoch', 0) or 0)
+
+    def _set_epoch(self, epoch):
+        ds = getattr(self.train_dataset, 'dataset', self.train_dataset)  # unwrap Subset
+        if hasattr(ds, 'set_epoch'):
+            ds.set_epoch(epoch)
 
     def setup(self, stage: Optional[str] = None):
         max_frames = self.project_data.num_frames
@@ -405,10 +485,12 @@ class VolumeCoordsDataModule(LightningDataModule):
         alldata = VolumeCoordsDataset(self.project_data, frames, self.target_sz,
                                       global_args=self.global_args,
                                       photometric_args=self.photometric_args,
-                                      position_args=self.position_args, seed=self.seed)
+                                      position_args=self.position_args, seed=self.seed,
+                                      epoch=self._current_epoch())
         n = len(alldata)
         if n == 0:
             raise ValueError("VolumeCoordsDataModule.setup: no valid frames found")
+        
         n_train = _resolve_split_count(self.train_fraction, n, name="train_fraction")
         n_val = _resolve_split_count(self.val_fraction, n, name="val_fraction")
         if n_train >= n:
@@ -426,17 +508,32 @@ class VolumeCoordsDataModule(LightningDataModule):
                 n_val = n - n_train
             n_test = n - n_train - n_val
         splits = [n_train, n_val, n_test]
-        self.train_dataset, self.val_dataset, self.test_dataset = random_split(alldata, splits)
+        
+        # random_split draws from a torch Generator; without one the split
+        # changes every run even with a fixed seed.
+        split_gen = torch.Generator()
+        split_gen.manual_seed(derive_seed(self.seed, 'split', bits=TORCH_SEED_BITS))
+        
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(
+            alldata, splits, generator=split_gen)
         self.alldata = alldata
 
+    def _dataloader(self, dataset):
+        return DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+                          collate_fn=_collate_single,
+                          worker_init_fn=make_worker_init_fn(self.seed, self._current_epoch()))
+
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, collate_fn=_collate_single)
+        # Augmentation rotates per epoch (Lightning rebuilds the loader each
+        # epoch), but stays a deterministic function of (seed, epoch, index).
+        self._set_epoch(self._current_epoch())
+        return self._dataloader(self.train_dataset)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, collate_fn=_collate_single)
+        return self._dataloader(self.val_dataset)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, collate_fn=_collate_single)
+        return self._dataloader(self.test_dataset)
 
 
 def _collate_single(batch):

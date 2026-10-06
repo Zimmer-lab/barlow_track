@@ -367,6 +367,12 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         time.sleep(10 if (DEBUG or run_locally) else 10*60)
 
     out = ax_client.get_best_parameters()
+    if out is None:
+        # No trial produced usable data (all failed or were cancelled).
+        # The per-trial logs have the real errors; do not write a bogus file.
+        print("No completed trials with data; cannot determine best parameters. "
+              "Check the trial log files for errors.", flush=True)
+        return
     if len(out) == 4:
         best_parameters, mean_and_variance, best_trial_index, best_trial_name = out
     elif len(out) == 2:

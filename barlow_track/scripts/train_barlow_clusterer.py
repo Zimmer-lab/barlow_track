@@ -2,6 +2,7 @@
 import argparse
 import json
 import logging
+import math
 import os
 import pickle
 import time
@@ -128,6 +129,8 @@ def train_barlow_network(args):
         json_stats.append(dict(run_name="Non-wandb-run", run_id=None))
 
     num_skipped_batches = 0
+    prev_gate = None  # previous attention-gate value, for update magnitudes
+    gate_grad_norm = None  # captured after backward, before grads are cleared
     try:
         for epoch in range(0, args.epochs):
             for step, batch in enumerate(loader, start=epoch * len(loader)):
@@ -142,6 +145,14 @@ def train_barlow_network(args):
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
+                    # Attention-gate diagnostic: capture before grads are cleared.
+                    # (With self_layers=0 the gate is structurally unused, so a
+                    # frozen gate there is expected, not saturation.)
+                    gate_param = getattr(model, 'attn_gate', None)
+                    if gate_param is not None and gate_param.grad is not None:
+                        gate_grad_norm = float(gate_param.grad.norm().detach().cpu())
+                    else:
+                        gate_grad_norm = None
                     optimizer.zero_grad(set_to_none=True)
                 else:
                     num_skipped_batches += 1
@@ -154,6 +165,36 @@ def train_barlow_network(args):
                                      time=int(time.time() - start_time))
                         if loss_match is not None:
                             stats['train_loss_match'] = loss_match.item()
+                        # Attention-gate diagnostics: raw value, sigmoid, grad
+                        # norm, and update since last print. A gate frozen with
+                        # ~zero grad norm is saturated/starved; frozen WITHOUT
+                        # a gate in the graph (self_layers=0) is structural.
+                        gate_param = getattr(model, 'attn_gate', None)
+                        if gate_param is not None:
+                            gate_val = float(gate_param.detach().cpu())
+                            gate_sig = 1.0 / (1.0 + math.exp(-gate_val))
+                            stats['attn_gate'] = gate_val
+                            stats['attn_gate_sigmoid'] = gate_sig
+                            stats['attn_gate_grad_norm'] = gate_grad_norm
+                            stats['attn_gate_update'] = (abs(gate_val - prev_gate)
+                                                         if prev_gate is not None else None)
+                            prev_gate = gate_val
+                        # Standardization health probe: one extra no-grad embedding
+                        # pair per print; measures clamp-hit rate and per-dim
+                        # variance spectrum of exactly what the loss correlates
+                        # (see standardization_health). Cheap: runs print_freq.
+                        try:
+                            from barlow_track.utils.barlow_superglue import standardization_health
+                            with torch.no_grad():
+                                if use_position:
+                                    pz1 = model.embed_with_position(batch[0].to(gpu), batch[2].to(gpu))
+                                    pz2 = model.embed_with_position(batch[1].to(gpu), batch[3].to(gpu))
+                                else:
+                                    pz1, pz2 = model.embed(*_format_vectors_on_gpu(batch[0], batch[1], gpu))
+                                for _k, _v in standardization_health(pz1, pz2).items():
+                                    stats[f"train_{_k}"] = _v
+                        except (RuntimeError, ValueError, IndexError, AttributeError) as e:
+                            logging.warning(f"Standardization probe failed: {e}")
                         print(json.dumps(stats))
                         json_stats.append(stats)
 
@@ -293,9 +334,25 @@ def _validation_descriptor_diagnostics(model, data_module, gpu, use_position):
 
     if not use_position or not hasattr(model, 'fused_descriptors'):
         gate = getattr(model, 'attn_gate', None)
+        out = {}
         if gate is not None:
-            return {'attn_gate': float(_torch.sigmoid(gate.detach()).cpu())}
-        return {}
+            out = {'attn_gate': float(_torch.sigmoid(gate.detach()).cpu())}
+        # Standardization health on the first usable validation volume
+        # (legacy path mirrors _run_forward's formatting).
+        try:
+            from barlow_track.utils.barlow_superglue import standardization_health
+            with _torch.no_grad():
+                for batch in data_module.val_dataloader():
+                    vy1, vy2 = _format_vectors_on_gpu(batch[0], batch[1], gpu)
+                    if vy1.shape[0] < 2:
+                        continue
+                    for _k, _v in standardization_health(
+                            model.embed(vy1), model.embed(vy2)).items():
+                        out[f"val_{_k}"] = _v
+                    break
+        except (RuntimeError, ValueError, IndexError, AttributeError):
+            pass
+        return out
     from barlow_track.utils.barlow_superglue import volume_descriptor_diagnostics
     with _torch.no_grad():
         for batch in data_module.val_dataloader():
@@ -303,7 +360,18 @@ def _validation_descriptor_diagnostics(model, data_module, gpu, use_position):
             if y1.shape[0] < 2:
                 continue
             diag = volume_descriptor_diagnostics(model, y1, k1)
-            return {k: (float(v) if v == v else float('nan')) for k, v in diag.items()}
+            out = {k: (float(v) if v == v else float('nan')) for k, v in diag.items()}
+            # Standardization health on the same volume (both views, as the
+            # loss sees them).
+            try:
+                from barlow_track.utils.barlow_superglue import standardization_health
+                z1 = model.embed_with_position(y1, k1)
+                z2 = model.embed_with_position(batch[1].to(gpu), batch[3].to(gpu))
+                for _k, _v in standardization_health(z1, z2).items():
+                    out[f"val_{_k}"] = _v
+            except (RuntimeError, ValueError, IndexError, AttributeError):
+                pass
+            return out
     gate = getattr(model, 'attn_gate', None)
     if gate is not None:
         return {'attn_gate': float(_torch.sigmoid(gate.detach()).cpu())}

@@ -18,6 +18,7 @@ wandb_username: null  # Account name
 # Architecture
 projector: '1024-1024'  # Halved from the paper's 2048: full size memorizes small (<200 vol) training sets
 projector_final: 512
+projector_norm: layernorm  # hidden-layer norm: 'layernorm' (current default) | 'batchnorm' (paper regime) | 'none'
 embedding_dim: 64  # Projector also gets an additional first layer of size 'embedding_dim'
 
 backbone_kwargs:
@@ -76,6 +77,13 @@ position_augment:
   jitter_std: 1.0
   dropout_p: 0.4  # Raised from 0.2: views must differ more on small data
   min_keep: 2
+
+# Explicit per-volume coordinate canonicalization at the KENC input:
+# subtract the volume centroid, divide by mean radius (removes translation
+# + overall scale, statelessly, identically in train and eval). This is NOT
+# full affine invariance (rotation/shear remain); it stops asking the
+# pointwise position MLP to learn translation invariance from augmentation.
+canonicalize_keypoints: false
 
 # Per-crop photometric augmentation, applied AFTER cropping (both paths)
 crop_photometric:

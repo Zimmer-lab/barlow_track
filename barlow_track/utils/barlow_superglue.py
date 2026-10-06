@@ -51,6 +51,34 @@ def both_correlation_matrices(z1, z2):
     return c_features, c_objects
 
 
+def standardization_health(z1, z2, clamp_thresh=1e-6):
+    """Pre-standardization batch statistics for the Barlow correlation.
+
+    z1, z2: (N, D) embeddings about to be correlated (same pair the loss
+    uses). Returns plain floats: frac of dims whose bottleneck std hits the
+    loss clamp (std <= thresh in either view), plus min/median/mean/max of
+    the per-dim std spectrum. A rising clamp rate means dims are dying
+    (constant across the batch, so the loss standardizes noise); a
+    collapsing spectrum with a flat loss means the loss has no signal left
+    to descend on. No grad; safe to call on any device.
+    """
+    with torch.no_grad():
+        s1 = z1.float().std(dim=0, unbiased=False)
+        s2 = z2.float().std(dim=0, unbiased=False)
+        s = torch.minimum(s1, s2)  # bottleneck view per dim
+        finite = torch.isfinite(s)
+        if int(finite.sum()) == 0:
+            return dict(clamp_frac=float('nan'), std_min=float('nan'),
+                        std_median=float('nan'), std_mean=float('nan'),
+                        std_max=float('nan'))
+        s = s[finite]
+        return dict(clamp_frac=float((s <= clamp_thresh).float().mean().cpu()),
+                    std_min=float(s.min().cpu()),
+                    std_median=float(s.median().cpu()),
+                    std_mean=float(s.mean().cpu()),
+                    std_max=float(s.max().cpu()))
+
+
 def intersection_gather(idx1, idx2):
     """Align two independent dropout views on their surviving intersection.
 
@@ -228,6 +256,21 @@ def _make_norm(kind, dim):
     raise ValueError(f"Unknown fusion_norm '{kind}'; use 'none', 'layernorm' or 'l2'")
 
 
+def canonicalize_keypoints(kpts, eps=1e-6):
+    """Per-volume data centering + scaling: (p - mu) / (s + eps).
+
+    mu = volume centroid (removes translation), s = mean radius (removes
+    overall scale). Stateless and identical in train and eval. This is NOT
+    full affine invariance -- rotation and shear remain -- it is the stable
+    baseline that stops asking a pointwise MLP to learn translation
+    invariance from augmentation. Applied at the KENC input (see
+    BarlowWithPosition.encode_position) so all callers share it.
+    """
+    mu = kpts.mean(dim=0, keepdim=True)
+    s = (kpts - mu).norm(dim=1).mean().clamp_min(eps)
+    return (kpts - mu) / s
+
+
 class BarlowWithPosition(BarlowTwins3d):
     """BarlowTwins3d + KeypointEncoder position fusion (Step 2)."""
 
@@ -273,6 +316,8 @@ class BarlowWithPosition(BarlowTwins3d):
         """
         if kpts.shape[0] < 2:
             return kpts.new_zeros((kpts.shape[0], self.embedding_dim))
+        if getattr(self.args, 'canonicalize_keypoints', False):
+            kpts = canonicalize_keypoints(kpts)
         if scores is None:
             scores = kpts.new_ones(kpts.shape[0])
         k = kpts.reshape(1, 1, -1, 3)

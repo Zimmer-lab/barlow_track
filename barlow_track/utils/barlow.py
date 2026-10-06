@@ -37,23 +37,30 @@ class BarlowTwins3d(nn.Module):
         self.backbone.fc = nn.Identity()
 
         # projector
-        # NOTE: LayerNorm (per-neuron), NOT BatchNorm. A training batch is a
-        # single volume (rows = neurons of that volume), so BatchNorm would
-        # normalize each feature across the volume — destroying volume-level
-        # information before the loss ever sees it. The Barlow loss would then
-        # be blind to shared volume-mean components and could neither train
-        # on them nor train them away in the pre-projector (tracking) space.
-        # LayerNorm keeps inter-neuron structure intact so the loss pressures
-        # the descriptors we actually track with.
         sizes = [embedding_dim] + list(map(int, args.projector.split('-')))
         if 'projector_final' in vars(args):
             # Otherwise assume it's all in the original projector string
             sizes += [args.projector_final]
-
+        # NOTE: hidden-layer norm is switchable (projector_norm). The paper
+        # era used BatchNorm1d; Oct-2026 switched the default to LayerNorm on
+        # the theory that BN across a single volume destroys volume-level
+        # information. Empirically the LN era stalls (flat high loss), so both
+        # are kept: 'batchnorm' reproduces the paper regime (batch stats in
+        # train, running stats in eval), 'layernorm' is per-neuron (no batch
+        # interaction, train==eval). The Barlow loss standardizes per-dim
+        # downstream either way; 'none' is accepted for ablations.
+        proj_norm = getattr(args, 'projector_norm', 'layernorm')
         layers = []
         for i in range(len(sizes) - 2):
             layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
-            layers.append(nn.LayerNorm(sizes[i + 1]))
+            if proj_norm == 'batchnorm':
+                layers.append(nn.BatchNorm1d(sizes[i + 1]))
+            elif proj_norm == 'layernorm':
+                layers.append(nn.LayerNorm(sizes[i + 1]))
+            elif proj_norm in (None, 'none'):
+                pass
+            else:
+                raise ValueError(f"Unknown projector_norm '{proj_norm}'; use 'batchnorm', 'layernorm' or 'none'")
             layers.append(nn.ReLU(inplace=True))
         layers.append(nn.Linear(sizes[-2], sizes[-1], bias=False))
         self.projector = nn.Sequential(*layers)

@@ -92,6 +92,11 @@ def parse_args():
     parser.add_argument("--num_seeds", type=int, default=25)
     parser.add_argument("--descriptor_stage", default="auto",
                         choices=["auto", "backbone", "fused", "contextual", "projected"])
+    parser.add_argument("--center_per_volume", action="store_true",
+                        help="Subtract the per-frame descriptor mean before tracking "
+                             "(re-scores existing checkpoints for mean pollution)")
+    parser.add_argument("--l2_per_volume", action="store_true",
+                        help="Row-wise L2-normalize descriptors before tracking")
     parser.add_argument("--debug", action="store_true",
                         help="Print commands without running them, and verify the torch --device actually loads")
     parser.add_argument("--jobs", type=int, default=None,
@@ -317,6 +322,10 @@ def main():
                 cmd += ["--project", os.path.join(spec["project"], "project_config.yaml")]
             if args.max_frames is not None:
                 cmd += ["--max_frames", str(args.max_frames)]
+            if args.center_per_volume:
+                cmd += ["--center_per_volume"]
+            if args.l2_per_volume:
+                cmd += ["--l2_per_volume"]
             tasks.append((lab, trial_num, tag, cmd))
     tags = [(lab, trial_num, tag) for lab, trial_num, tag, _ in tasks]
 

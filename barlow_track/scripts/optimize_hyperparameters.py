@@ -3,6 +3,7 @@
 import argparse
 import logging
 import os
+import copy
 # This script only dispatches jobs; its own BLAS thread pools must stay tiny
 # or imports (scipy via ax/botorch) can exhaust threads on login nodes
 # ("pthread_create failed ... Resource temporarily unavailable").
@@ -87,6 +88,9 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         run_locally = True
     if hyperparameter_path is None:
         raise ValueError("Please provide a hyperparameter template path")
+    if os.path.isdir(hyperparameter_path):
+        # Convenience: point at a sweep folder and pick up its template.
+        hyperparameter_path = os.path.join(hyperparameter_path, 'hyperparameter_search_template.yaml')
     with open(hyperparameter_path, 'r') as f:
         hyperparameter_args = yaml.safe_load(f)
 
@@ -159,7 +163,10 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 param.setdefault('is_ordered', False)
     ax_client.create_experiment(
         name="my_experiment",
-        parameters=parameters,
+        # Deep-copy: create_experiment() mutates these dicts in place (e.g.
+        # single-value choices become fixed parameters), which would corrupt
+        # the direct/one-at-a-time sweep logic below that reads the originals.
+        parameters=copy.deepcopy(parameters),
         objectives={"result": ObjectiveProperties(minimize=True)},
     )
 
@@ -225,7 +232,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 # List of lists, which will be combined into a grid
                 all_param_lists.append(param['values'])
             else:
-                raise ValueError("For direct parameter sweep, all parameters must be of type 'choice'")
+                raise ValueError(f"For direct parameter sweep, all parameters must be of type 'choice'; got {param['type']} for parameter {param['name']}")
         
         # Make a grid of all combinations as a dict of parameter name to value
         all_combinations = list(product(*all_param_lists))

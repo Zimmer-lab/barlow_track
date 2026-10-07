@@ -109,6 +109,16 @@ crop_photometric:
 ####
 use_position: true  # If true: global-before-crop aug + KeypointEncoder fusion
 use_attention: true # If true (requires use_position): intra-volume self-attention embeddings
+# Position branch encoder: 'keypoint_mlp' (pointwise MLP on xyz; NOT rotation
+# invariant) | 'visnet' (ViSNet rotation/translation-invariant graph encoder).
+# Only used when use_position is true; combine with canonicalize_keypoints
+# for scale handling (ViSNet is not scale-invariant).
+position_encoder: keypoint_mlp
+# Position branch encoder: 'keypoint_mlp' (pointwise MLP on xyz; NOT rotation
+# invariant) | 'visnet' (ViSNet rotation/translation-invariant graph encoder).
+# Only used when use_position is true; combine with canonicalize_keypoints
+# for scale handling (ViSNet is not scale-invariant).
+position_encoder: keypoint_mlp
 fusion: concat       # 'concat' (default) | 'add' (SuperGlue-style) | 'position_only' (geometry benchmark)
 fusion_norm: layernorm # per-branch norm before fusion: 'layernorm' (recommended) | 'l2' | 'none' (legacy)
 self_layers: 2       # number of intra-volume self-attention layers (attention models)

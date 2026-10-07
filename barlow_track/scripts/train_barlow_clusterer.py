@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import pickle
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -143,6 +144,17 @@ def train_barlow_network(args):
         for epoch in range(0, args.epochs):
             for step, batch in enumerate(loader, start=epoch * len(loader)):
                 loss, loss_original, loss_transpose, loss_match = _run_forward(model, batch, gpu, use_position)
+
+                # Crash on non-finite loss: stepping on NaN poisons the whole
+                # model (gate and all) and wastes the trial producing a
+                # garbage checkpoint. Degenerate grad-free batches are still
+                # skipped below; this only fires when a real step would run.
+                if loss.requires_grad and not bool(torch.isfinite(loss).detach().cpu()):
+                    raise RuntimeError(
+                        f"Non-finite training loss at epoch {epoch} step {step}: "
+                        f"loss={loss.item()}, original={loss_original.item()}, "
+                        f"transpose={loss_transpose.item()}. Aborting the trial; "
+                        f"no checkpoint is saved.")
 
                 # Degenerate batches (a view with <2 objects, or an empty
                 # dropout intersection) yield a grad-free zero loss; skip the
@@ -315,10 +327,20 @@ def train_barlow_network(args):
             print(json.dumps(json_stats), file=f)
 
         if args.rank == 0:
-            # save final model (not in checkpoint dir)
-            fname = get_sequential_filename(args.project_dir + '/resnet50.pth')
-            torch.save(model.state_dict(), fname)
-            args.model_fname = fname
+            # Never save a model from a crashed trial (e.g. non-finite loss):
+            # a poisoned checkpoint would silently pass the "has resnet50.pth"
+            # check and get benchmarked as if trained. Interrupt/OOM keep the
+            # legacy save-what-we-have behavior.
+            _exc = sys.exc_info()[1]
+            _crashed = (_exc is not None
+                        and not isinstance(_exc, (KeyboardInterrupt, torch.cuda.OutOfMemoryError)))
+            if _crashed:
+                logging.warning(f"Not saving model: trial crashed with {_exc!r}")
+            else:
+                # save final model (not in checkpoint dir)
+                fname = get_sequential_filename(args.project_dir + '/resnet50.pth')
+                torch.save(model.state_dict(), fname)
+                args.model_fname = fname
 
         # Also save the args namespace
         fname = get_sequential_filename(args.project_dir + '/args.pickle')

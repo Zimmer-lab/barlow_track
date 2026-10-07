@@ -365,11 +365,17 @@ class ViSNetPositionEncoder(nn.Module):
     rotation by construction; NOT scale-invariant (inputs are the usual
     volume-normalized keypoints, so scale is fixed per dataset -- combine
     with canonicalize_keypoints for scale removal). Replaces KeypointEncoder
-    when position_encoder='visnet'. cutoff covers the normalized volume
-    diameter, so the graph is fully connected (no isolated nodes).
+    when position_encoder='visnet'.
+
+    The cutoff MUST be local (default 0.35 on the unit-normalized volume):
+    a volume-covering cutoff makes every node sum ~150 messages per layer
+    and activations explode to ~1e18 by layer 3, NaN'ing the final LayerNorm
+    in float32 (seen as all-NaN losses). Local neighborhoods are also the
+    intended GNN inductive bias. Self-loops (pyg default) keep isolated
+    nodes safe.
     """
-    def __init__(self, output_dim, hidden_channels=64, num_layers=3, cutoff=4.0,
-                 max_num_neighbors=64):
+    def __init__(self, output_dim, hidden_channels=64, num_layers=3, cutoff=0.35,
+                 max_num_neighbors=32):
         super().__init__()
         # Radius-graph fallback is installed at module import (see
         # _USING_RADIUS_FALLBACK below); nothing to do here.
@@ -411,7 +417,9 @@ class BarlowWithPosition(BarlowTwins3d):
             self.visnet_enc = ViSNetPositionEncoder(
                 embedding_dim,
                 hidden_channels=int(getattr(args, 'visnet_hidden', 64)),
-                num_layers=int(getattr(args, 'visnet_layers', 3)))
+                num_layers=int(getattr(args, 'visnet_layers', 3)),
+                cutoff=float(getattr(args, 'visnet_cutoff', 0.35)),
+                max_num_neighbors=int(getattr(args, 'visnet_neighbors', 32)))
         elif self.pos_encoder != 'keypoint_mlp':
             raise ValueError(f"Unknown position_encoder '{self.pos_encoder}'; use 'keypoint_mlp' or 'visnet'")
         self.norm_visual = _make_norm(self.fusion_norm, embedding_dim)

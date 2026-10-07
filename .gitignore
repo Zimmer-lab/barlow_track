@@ -183,3 +183,6 @@ barlow_track/notebooks/wandb
 .vscode
 .zprofile
 .zshrc
+
+# AI stuff
+AGENTS.md

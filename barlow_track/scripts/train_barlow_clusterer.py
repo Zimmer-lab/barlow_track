@@ -198,7 +198,10 @@ def train_barlow_network(args):
                                     pz1 = model.embed_with_position(batch[0].to(gpu), batch[2].to(gpu))
                                     pz2 = model.embed_with_position(batch[1].to(gpu), batch[3].to(gpu))
                                 else:
-                                    pz1, pz2 = model.embed(*_format_vectors_on_gpu(batch[0], batch[1], gpu))
+                                    # Image-only model: embed() takes a single
+                                    # view (cf. _correlation_for_plot below).
+                                    vy1, vy2 = _format_vectors_on_gpu(batch[0], batch[1], gpu)
+                                    pz1, pz2 = model.embed(vy1), model.embed(vy2)
                                 for _k, _v in standardization_health(pz1, pz2).items():
                                     stats[f"train_{_k}"] = _v
                         except (RuntimeError, ValueError, IndexError, AttributeError) as e:

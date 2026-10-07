@@ -39,6 +39,91 @@ from barlow_track.utils.superglue import (
 )
 
 
+def _pure_torch_radius_graph(x, r, batch=None, loop=False,
+                             max_num_neighbors=None, flow='source_to_target',
+                             num_workers=1, batch_size=None):
+    """Pure-torch stand-in for torch_cluster.radius_graph.
+
+    Same contract: all same-batch pairs within radius r (self-loops iff
+    loop), closest max_num_neighbors per source row when set, returns
+    edge_index [2, E] on x's device. O(N^2) memory -- fine for the
+    ~10^2 nodes per volume here, and exact top-k (the compiled CPU kernel
+    is documented quadrant-biased with max_num_neighbors set).
+    """
+    n = x.shape[0]
+    dev = x.device
+    if batch is None:
+        batch = torch.zeros(n, dtype=torch.long, device=dev)
+    else:
+        batch = batch.to(dev)
+    dist = torch.cdist(x.float(), x.float())
+    adj = (batch.unsqueeze(1) == batch.unsqueeze(0)) & (dist <= r)
+    if not loop:
+        adj.fill_diagonal_(False)
+    if max_num_neighbors is not None and max_num_neighbors < n:
+        # Exact top-k per TARGET node (edge_index[1]), matching the compiled
+        # kernel's capping axis (degrees match; subset identity can differ on
+        # ties, and the CPU kernel is documented quadrant-biased in any case).
+        capped = torch.where(adj, dist,
+                             torch.full_like(dist, float('inf')))
+        k = min(max_num_neighbors, n)
+        _, idx = torch.topk(capped, k, dim=0, largest=False, sorted=False)
+        valid = capped.gather(0, idx) < float('inf')
+        cols = torch.arange(n, device=dev).unsqueeze(0).expand(k, -1)
+        adj = torch.zeros_like(adj)
+        adj[idx[valid], cols[valid]] = True
+    edge_index = adj.nonzero().t().contiguous()
+    if flow == 'target_to_source':
+        edge_index = edge_index.flip(0)
+    return edge_index
+
+
+def _ensure_radius_graph():
+    """Provide radius_graph even where torch-cluster is not installed.
+
+    Only registers a sys.modules stub -- deliberately does NOT import
+    torch_geometric here: pyg must run its own package init first (its
+    modules read torch_geometric.typing as a package attribute, which only
+    exists once its __init__ has run past its own typing import). With the
+    stub in place, pyg's lazy `import torch_cluster` resolves to the
+    pure-torch implementation and everything downstream behaves.
+    No-op when the compiled package exists.
+    """
+    try:
+        import torch_cluster  # noqa: F401
+        return False
+    except ImportError:
+        pass
+    import sys
+    import types
+    stub = types.ModuleType('torch_cluster')
+    stub.radius_graph = _pure_torch_radius_graph
+
+    def _unimplemented(name):
+        def _knn_stub(*args, **kwargs):
+            """batch_size aware (this stub accepts and ignores batch_size)."""
+            raise NotImplementedError(
+                f"torch-cluster is not installed; only radius_graph is "
+                f"stubbed (called {name})")
+        _knn_stub.__doc__ = 'batch_size aware stub'
+        return _knn_stub
+    # Names pyg imports at module level (from torch_cluster import ...).
+    # Only radius_graph is really implemented; the rest exist so those
+    # imports succeed, and fail loudly only if actually called.
+    for _name in ('knn', 'knn_graph', 'random_walk', 'grid_cluster',
+                  'graclus_cluster', 'fps', 'nearest'):
+        setattr(stub, _name, _unimplemented(_name))
+    sys.modules['torch_cluster'] = stub
+    return True
+
+
+# Install the stub at import time (not lazily): torch_geometric resolves
+# 'torch-cluster' during its own package init, so the stub must already be in
+# sys.modules no matter who imports pyg first. No-op if the real package
+# exists; torch_geometric itself stays an optional (lazy) dependency.
+_USING_RADIUS_FALLBACK = _ensure_radius_graph()
+
+
 def both_correlation_matrices(z1, z2):
     """Feature-space (DxD) and object-space (NxN) cross-correlation matrices."""
     z1_norm = (z1 - z1.mean(0)) / z1.std(0, unbiased=False).clamp_min(1e-6)
@@ -286,6 +371,8 @@ class ViSNetPositionEncoder(nn.Module):
     def __init__(self, output_dim, hidden_channels=64, num_layers=3, cutoff=4.0,
                  max_num_neighbors=64):
         super().__init__()
+        # Radius-graph fallback is installed at module import (see
+        # _USING_RADIUS_FALLBACK below); nothing to do here.
         from torch_geometric.nn.models import ViSNet
         self.repr = ViSNet(lmax=1, num_heads=4, num_layers=num_layers,
                            hidden_channels=hidden_channels, cutoff=cutoff,

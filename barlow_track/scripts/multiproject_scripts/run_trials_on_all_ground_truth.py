@@ -377,8 +377,14 @@ def main():
                         break
     print(f"\n{'=' * 60}\nSummary (from {results_jsonl}):")
     print(f"{'dataset':<14}{'trial':<8}{'accuracy':<10}{'miss':<8}{'mismatch':<10}n_frames")
-    with open(results_jsonl) as f:
-        records = [json.loads(line) for line in f if line.strip()]
+    try:
+        with open(results_jsonl) as f:
+            records = [json.loads(line) for line in f if line.strip()]
+    except FileNotFoundError:
+        # Fail-fast (or a cluster-wide kill) can leave zero completed
+        # evaluations; report cleanly instead of crashing on the summary.
+        print(f"No results file (no evaluation completed): {results_jsonl}")
+        records = []
     run_records = []
     for lab, trial_num, tag in tags:
         matches = [r for r in records if r.get("tag") == tag]
@@ -397,6 +403,9 @@ def main():
     with open(unified_json, "w") as f:
         json.dump(run_records, f, indent=2)
     print(f"Unified JSON ({len(run_records)} records) written to {unified_json}")
+    if failures or not run_records:
+        raise SystemExit(f"Benchmark incomplete: {len(failures)} failures, "
+                         f"{len(run_records)}/{len(tags)} records")
 
 
 if __name__ == "__main__":

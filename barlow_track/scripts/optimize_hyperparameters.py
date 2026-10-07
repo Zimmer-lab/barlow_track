@@ -225,15 +225,15 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
 
     if direct_parameter_sweep:
         # Manually define all the trials as all combinations
+        all_param_lists = []
         for param in parameters:
-            all_param_lists = []
             if param['type'] == 'choice':
                 assert 'values' in param, "For direct parameter sweep, the parameter must have a list of values"
                 # List of lists, which will be combined into a grid
                 all_param_lists.append(param['values'])
             else:
                 raise ValueError(f"For direct parameter sweep, all parameters must be of type 'choice'; got {param['type']} for parameter {param['name']}")
-        
+
         # Make a grid of all combinations as a dict of parameter name to value
         all_combinations = list(product(*all_param_lists))
         all_combinations = [{parameters[i]['name']: v for i, v in enumerate(comb)} for comb in all_combinations]
@@ -263,6 +263,11 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         n_unique_configs = len(all_combinations)
         all_combinations = all_combinations * repetitions
         total_budget = len(all_combinations)
+        # Audit trail: the exact grid being run (names AND values). Miswired
+        # name/value pairings here have silently mistargeted sweeps before.
+        print(f"Direct sweep plan ({total_budget} jobs):", flush=True)
+        for _i, _c in enumerate(all_combinations):
+            print(f"  job {_i}: " + ", ".join(f"{k}={v!r}" for k, v in _c.items()), flush=True)
 
     if num_parallel_jobs is None:
         num_parallel_jobs = 1 if (DEBUG or run_locally) else 10

@@ -8,6 +8,9 @@ propagation, and appends an accuracy record (tagged per trial) to a JSONL file.
 Run on a GPU node (embedding is ~10-50x faster than CPU):
     python run_trials_on_all_ground_truth.py --trial_parent_dir <dir> --trials 0 1 --device cuda
 
+All trials in the folder with a model file on all datasets:
+    python run_trials_on_all_ground_truth.py --trial_parent_dir <dir> --all --device cuda
+
 Top-K sweep winners on all datasets (default set):
     python run_trials_on_all_ground_truth.py --trial_parent_dir <sweep_dir> --top_k 3 --device cuda
 
@@ -69,6 +72,9 @@ def parse_args():
                         help="Folder with trial_N subfolders (each with resnet50.pth)")
     parser.add_argument("--trials", nargs="+", type=int, default=None,
                         help="Which trials to run, e.g. --trials 0 1 (default: all with a model file)")
+    parser.add_argument("--all", dest="run_all", action="store_true",
+                        help="Run every trial_N with a model file (same as omitting --trials; "
+                             "mutually exclusive with --trials)")
     parser.add_argument("--top_k", type=int, default=None,
                         help="Take the top-K trials by test_loss (fallback: last val_loss) from the "
                              "sweep in --trial_parent_dir instead of --trials (trained mode only)")
@@ -288,10 +294,12 @@ def main():
     if args.top_k is not None:
         if args.mode != "trained":
             raise SystemExit("--top_k only applies to --mode trained")
-        if args.trials is not None:
-            print("WARNING: --trials ignored because --top_k was given")
+        if args.trials is not None or args.run_all:
+            print("WARNING: --trials/--all ignored because --top_k was given")
         trials = top_k_trials(trial_parent_dir, args.top_k, args.model_fname)
     else:
+        if args.run_all and args.trials is not None:
+            raise SystemExit("--all and --trials are mutually exclusive; use one or the other")
         trials = resolve_trials(trial_parent_dir, args.trials, args.model_fname)
     if args.mode == "trained" and not trials:
         raise SystemExit("No runnable trials found.")

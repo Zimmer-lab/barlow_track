@@ -124,6 +124,10 @@ def parse_args():
     parser.add_argument("--no_fail_fast", dest="fail_fast", action="store_false",
                         help="keep running remaining evaluations even if one fails")
     parser.set_defaults(fail_fast=True)
+    parser.add_argument("--rerun_completed", action="store_true",
+                        help="re-run (trial, dataset) tags already present in --results_jsonl "
+                             "(default is to skip them, so a killed run resumes; reruns "
+                             "overwrite the old records instead of appending duplicates)")
     return parser.parse_args()
 
 
@@ -314,6 +318,30 @@ def main():
     else:
         # Untrained reference baselines: one run per dataset, no checkpoint.
         trial_jobs = [(lab, None, f"untrained_{args.mode}_{lab}", None) for lab in labs]
+    def _recorded_tags(path):
+        """Tags already in the results file ({} if none). Tolerates junk lines."""
+        done = set()
+        if os.path.isfile(path):
+            with open(path) as f:
+                for line in f:
+                    if line.strip():
+                        try:
+                            done.add(json.loads(line).get("tag"))
+                        except (json.JSONDecodeError, AttributeError):
+                            pass
+        return done
+
+    if not args.rerun_completed:
+        done = _recorded_tags(results_jsonl)
+        before = len(trial_jobs)
+        trial_jobs = [t for t in trial_jobs if t[2] not in done]
+        skipped = before - len(trial_jobs)
+        if skipped:
+            print(f"Skipping {skipped}/{before} evaluations already recorded "
+                  f"(pass --rerun_completed to redo them); {len(trial_jobs)} remaining")
+        if not trial_jobs:
+            print("Nothing left to run.")
+            return
     for lab, trial_num, tag, weights in trial_jobs:
             spec = DATASETS[lab]
             cmd = [sys.executable, "-u", EVAL_SCRIPT, "--lab", LAB_FOR_DATASET[lab],
@@ -385,6 +413,24 @@ def main():
         # evaluations; report cleanly instead of crashing on the summary.
         print(f"No results file (no evaluation completed): {results_jsonl}")
         records = []
+    if records:
+        # Overwrite, don't accumulate: reruns append duplicates (workers share
+        # one file), so collapse to the latest record per tag in place.
+        # Tagless lines are malformed; keep them untouched, never merged.
+        latest = {}
+        untagged = []
+        for rec in records:
+            if rec.get("tag") is None:
+                untagged.append(rec)
+            else:
+                latest[rec["tag"]] = rec
+        merged = list(latest.values()) + untagged
+        if len(merged) != len(records):
+            with open(results_jsonl, "w") as f:
+                for rec in merged:
+                    f.write(json.dumps(rec) + "\n")
+            print(f"Deduplicated {results_jsonl}: {len(records)} -> {len(merged)} records")
+            records = merged
     run_records = []
     for lab, trial_num, tag in tags:
         matches = [r for r in records if r.get("tag") == tag]

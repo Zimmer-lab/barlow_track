@@ -28,6 +28,7 @@ import json
 import os
 import time
 from collections import defaultdict
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -355,9 +356,35 @@ def _iter_nwb_frames(nwb_project, arrays, target_sz, normalizer, frame_list, dev
         yield dict(t=t, crops=crops, kpts=kpts, meta=meta_l)
 
 
-def main():
+def resolve_track_device(args, embed_device):
+    """Torch device for label propagation, or None to keep it on the CPU.
+
+    The tracker takes None as "CPU backup". Full-video kNN graphs carry
+    100k-200k nodes and every propagation step allocates dense (N x classes)
+    matrices plus sparse-matmul temporaries, so propagating on a 12 GB GPU
+    OOMs partway into a video -- which in a sweep means a wasted trial. CPU
+    propagation is also the configuration that produced every measured
+    full-video number in the exp_results*.jsonl files.
+    """
+    requested = getattr(args, 'track_device', None) or 'embed_device'
+    if requested == 'embed_device':
+        return embed_device if embed_device.type == 'cuda' else None
+    dev = torch.device(requested)
+    if dev.type != 'cuda':
+        return None
+    if not torch.cuda.is_available():
+        print(f"--track_device {requested} requested but CUDA is unavailable; tracking on CPU",
+              flush=True)
+        return None
+    return dev
+
+
+def _parse_args(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument('--lab', required=True, choices=list(LABS))
+    ap.add_argument('--lab', default=None, choices=list(LABS),
+                    help='dataset entry used for the default project/NWB/weights paths and as the '
+                         'record label. Required unless --mode trained is combined with --weights '
+                         'plus explicit --project/--nwb and --gt (as the in-sweep objective does)')
     ap.add_argument('--source', choices=['project', 'nwb'], default='project',
                     help="frame data source: 'project' crops via segmentation metadata; "
                          "'nwb' crops around GT xyz from the GT NWB itself (use for leifer, "
@@ -384,8 +411,19 @@ def main():
                     help='row-wise L2-normalize descriptors before saving embeddings')
     ap.add_argument('--device', default='cpu',
                     help="torch device for embedding (use 'cuda' on a GPU node)")
+    ap.add_argument('--track_device', choices=['embed_device', 'cpu', 'cuda'],
+                    default='embed_device',
+                    help='device for label propagation / tracking. Full-video kNN graphs have '
+                         '100k-200k nodes and each propagation step allocates dense (N x classes) '
+                         'matrices, so on a small GPU this OOMs mid-video; use --track_device cpu '
+                         'to embed on the GPU but track on the CPU (what the in-sweep accuracy '
+                         'objective does, and how every measured full-video number was produced)')
     ap.add_argument('--project', default=None,
                     help="override working-copy project for --source project (default: the lab entry)")
+    ap.add_argument('--gt', default=None,
+                    help='override the ground truth used for scoring (default: the lab entry\'s gt). '
+                         'Pass the same path as --project to score a checkpoint on its own training '
+                         'project instead of on a held-out dataset')
     ap.add_argument('--results_jsonl', default=None,
                     help='where to append result records (default: /tmp/claude/exp_results.jsonl)')
     ap.add_argument('--emb_dir', default=None,
@@ -393,8 +431,42 @@ def main():
     ap.add_argument('--tag', default=None,
                     help='label recorded with each result and added to embedding cache filenames '
                          '(use e.g. the trial name so caches from different checkpoints do not collide)')
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    _check_args(args)
+    return args
 
+
+def _check_args(args):
+    """Fail with an actionable message when paths cannot be resolved.
+
+    --mode trained is self-contained: it needs a checkpoint, a frame source and
+    a ground truth, all of which can be given explicitly (that is how the
+    in-sweep objective calls it), so --lab is not needed. Every other mode
+    evaluates the lab's reference weights, which requires a --lab.
+    """
+    spec = LABS.get(args.lab, {}) if args.lab else {}
+    if args.mode == 'trained':
+        if not args.weights:
+            raise SystemExit('--mode trained requires --weights')
+        if args.source == 'nwb':
+            missing = not (args.nwb or spec.get('gt'))
+        else:
+            missing = not (args.project or spec.get('project'))
+        if missing or not (args.gt or spec.get('gt')):
+            raise SystemExit(
+                '--mode trained needs an explicit frame source and ground truth when --lab is '
+                'not given: pass --project + --gt (source project) or --nwb + --gt (source nwb)')
+    elif not spec:
+        raise SystemExit(f'--mode {args.mode} requires --lab (one of {list(LABS)}), because it '
+                         f'evaluates that lab\'s reference weights')
+
+
+def run_eval(args):
+    """Embed + track + score as described by ``args``; returns the records.
+
+    Importable counterpart of the CLI (see evaluate_trained_checkpoint). One
+    record per mode, also appended to ``args.results_jsonl``.
+    """
     import warnings
     warnings.filterwarnings('ignore')
     # One seed for everything. seed_all covers the parts that still read global
@@ -411,13 +483,14 @@ def main():
     from wbfm.utils.neuron_matching.utils_candidate_matches import rename_columns_using_matching
     import torchio as tio
 
-    spec = LABS[args.lab]
+    spec = LABS.get(args.lab, {}) if args.lab else {}
     t0 = time.time()
-    nwb_path = args.nwb or spec['gt']
+    gt_path = args.gt or spec.get('gt')
+    nwb_path = args.nwb or gt_path
     if args.source == 'nwb' and not str(nwb_path).endswith('.nwb'):
         raise ValueError(f"--source nwb needs an NWB file, got {nwb_path!r} (pass --nwb)")
     # Embedding source: working-copy project, or the GT NWB itself.
-    project_path = args.project or spec['project']
+    project_path = args.project or spec.get('project')
     src_data = ProjectData.load_final_project_data(
         nwb_path if args.source == 'nwb' else project_path,
         allow_hybrid_loading=True, verbose=0)
@@ -428,7 +501,6 @@ def main():
         tmodel = tmodel.to(device).eval()
         t_target_sz = np.array(getattr(targs, 'target_sz', [targs.target_sz_z, targs.target_sz_xy, targs.target_sz_xy]))
     if args.mode == 'trained':
-        assert args.weights, '--mode trained requires --weights'
         # The checkpoint carries its own architecture; the lab reference
         # weights are unused here, so don't load them (also avoids stale-arch
         # migration warnings for legacy reference checkpoints).
@@ -454,7 +526,6 @@ def main():
     # trustworthy trained-model comparison is --mode trained (with
     # --descriptor_stage backbone/fused/contextual/projected), which embeds
     # with the checkpoint's own heads and args.
-    from types import SimpleNamespace
     from barlow_track.utils.siamese import ResidualEncoder3D
     fargs = SimpleNamespace(embedding_dim=margs.embedding_dim, projector=margs.projector,
                             projector_final=margs.projector_final, lambd=0.0051, lambd_obj=0.67,
@@ -495,6 +566,7 @@ def main():
                                                      device=device)
 
     modes = ['image', 'position'] if args.mode == 'both' else [args.mode]
+    records = []
     for mode in modes:
         suffix = f"{mode}_stage{args.descriptor_stage}" if mode == 'trained' and args.descriptor_stage != 'auto' else mode
         if args.fuse_norm and mode == 'position':
@@ -508,14 +580,15 @@ def main():
         tag_suffix = f"_{args.tag}" if args.tag else ""
         emb_path = os.path.join(emb_dir, f'emb_{args.lab}_{suffix}{tag_suffix}.npz')
         if args.skip_embed and os.path.exists(emb_path):
-            d = np.load(emb_path, allow_pickle=True)
-            X, time_to_lin, lin_to_t_seg = d['X'], d['time_to_lin'].item(), d['lin_to_t_seg'].item()
-            # Older leifer-script caches lack n_frames; fall back to frame count.
-            n_frames = int(d['n_frames']) if 'n_frames' in d else len(time_to_lin)
-            print(f"[{args.lab}/{mode}] loaded saved embeddings {X.shape}", flush=True)
-            did_embed = False
+            cached = _load_cached_embeddings(emb_path, expected_n_frames=n_frames)
+            if cached is not None:
+                X, time_to_lin, lin_to_t_seg, n_frames = cached
+                did_embed = False
+            else:
+                did_embed = True
         else:
             did_embed = True
+        if did_embed:
             t1 = time.time()
             X_parts, time_to_lin, lin_to_t_seg = [], defaultdict(list), {}
             i_lin = 0
@@ -536,7 +609,8 @@ def main():
         if did_embed:
             X = np.vstack(X_parts)
             print(f"[{args.lab}/{mode}] embedded {n_frames} frames, {X.shape} in {time.time()-t1:.0f}s", flush=True)
-            np.savez(emb_path, X=X, time_to_lin=dict(time_to_lin), lin_to_t_seg=lin_to_t_seg, n_frames=n_frames)
+            _save_embeddings(emb_path, X=X, time_to_lin=dict(time_to_lin),
+                             lin_to_t_seg=lin_to_t_seg, n_frames=n_frames)
             # Fail here with the trial tag, not pages later inside sklearn:
             # non-finite embeddings mean a poisoned/NaN checkpoint.
             n_bad = int(np.isnan(X).sum())
@@ -557,7 +631,7 @@ def main():
         # only for quick debugging).
         if args.cluster == 'labelprop':
             df_pred = tracker.track_using_label_propagation_clusterer(
-                num_seeds=args.num_seeds, device=device if device.type == 'cuda' else None)
+                num_seeds=args.num_seeds, device=resolve_track_device(args, device))
         else:
             df_pred = tracker.track_using_global_clusterer()
         print(f"[{args.lab}/{mode}] tracked in {time.time()-t2:.0f}s; df {df_pred.shape}", flush=True)
@@ -583,7 +657,7 @@ def main():
             from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind
             df_pred = add_metadata_to_df_raw_ind(df_pred, src_data.segmentation_metadata)
             # Accuracy vs GT on raw_segmentation_id level (paper recipe)
-            gt_data = ProjectData.load_final_project_data(spec['gt'], allow_hybrid_loading=True, verbose=0)
+            gt_data = ProjectData.load_final_project_data(gt_path, allow_hybrid_loading=True, verbose=0)
             df_gt = gt_data.get_final_tracks_only_finished_neurons()[0]
             if df_gt is None or df_gt.empty:
                 df_gt = gt_data.final_tracks
@@ -620,23 +694,114 @@ def main():
                 import yaml
                 with open(cfg_path) as f:
                     train_config = yaml.safe_load(f)
-        log_result(dict(lab=args.lab, mode=mode, seed=args.seed, n_frames=n_frames,
-                        source=args.source,
-                        tag=args.tag, weights=os.path.abspath(args.weights) if args.weights else None,
-                        train_config=train_config,
-                        cluster=args.cluster, num_seeds=args.num_seeds,
-                        fuse_norm=bool(args.fuse_norm and mode == 'position'),
-                        fusion=_fusion,
-                        head_init='trained' if mode == 'trained' else 'random-backbone-only',
-                        descriptor_stage=args.descriptor_stage if mode == 'trained' else None,
-                        center_per_volume=bool(args.center_per_volume),
-                        l2_per_volume=bool(args.l2_per_volume),
-                        accuracy=float(stats['accuracy']),
-                        misses=int(stats['total_misses']),
-                        mismatches=int(stats['total_mismatches']),
-                        total=int(stats['total_ground_truth']),
-                        minutes=(time.time() - t0) / 60),
-                     args.results_jsonl)
+        rec = dict(lab=args.lab, mode=mode, seed=args.seed, n_frames=n_frames,
+                   source=args.source,
+                   project=project_path if args.source == 'project' else None,
+                   gt=gt_path,
+                   tag=args.tag, weights=os.path.abspath(args.weights) if args.weights else None,
+                   train_config=train_config,
+                   cluster=args.cluster, num_seeds=args.num_seeds,
+                   fuse_norm=bool(args.fuse_norm and mode == 'position'),
+                   fusion=_fusion,
+                   head_init='trained' if mode == 'trained' else 'random-backbone-only',
+                   descriptor_stage=args.descriptor_stage if mode == 'trained' else None,
+                   center_per_volume=bool(args.center_per_volume),
+                   l2_per_volume=bool(args.l2_per_volume),
+                   emb_path=os.path.abspath(emb_path),
+                   accuracy=float(stats['accuracy']),
+                   misses=int(stats['total_misses']),
+                   mismatches=int(stats['total_mismatches']),
+                   total=int(stats['total_ground_truth']),
+                   minutes=(time.time() - t0) / 60)
+        # Callers that own the record's context (the in-sweep objective adds the
+        # trial's losses and objective name) append their own keys here. Refuse
+        # to overwrite: a silent clobber would corrupt a field the eval owns.
+        for k, v in (getattr(args, 'extra_record', None) or {}).items():
+            if k in rec:
+                raise ValueError(f"extra_record key {k!r} would overwrite the eval's own record field")
+            rec[k] = v
+        log_result(rec, args.results_jsonl)
+        records.append(rec)
+    return records
+
+
+def _load_cached_embeddings(emb_path, expected_n_frames=None):
+    """Read a cached embedding stack, or None if it cannot be reused.
+
+    A cache written by a killed run can be truncated (npz is a zip), and a
+    cached run can cover a different number of frames than the one requested
+    now (e.g. --max_frames changed between attempts). Both cases re-embed
+    instead of crashing or silently tracking the wrong frames.
+    """
+    if not os.path.exists(emb_path):
+        return None
+    try:
+        with np.load(emb_path, allow_pickle=True) as d:
+            X = d['X']
+            time_to_lin = d['time_to_lin'].item()
+            lin_to_t_seg = d['lin_to_t_seg'].item()
+            # Older leifer-script caches lack n_frames; fall back to frame count.
+            n_frames = int(d['n_frames']) if 'n_frames' in d else len(time_to_lin)
+    except Exception as e:
+        print(f"ignoring unusable embedding cache {emb_path} ({e}); re-embedding", flush=True)
+        return None
+    if X.size == 0:
+        print(f"ignoring empty embedding cache {emb_path}; re-embedding", flush=True)
+        return None
+    if expected_n_frames is not None and n_frames != int(expected_n_frames):
+        print(f"ignoring embedding cache {emb_path}: covers {n_frames} frames, "
+              f"this run evaluates {expected_n_frames}; re-embedding", flush=True)
+        return None
+    print(f"[{os.path.basename(emb_path)}] loaded saved embeddings {X.shape}", flush=True)
+    return X, time_to_lin, lin_to_t_seg, n_frames
+
+
+def _save_embeddings(emb_path, **arrays):
+    """np.savez, but atomic: a killed job must not leave a half-written cache.
+
+    A fixed temp name (not per-pid) so repeated kills cannot accumulate stale
+    100s-of-MB temporaries; os.replace then publishes the finished file.
+    """
+    tmp = f"{emb_path}.tmp.npz"
+    np.savez(tmp, **arrays)
+    os.replace(tmp, emb_path)
+
+
+def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir,
+                                lab=None, gt=None, source='project', device=None,
+                                cluster='labelprop', num_seeds=25, seed=0,
+                                descriptor_stage='auto', max_frames=None,
+                                center_per_volume=False, l2_per_volume=False,
+                                track_device='cpu', skip_embed=True, extra_record=None):
+    """Track one trained checkpoint on `project` and return its accuracy record.
+
+    Programmatic entry point used by the hyperparameter sweep's in-job
+    objective (same GPU, same Slurm allocation as the training that produced
+    `weights`). `gt` defaults to `project`, i.e. the checkpoint is scored against its own
+    training dataset -- the sweep must never touch a held-out dataset to score
+    a trial. `track_device` defaults to 'cpu' because full-video label
+    propagation does not fit next to a trained model on one GPU; embedding
+    still runs on the GPU. The record is also appended to `results_jsonl` and
+    the embeddings are cached in `emb_dir`, exactly as a CLI run of
+    eval_accuracy.py would, so the standard benchmark runner recognizes (and
+    skips) this cell.
+    """
+    import torch
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    args = SimpleNamespace(
+        lab=lab, source=source, nwb=None, project=project, gt=gt if gt is not None else project,
+        max_frames=max_frames, mode='trained', weights=weights, cluster=cluster,
+        num_seeds=num_seeds, seed=seed, skip_embed=skip_embed, fuse_norm=False,
+        descriptor_stage=descriptor_stage, center_per_volume=center_per_volume,
+        l2_per_volume=l2_per_volume, device=device, track_device=track_device,
+        results_jsonl=results_jsonl, emb_dir=emb_dir, tag=tag, extra_record=extra_record)
+    _check_args(args)
+    return run_eval(args)[-1]
+
+
+def main():
+    run_eval(_parse_args())
 
 
 def _rows_for_names(project_data, t, names, name_to_seg):

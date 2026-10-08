@@ -30,6 +30,11 @@ import re
 import subprocess
 import sys
 
+# Tag scheme shared with the in-sweep objective (scripts/optimize_hyperparameters.py):
+# both write into one results jsonl that both deduplicate by tag, so the two must
+# agree exactly or a finished cell gets evaluated twice.
+from barlow_track.utils.utils_ground_truth import record_tag
+
 EVAL_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "eval_accuracy.py")
 
@@ -129,6 +134,24 @@ def parse_args():
                              "(default is to skip them, so a killed run resumes; reruns "
                              "overwrite the old records instead of appending duplicates)")
     return parser.parse_args()
+
+
+def recorded_tags(path):
+    """Tags already present in a results file ({} if there is none).
+
+    The skip/resume decision for a whole (trial, dataset) cell. Tolerates junk
+    lines so one truncated write cannot make the file unreadable.
+    """
+    done = set()
+    if os.path.isfile(path):
+        with open(path) as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        done.add(json.loads(line).get("tag"))
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+    return done
 
 
 def check_device(device_str):
@@ -290,7 +313,6 @@ def run_slurm(tasks, results_jsonl, args):
 def main():
     args = parse_args()
     trial_parent_dir = os.path.abspath(args.trial_parent_dir)
-    parent_base = os.path.basename(trial_parent_dir.rstrip("/"))
     results_jsonl = args.results_jsonl or os.path.join(trial_parent_dir, "exp_results.jsonl")
     emb_dir = args.emb_dir or os.path.join(trial_parent_dir, "emb_cache")
     labs = args.labs or DEFAULT_LABS
@@ -312,27 +334,15 @@ def main():
 
     tasks = []  # (lab, trial_num, tag, cmd)
     if args.mode == "trained":
-        trial_jobs = [(lab, trial_num, f"{parent_base}_trial{trial_num}_{lab}",
+        trial_jobs = [(lab, trial_num,
+                       record_tag(trial_parent_dir, trial_num, lab),
                        os.path.join(trial_parent_dir, f"trial_{trial_num}", args.model_fname))
                       for trial_num in trials for lab in labs]
     else:
         # Untrained reference baselines: one run per dataset, no checkpoint.
         trial_jobs = [(lab, None, f"untrained_{args.mode}_{lab}", None) for lab in labs]
-    def _recorded_tags(path):
-        """Tags already in the results file ({} if none). Tolerates junk lines."""
-        done = set()
-        if os.path.isfile(path):
-            with open(path) as f:
-                for line in f:
-                    if line.strip():
-                        try:
-                            done.add(json.loads(line).get("tag"))
-                        except (json.JSONDecodeError, AttributeError):
-                            pass
-        return done
-
     if not args.rerun_completed:
-        done = _recorded_tags(results_jsonl)
+        done = recorded_tags(results_jsonl)
         before = len(trial_jobs)
         trial_jobs = [t for t in trial_jobs if t[2] not in done]
         skipped = before - len(trial_jobs)

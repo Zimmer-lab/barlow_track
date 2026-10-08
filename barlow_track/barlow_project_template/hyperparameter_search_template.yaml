@@ -13,8 +13,73 @@
 # get one distinct seed each. Each trial's seed is written into its own
 # train_config.yaml. Sample `seed` here explicitly only if you want it as a
 # search axis; then the policy above steps aside.
+#
+# ---- What Ax optimizes --------------------------------------------------
+# objective: loss     (default) Ax MINIMIZES each trial's test Barlow loss.
+# objective: accuracy           Ax MAXIMIZES tracking accuracy.
+#
+# objective: accuracy scores every trial by tracking the FULL video of the
+# trial's OWN training project (train_config.yaml project_path, used for both
+# crops and ground truth -- the objective dataset is not configurable, so a
+# trial can never be scored against a held-out dataset). Training sees only
+# num_frames (100-200) of the ~1300-1700 evaluated frames, so the score measures
+# generalization off the training crop rather than memorization of it. The eval
+# runs INSIDE the trial's own Slurm job, right after training: no extra jobs,
+# same GPU and CPUs.
+#
+# COST PER TRIAL = train (as before) + full-video eval:
+#   embed (GPU, minutes)  +  label propagation (CPU-bound; the dominant cost).
+# Measured on the current code, one zimmer project (1667 frames -> 283k
+# detections, 16 threads, embed on GPU / tracking on CPU):
+#   embed 15 min (dominated by reading the raw volumes), labelprop 25 seeds at
+#   ~165 s/seed = ~70 min, i.e. ~1.5 h per trial for the eval alone.
+# Scale by detections (not frames) and add a factor for larger videos: leifer-
+# scale projects are ~2-3x this. Older records in
+# hyperparameter_search_debug/exp_results.jsonl (4-25 min per eval) come from an
+# earlier, much faster pipeline -- treat them as a floor, not a target.
+# The job's walltime is sized as train budget + objective_minutes + 1 h
+# headroom. Tracking is CPU-bound, so each parallel trial saturates a core set:
+# consider --num_parallel_jobs 3-5 (not the default 10) on a shared node.
+#
+# RECORDS: each trial appends a standard record (full weights path + train
+# config + accuracy, tag "<this folder>_trial<N>_<objective_dataset>") to
+# <this folder>/exp_results.jsonl and keeps its embeddings in
+# <this folder>/emb_cache. Setting objective_dataset to the benchmark dataset
+# name whose project IS this training project (e.g. zimmer_1128) means the
+# post-sweep benchmark (multiproject_scripts/run_trials_on_all_ground_truth.py)
+# recognizes those cells and skips them instead of re-embedding. A killed sweep
+# resumes: finished records are reloaded, and a trial whose training survived
+# but whose tracking did not only re-runs the tracking (embeddings are cached).
+# Note that --top_k ranks trials by test_loss, which is not the optimized metric
+# in an accuracy sweep; pass --trials explicitly there.
 
 baseline_params_path: null
+
+objective: loss
+
+# ---- objective: accuracy settings (ignored when objective: loss) ----------
+# Benchmark-dataset label for this (training project == evaluated project)
+# cell. Must match run_trials_on_all_ground_truth.py DATASETS for the skip to
+# work. Left unset it becomes 'train', which no benchmark knows, so the
+# benchmark will re-evaluate it.
+# objective_dataset: zimmer_1128
+# Per-trial budget (minutes) for the full-video tracking eval; sizes the job
+# walltime. Default 240 if unset. Leifer-scale videos need hours.
+# objective_minutes: 240
+# Eval knobs (defaults match the benchmark runner's).
+# objective_num_seeds: 25
+# objective_seed: 0
+# objective_cluster: labelprop
+# objective_descriptor_stage: auto
+# objective_center_per_volume: false
+# objective_l2_per_volume: false
+# Where label propagation runs: 'cpu' (default) keeps the kNN graph off the GPU
+# (full-video graphs OOM a 12 GB GPU next to the trained model), 'cuda' or
+# 'embed_device' put it back on the GPU. Embedding always uses the job's GPU.
+# objective_track_device: cpu
+# Smoke tests only: cap the frames the objective is measured on (an accuracy
+# from a truncated video is NOT comparable to a full-video one).
+# objective_max_frames: 60
 
 hyperparameters:
   - name: lr

@@ -388,9 +388,27 @@ class ViSNetPositionEncoder(nn.Module):
     def forward(self, kpts):
         # kpts: (N, 3) float; returns (N, output_dim)
         dev = kpts.device
-        z = torch.zeros(kpts.shape[0], dtype=torch.long, device=dev)
-        batch = torch.zeros(kpts.shape[0], dtype=torch.long, device=dev)
-        x, _ = self.repr(z, kpts.float(), batch)
+        x = kpts.float()
+        # Distinct nodes sharing a voxel give zero-distance edges whose
+        # direction is 0/0 = NaN downstream (pyg masks self-loops but not
+        # these; seen as one all-NaN frame killing a whole benchmark).
+        # Break exact ties deterministically: shift tied points apart along x
+        # by index order. Untouched when there are no ties (bitwise identical)
+        # and negligible (~1e-4) otherwise.
+        if x.shape[0] > 1:
+            with torch.no_grad():
+                dup = (torch.cdist(x, x) == 0)
+                dup.fill_diagonal_(False)
+                if dup.any():
+                    involved = dup.any(dim=1)
+                    shift = (involved.float()
+                             * torch.arange(x.shape[0], device=dev).float()
+                             * 1e-6)
+                    x = x + shift.unsqueeze(1) * torch.tensor(
+                        [1.0, 0.0, 0.0], device=dev)
+        z = torch.zeros(x.shape[0], dtype=torch.long, device=dev)
+        batch = torch.zeros(x.shape[0], dtype=torch.long, device=dev)
+        x, _ = self.repr(z, x, batch)
         return self.head(x)
 
 

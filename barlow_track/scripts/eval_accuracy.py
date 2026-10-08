@@ -537,6 +537,15 @@ def main():
             X = np.vstack(X_parts)
             print(f"[{args.lab}/{mode}] embedded {n_frames} frames, {X.shape} in {time.time()-t1:.0f}s", flush=True)
             np.savez(emb_path, X=X, time_to_lin=dict(time_to_lin), lin_to_t_seg=lin_to_t_seg, n_frames=n_frames)
+            # Fail here with the trial tag, not pages later inside sklearn:
+            # non-finite embeddings mean a poisoned/NaN checkpoint.
+            n_bad = int(np.isnan(X).sum())
+            if n_bad:
+                bad_rows = np.where(np.isnan(X).any(axis=1))[0]
+                raise ValueError(
+                    f"[{args.tag}] {n_bad} NaN entries in {len(bad_rows)} embedding rows "
+                    f"(rows {bad_rows[0]}-{bad_rows[-1]}); refusing to track a NaN "
+                    f"checkpoint (weights: {args.weights})")
 
         from sklearn.decomposition import TruncatedSVD
         Xs = TruncatedSVD(n_components=min(50, X.shape[1] - 1),

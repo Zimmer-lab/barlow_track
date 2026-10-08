@@ -1,0 +1,375 @@
+"""Sweep objective: tracking accuracy in Ax's objective slot.
+
+Covers the pieces of scripts/optimize_hyperparameters.py that decide WHAT Ax
+optimizes and WHAT a finished trial leaves on disk:
+
+  * the failure value and the loss/accuracy direction (a failed trial must be
+    strictly worse than any real accuracy, and Ax must not be asked to
+    minimize an accuracy),
+  * that a template without `objective` behaves exactly like before,
+  * that the in-sweep record tag is the one the cross-dataset benchmark
+    deduplicates on, so a post-sweep benchmark skips instead of re-embedding,
+  * that the eval is called with the trial's OWN project for both crops and
+    ground truth, and that a trial without a checkpoint is never tracked,
+  * the embedding-cache rules that make a killed sweep resumable.
+"""
+import json
+import os
+import shutil
+
+import numpy as np
+import pytest
+
+from barlow_track.scripts import optimize_hyperparameters as oh
+from barlow_track.scripts import eval_accuracy as ea
+from barlow_track.utils.utils_ground_truth import record_tag
+
+
+# --------------------------------------------------------------------------
+# Objective direction and failure values
+# --------------------------------------------------------------------------
+
+def test_failure_value_is_worse_than_any_real_accuracy():
+    """A failed trial must lose to every real score, in both directions."""
+    for objective in ('loss', 'accuracy'):
+        failure = oh.objective_failure_value(objective)
+        assert np.isfinite(failure), "BoTorch cannot fit NaN/inf"
+        if objective == 'loss':
+            assert failure > 0 and min(oh.objective_value(x, objective) for x in (0.0, 1.0)) < failure
+        else:
+            assert failure < 0 and failure < min(oh.objective_value(x, objective) for x in (0.0, 1.0))
+
+
+def test_accuracy_objective_is_a_maximization():
+    """Ax is told minimize=False, and real accuracies are reported unnegated.
+
+    Sign-flipping the score while ALSO telling Ax to maximize it would silently
+    rank the worst checkpoint first, so the readable value is what goes in.
+    """
+    assert oh.objective_value(0.42, 'accuracy') == pytest.approx(0.42)
+    assert oh.objective_value(0.0, 'accuracy') < oh.objective_value(1.0, 'accuracy')
+    assert oh.objective_value(0.5, 'loss') < oh.objective_value(0.6, 'loss')
+
+
+@pytest.mark.parametrize('bad', [None, float('nan'), float('inf'), float('-inf')])
+def test_nonfinite_scores_map_to_the_failure_value(bad):
+    assert oh.objective_value(bad, 'loss') == oh.objective_failure_value('loss')
+    assert oh.objective_value(bad, 'accuracy') == oh.objective_failure_value('accuracy')
+
+
+# --------------------------------------------------------------------------
+# Template parsing
+# --------------------------------------------------------------------------
+
+def test_template_without_objective_key_is_the_historical_loss_sweep():
+    objective, label, kwargs = oh.resolve_objective({})
+    assert objective == 'loss'
+    assert label is None
+    # Same eval defaults as the benchmark runner, so nothing downstream changes.
+    assert kwargs['num_seeds'] == 25 and kwargs['seed'] == 0
+    assert kwargs['cluster'] == 'labelprop' and kwargs['descriptor_stage'] == 'auto'
+    assert kwargs['max_frames'] is None
+
+
+def test_template_objective_accuracy_reads_dataset_and_knobs():
+    objective, label, kwargs = oh.resolve_objective({
+        'objective': 'accuracy', 'objective_dataset': 'zimmer_1128',
+        'objective_num_seeds': 10, 'objective_max_frames': 60})
+    assert objective == 'accuracy'
+    assert label == 'zimmer_1128' and kwargs['lab'] == 'zimmer_1128'
+    assert kwargs['num_seeds'] == 10 and kwargs['max_frames'] == 60
+
+
+def test_objective_dataset_defaults_to_a_label_no_benchmark_knows():
+    """Unset label must not silently claim a benchmark cell it never evaluated."""
+    from barlow_track.scripts.multiproject_scripts import run_trials_on_all_ground_truth as bench
+    objective, label, _ = oh.resolve_objective({'objective': 'accuracy'})
+    assert objective == 'accuracy'
+    assert label not in bench.DATASETS
+
+
+def test_unknown_objective_is_rejected():
+    with pytest.raises(ValueError, match='Unknown objective'):
+        oh.resolve_objective({'objective': 'iou'})
+
+
+# --------------------------------------------------------------------------
+# Record tags: the contract with the cross-dataset benchmark
+# --------------------------------------------------------------------------
+
+def test_sweep_record_tag_is_the_tag_the_benchmark_skips_on(tmp_path):
+    """The whole point of writing standard records: the benchmark dedups by tag."""
+    from barlow_track.scripts.multiproject_scripts import run_trials_on_all_ground_truth as bench
+    sweep = tmp_path / 'round_bayes_zimmer'
+    sweep.mkdir()
+    for trial_num in (0, 7):
+        for dataset in ('zimmer_1128', 'samuel'):
+            tag = oh.record_tag(str(sweep), trial_num, dataset)
+            assert tag == f'round_bayes_zimmer_trial{trial_num}_{dataset}'
+    # What the sweep wrote, as the benchmark reads it.
+    results_jsonl = str(sweep / 'exp_results.jsonl')
+    with open(results_jsonl, 'w') as f:
+        for trial_num in (0, 7):
+            for dataset in ('zimmer_1128', 'samuel'):
+                f.write(json.dumps(dict(tag=oh.record_tag(str(sweep), trial_num, dataset),
+                                        accuracy=0.5)) + '\n')
+    already = bench.recorded_tags(results_jsonl)
+    # Every cell the sweep evaluated is already covered -> nothing left to run.
+    for trial_num in (0, 7):
+        for dataset in ('zimmer_1128', 'samuel'):
+            assert oh.record_tag(str(sweep), trial_num, dataset) in already
+
+
+def test_record_tag_normalizes_trailing_slash():
+    assert (record_tag('/a/b/sweep/', 2, 'leifer')
+            == record_tag('/a/b/sweep', 2, 'leifer') == 'sweep_trial2_leifer')
+
+
+# --------------------------------------------------------------------------
+# The in-sweep eval: which project, which tag, which paths
+# --------------------------------------------------------------------------
+
+def _fake_trial(tmp_path, with_checkpoint=True, n=3):
+    trial_dir = tmp_path / 'sweep' / f'trial_{n}'
+    (trial_dir / 'log').mkdir(parents=True)
+    (trial_dir / 'checkpoints').mkdir()
+    if with_checkpoint:
+        (trial_dir / 'resnet50.pth').write_bytes(b'not really a checkpoint')
+    with open(trial_dir / 'log' / 'stats.json', 'w') as f:
+        json.dump([dict(epoch=1, val_loss=0.25), dict(epoch=2, test_loss=0.5)], f)
+    return trial_dir
+
+
+def test_measure_tracking_accuracy_scores_the_trials_own_project(tmp_path, monkeypatch):
+    trial_dir = _fake_trial(tmp_path)
+    calls = {}
+
+    def fake_eval(**kwargs):
+        calls.update(kwargs)
+        return dict(accuracy=0.375, n_frames=1667, total=206701, minutes=37.5)
+
+    monkeypatch.setattr(oh, 'evaluate_trained_checkpoint', fake_eval)
+    args = type('Args', (), dict(project_dir=str(trial_dir),
+                                 project_path='/data/my_project/project_config.yaml'))()
+    acc = oh.measure_tracking_accuracy(
+        args, dict(test_loss=0.5, test_loss_transpose=0.25), str(tmp_path / 'sweep'),
+        'zimmer_1128', 'accuracy',
+        str(tmp_path / 'sweep' / 'exp_results.jsonl'), str(tmp_path / 'sweep' / 'emb_cache'),
+        dict(lab='zimmer_1128', source='project', cluster='labelprop', num_seeds=25, seed=0,
+             descriptor_stage='auto', max_frames=None, center_per_volume=False,
+             l2_per_volume=False))
+    assert acc == pytest.approx(0.375)
+    # Crops AND ground truth come from the training project: no test dataset can
+    # be reached, because project_path is the only path passed in.
+    assert calls['project'] == calls['gt'] == '/data/my_project/project_config.yaml'
+    assert calls['weights'] == str(trial_dir / 'resnet50.pth')
+    assert calls['tag'] == f'sweep_trial3_zimmer_1128'
+    # Records and embeddings go where the benchmark runner looks for them.
+    assert calls['results_jsonl'] == str(tmp_path / 'sweep' / 'exp_results.jsonl')
+    assert calls['emb_dir'] == str(tmp_path / 'sweep' / 'emb_cache')
+    # Losses travel with the accuracy as diagnostics.
+    assert calls['extra_record']['test_loss'] == pytest.approx(0.5)
+    assert calls['extra_record']['val_loss'] == pytest.approx(0.25)
+
+
+def test_trial_without_checkpoint_is_never_tracked(tmp_path, monkeypatch):
+    """A crashed trial saves no checkpoint; tracking it would waste an hour."""
+    trial_dir = _fake_trial(tmp_path, with_checkpoint=False)
+    monkeypatch.setattr(oh, 'evaluate_trained_checkpoint',
+                        lambda **kw: pytest.fail("must not track a trial with no checkpoint"))
+    args = type('Args', (), dict(project_dir=str(trial_dir), project_path='/p/project_config.yaml'))()
+    with pytest.raises(FileNotFoundError, match='did not finish training'):
+        oh.measure_tracking_accuracy(args, dict(test_loss=float('inf')), str(tmp_path / 'sweep'),
+                                     'zimmer_1128', 'accuracy', 'r.jsonl', 'emb',
+                                     dict(lab='zimmer_1128'))
+
+
+def test_nonfinite_losses_do_not_reach_the_record_as_nan(tmp_path, monkeypatch):
+    """JSON has no NaN: an inf loss must be recorded as null, not poison the file."""
+    trial_dir = _fake_trial(tmp_path)
+    captured = {}
+    monkeypatch.setattr(oh, 'evaluate_trained_checkpoint',
+                        lambda **kw: captured.update(kw) or dict(accuracy=0.1, n_frames=10,
+                                                                 total=10, minutes=1.0))
+    args = type('Args', (), dict(project_dir=str(trial_dir), project_path='/p/project_config.yaml'))()
+    oh.measure_tracking_accuracy(args, dict(test_loss=float('inf')), str(tmp_path / 'sweep'),
+                                 'zimmer_1128', 'accuracy', 'r.jsonl', 'emb',
+                                 dict(lab='zimmer_1128'))
+    assert captured['extra_record']['test_loss'] is None
+    assert captured['extra_record']['val_loss'] == pytest.approx(0.25)
+
+
+def test_experiment_minimizes_loss_and_maximizes_accuracy():
+    """The direction lives in the experiment, not in a flipped score."""
+    from ax.service.ax_client import AxClient
+    params = [{'name': 'lr', 'type': 'range', 'bounds': [0.1, 1.0]}]
+    for accuracy_objective, minimize in ((False, True), (True, False)):
+        client = AxClient()
+        oh.create_sweep_experiment(client, params, accuracy_objective)
+        objective = client.experiment.optimization_config.objective
+        assert isinstance(objective.minimize, bool)
+        assert objective.minimize is minimize
+
+
+# --------------------------------------------------------------------------
+# Attaching finished trials to Ax (the resume path)
+# --------------------------------------------------------------------------
+
+def _ax_client():
+    pytest.importorskip('ax')
+    from ax.service.ax_client import AxClient
+    client = AxClient()
+    client.create_experiment(name='test', parameters=[{'name': 'lr', 'type': 'range',
+                                                        'bounds': [0.1, 1.0]}])
+    return client
+
+
+def test_attach_trial_returns_an_integer_index_and_keeps_the_config():
+    """Ax >= 0.3 returns (parameterization, index) and read-only run_metadata."""
+    client = _ax_client()
+    config = {'lr': 0.5, 'project_dir': '/sweep/trial_0', 'backbone_kwargs': {'f_maps': 4}}
+    index = oh._attach_trial(client, config)
+    assert isinstance(index, int), "callers index the experiment with this"
+    trial = client.experiment.trials[index]
+    assert trial.run_metadata['project_dir'] == '/sweep/trial_0'
+    assert trial.run_metadata['backbone_kwargs'] == {'f_maps': 4}
+    # Still pending: the score arrives later (from the eval-only job).
+    assert not str(trial.status).endswith('COMPLETED')
+    client.complete_trial(index, raw_data={'result': (0.25, 0.0)})
+    assert str(client.experiment.trials[index].status).endswith('COMPLETED')
+
+
+def test_attach_prior_trial_completes_with_the_accuracy():
+    client = _ax_client()
+    index = oh.attach_prior_trial_to_ax_client(client, {'lr': 0.5}, 0.42)
+    df = client.experiment.fetch_data().df
+    assert float(df.loc[df.trial_index == index, 'mean'].iloc[0]) == pytest.approx(0.42)
+    # get_best_parameters hands back ({metric: mean}, {metric: sem}) in Ax 0.3.
+    assert oh.objective_mean(client.get_best_parameters()[1]) == pytest.approx(0.42)
+
+
+def test_attach_prior_trial_rejects_nonfinite_scores():
+    client = _ax_client()
+    for bad in (None, float('nan'), float('inf')):
+        with pytest.raises(ValueError, match='Non-finite'):
+            oh.attach_prior_trial_to_ax_client(client, {'lr': 0.5}, bad)
+
+
+# --------------------------------------------------------------------------
+# Tracking device (the OOM this setting exists for)
+# --------------------------------------------------------------------------
+
+def test_track_device_defaults_follow_the_embed_device():
+    torch = pytest.importorskip('torch')
+    args = type('A', (), dict(track_device='embed_device'))()
+    assert ea.resolve_track_device(args, torch.device('cuda')) == torch.device('cuda')
+    # None is the tracker's "keep it on the CPU" value.
+    assert ea.resolve_track_device(args, torch.device('cpu')) is None
+
+
+def test_track_device_cpu_keeps_full_video_graphs_off_the_gpu():
+    """Full-video kNN graphs OOM a 12 GB GPU next to the trained model."""
+    torch = pytest.importorskip('torch')
+    args = type('A', (), dict(track_device='cpu'))()
+    assert ea.resolve_track_device(args, torch.device('cuda')) is None
+
+
+def test_track_device_cuda_falls_back_when_cuda_is_absent(monkeypatch):
+    torch = pytest.importorskip('torch')
+    monkeypatch.setattr(torch.cuda, 'is_available', lambda: False)
+    args = type('A', (), dict(track_device='cuda'))()
+    assert ea.resolve_track_device(args, torch.device('cpu')) is None
+
+
+def test_sweep_defaults_objective_tracking_to_cpu():
+    _, _, kwargs = oh.resolve_objective({'objective': 'accuracy'})
+    assert kwargs['track_device'] == 'cpu'
+
+
+# --------------------------------------------------------------------------
+# Resume: reading records back, and the embedding cache
+# --------------------------------------------------------------------------
+
+def test_read_accuracy_records_keeps_the_latest_record_per_tag(tmp_path):
+    path = tmp_path / 'exp_results.jsonl'
+    with open(path, 'w') as f:
+        f.write(json.dumps(dict(tag='sweep_trial0_zimmer_1128', accuracy=0.10)) + '\n')
+        f.write(json.dumps(dict(tag='sweep_trial0_zimmer_1128', accuracy=0.42)) + '\n')
+        # A kill mid-append leaves a line with no trailing newline, so the NEXT
+        # append continues it and both are unparseable. Dropping them is the
+        # safe direction: the reader re-runs those cells, it never misreads one.
+        f.write('{"tag": "sweep_trial1_zimmer_1128", "accur')
+        f.write(json.dumps(dict(tag='sweep_trial2_zimmer_1128', accuracy=0.3)) + '\n')
+        f.write(json.dumps(dict(tag='sweep_trial3_zimmer_1128', accuracy=0.2)) + '\n')
+    records = oh.read_accuracy_records(str(path))
+    assert set(records) == {'sweep_trial0_zimmer_1128', 'sweep_trial3_zimmer_1128'}
+    assert records['sweep_trial0_zimmer_1128']['accuracy'] == pytest.approx(0.42)
+
+
+def test_read_accuracy_records_missing_file_is_empty(tmp_path):
+    assert oh.read_accuracy_records(str(tmp_path / 'nope.jsonl')) == {}
+
+
+def test_truncated_embedding_cache_is_re_embedded_not_tracked(tmp_path):
+    """kill -9 during np.savez leaves a partial zip; it must not be trusted."""
+    emb = tmp_path / 'emb_zimmer_trained_sweep_trial0.npz'
+    emb.write_bytes(b'PK\x03\x04 truncated')
+    assert ea._load_cached_embeddings(str(emb)) is None
+
+
+def test_embedding_cache_of_the_wrong_length_is_re_embedded(tmp_path):
+    emb = str(tmp_path / 'emb.npz')
+    ea._save_embeddings(emb, X=np.zeros((4, 3), dtype=np.float32),
+                        time_to_lin={0: [0, 1], 1: [2, 3]}, lin_to_t_seg={}, n_frames=2)
+    assert ea._load_cached_embeddings(emb, expected_n_frames=2) is not None
+    # A re-run with a different --max_frames must not track the wrong frames.
+    assert ea._load_cached_embeddings(emb, expected_n_frames=60) is None
+
+
+def test_embeddings_are_written_atomically(tmp_path):
+    """No half-written cache at emb_path: a kill leaves only a temp file."""
+    emb = str(tmp_path / 'emb.npz')
+    ea._save_embeddings(emb, X=np.ones((2, 2), dtype=np.float32), time_to_lin={}, lin_to_t_seg={},
+                        n_frames=0)
+    assert os.path.isfile(emb)
+    assert not any(f.startswith('emb.npz.tmp') for f in os.listdir(str(tmp_path)))
+
+
+# --------------------------------------------------------------------------
+# Job sizing
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize('minutes,expected', [
+    (780, '13:00:00'),        # 65*12 hours of training budget, unchanged default
+    (1500, '1-01:00:00'),     # train + a 4 h objective budget
+    (150, '2:30:00'),
+])
+def test_slurm_duration_format(minutes, expected):
+    assert oh.slurm_duration(minutes) == expected
+
+
+def _slurm_parameters(accuracy_objective, objective_minutes):
+    """The parameters the sweep hands submitit, without submitting anything."""
+    from submitit import AutoExecutor
+    executor = AutoExecutor(folder='/tmp/does-not-exist', cluster='slurm')
+    num_days = int(25 / 100) + 1                      # a 25-epoch sweep
+    train_budget_min = 65 * 12 * num_days
+    eval_budget_min = (objective_minutes + 60) if accuracy_objective else 0
+    executor.update_parameters(timeout_min=train_budget_min + eval_budget_min)
+    executor.update_parameters(slurm_time=oh.slurm_duration(train_budget_min + eval_budget_min))
+    executor.update_parameters(cpus_per_task=8, slurm_gres='gpu:1')
+    return executor.parameters
+
+
+@pytest.mark.skipif(shutil.which('srun') is None,
+                    reason='submitit only builds a Slurm executor where srun exists')
+def test_slurm_job_is_sized_for_training_plus_the_objective_eval():
+    """A trial that trains AND tracks must not be killed mid-tracking."""
+    loss = _slurm_parameters(False, 0)
+    accuracy = _slurm_parameters(True, 240)
+    assert loss['timeout_min'] == 780                 # unchanged default
+    assert accuracy['timeout_min'] == 780 + 240 + 60  # train + eval + headroom
+    assert accuracy['slurm_time'] == '18:00:00'
+    # The eval runs inside the trial's job, so the GPU request is unchanged.
+    assert loss['slurm_gres'] == accuracy['slurm_gres'] == 'gpu:1'
+    assert loss['cpus_per_task'] == accuracy['cpus_per_task'] == 8

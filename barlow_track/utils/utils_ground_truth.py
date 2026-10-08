@@ -204,6 +204,22 @@ def discover_trials(trial_parent_dir):
     return sorted(trials)
 
 
+def record_tag(trial_parent_dir, trial_num, dataset_label):
+    """Tag identifying one (trial, dataset) result cell.
+
+    Shared by the writers and the readers of a results jsonl, because they must
+    agree exactly: workers append to one shared file and readers deduplicate by
+    tag (latest wins), so a drifting tag silently turns a finished evaluation
+    into a duplicate re-run. Two writers exist:
+      * multiproject_scripts/run_trials_on_all_ground_truth.py (the cross-dataset
+        benchmark), and
+      * the in-sweep objective in scripts/optimize_hyperparameters.py, whose
+        records are meant to be recognized (and skipped) by that benchmark.
+    """
+    parent = os.path.basename(os.path.normpath(str(trial_parent_dir)))
+    return f"{parent}_trial{trial_num}_{dataset_label}"
+
+
 def extract_val_from_json(trial_path, key='val_loss'):
     stats_path = os.path.join(trial_path, "log", "stats.json")
     if not os.path.isfile(stats_path):

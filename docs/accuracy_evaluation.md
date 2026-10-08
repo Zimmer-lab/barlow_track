@@ -97,6 +97,22 @@ save `model_type` (current `train_barlow_clusterer.py` stamps it for fresh and r
 * `var_test.py` — re-tracks saved samuel-attention embeddings with UMAP seeds 0,1,2 (variance check).
 * `audit_format.py` — verifies identical loading + 100% seg-id overlap pred-vs-GT per lab.
 
+`eval_accuracy.py` is also importable, which is how the hyperparameter sweep uses it as an
+objective (`optimize_hyperparameters.py`, `objective: accuracy`):
+
+```python
+from barlow_track.scripts.eval_accuracy import evaluate_trained_checkpoint
+record = evaluate_trained_checkpoint(weights=ckpt, project=project_path,  # gt defaults to project
+                                     tag=f'{sweep}_trial{n}_{dataset}', results_jsonl=..., emb_dir=...)
+```
+
+Three knobs exist for that caller: `--gt` (score a checkpoint against a chosen project instead of
+the lab's default GT — the sweep always passes its own training project), `--track_device`
+(`cpu` keeps the label-propagation graph off the GPU: a full-video graph is 100k-200k nodes with
+dense per-step (N x classes) allocations, which OOMs a 12 GB GPU next to the trained model), and
+the embedding cache, which is written atomically and validated (frame count) on reuse so a killed
+sweep resumes without re-embedding.
+
 Typical full run (labelprop-25, paper mode):
 
 ```bash
@@ -145,6 +161,10 @@ unseeded `random.shuffle` of seed times; UMAP-seed spread on fixed embeddings is
 * Never `pkill -f` a pattern that appears in your own command line (it kills your shell); kill by PID.
 * When editing the experiment loops, keep the per-frame body indented under `for t` — two separate
   runs were lost to dedent bugs that silently embedded one frame.
+* **Full-video tracking does not fit on one GPU** next to the trained model (12 GB TITAN V OOMed in
+  `clamped_label_propagation` after embedding 1667 frames); use `--track_device cpu`.
+* Label propagation is seeded end to end (`--seed`), but two labelings of identical embeddings can
+  still disagree on a small margin; treat sub-0.01 accuracy differences as noise.
 
 ## 7. Suggested next steps
 

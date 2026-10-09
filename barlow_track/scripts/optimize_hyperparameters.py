@@ -2,7 +2,6 @@
 # See: https://ax.dev/tutorials/submitit.html
 import argparse
 import inspect
-import json
 import logging
 import os
 import re
@@ -28,7 +27,7 @@ from ruamel.yaml import YAML
 from submitit import AutoExecutor, LocalJob, DebugJob
 from itertools import product
 from barlow_track.scripts.train_barlow_clusterer import train_barlow_network
-from barlow_track.scripts.eval_accuracy import evaluate_trained_checkpoint
+from barlow_track.scripts.eval_accuracy import evaluate_trained_checkpoint, preflight_trained_eval
 try:
     from barlow_track.utils.barlow import PretrainedArchitectureMismatchError
 except ImportError as e:
@@ -38,38 +37,81 @@ except ImportError as e:
         "pip install --no-deps -e <path-to-barlow_track-checkout>"
     ) from e
 from barlow_track.utils.utils_ground_truth import (check_training_finished, discover_trials,
-                                                   extract_val_from_json, record_tag)
+                                                   extract_val_from_json, read_results_by_tag,
+                                                   record_tag)
 from barlow_track.utils.utils_seeding import replicate_seed, search_trial_seed
 
-# Failure value handed to Ax. "More or less infinity" in the objective's own
-# direction, i.e. strictly worse than any real score but still finite (BoTorch
-# cannot fit NaN/inf). Kept as a named constant because three places must agree
-# on it: the trial path, the resumed-trial path, and attach_prior_trial.
-FAILURE_MAGNITUDE = 1e6
+# A failed trial is reported to Ax as a FAILURE (log_trial_failure), never as a
+# score. Any finite stand-in value (e.g. -1e6 for an accuracy in [0, 1]) is an
+# outlier that dominates the GP's outcome standardization and flattens every real
+# score; a failed trial carries no information about its parameters anyway.
+# Default number of failures in a row after which the sweep stops: a config
+# error that breaks every trial must not burn the whole budget.
+DEFAULT_MAX_CONSECUTIVE_FAILURES = 3
 
 
-def objective_failure_value(objective):
-    """"More or less infinity" in the objective's own direction.
-
-    Loss is minimized, so a failure is +1e6; accuracy is maximized, so a failure
-    is -1e6. Either way it is strictly worse than any real score AND finite,
-    because BoTorch cannot fit NaN/inf.
-    """
-    return FAILURE_MAGNITUDE if objective == 'loss' else -FAILURE_MAGNITUDE
-
-
-def objective_value(score, objective):
-    """Raw objective value for Ax, or the failure value if the score is unusable.
+def objective_value(score):
+    """Raw objective value for Ax, or None if the score is unusable (a failure).
 
     No sign flipping: the direction lives in the experiment's minimize flag, so
     the objective column stays the readable metric (a loss, or an accuracy).
     """
     try:
         if score is None or not np.isfinite(score):
-            return objective_failure_value(objective)
+            return None
     except TypeError:
-        return objective_failure_value(objective)
+        return None
     return float(score)
+
+
+def trial_failed(result):
+    """True if a trial's returned raw data carries no usable objective value."""
+    return not isinstance(result, dict) or objective_value(result.get('result')) is None
+
+
+def log_trial_failure(ax_client, trial_index):
+    """Mark a trial FAILED in Ax, so it is excluded from the model fit.
+
+    Ax only fails RUNNING trials; grid/one-at-a-time sweeps create theirs with
+    experiment.new_trial(), which leaves them CANDIDATE, so run them first.
+    """
+    trial = ax_client.experiment.trials[trial_index]
+    if trial.status.is_candidate:
+        trial.mark_running(no_runner_required=True)
+    ax_client.log_trial_failure(trial_index=trial_index)
+
+
+class ConsecutiveFailureGuard:
+    """Stops a sweep after `max_failures` failed trials in a row (0 disables).
+
+    One success resets the count: isolated failures (an OOM, a bad node) are
+    expected in a long sweep, a streak means every trial is broken the same way.
+    """
+
+    def __init__(self, max_failures=DEFAULT_MAX_CONSECUTIVE_FAILURES):
+        # None: the template key is present but empty, i.e. keep the default
+        self.max_failures = DEFAULT_MAX_CONSECUTIVE_FAILURES if max_failures is None else int(max_failures)
+        self.streak = 0
+
+    def record(self, failed):
+        """Count one finished trial; True if the sweep should stop now."""
+        self.streak = self.streak + 1 if failed else 0
+        return 0 < self.max_failures <= self.streak
+
+
+def job_budget_minutes(epochs, objective_minutes=0):
+    """Walltime of one trial's job: training, plus the objective eval if any.
+
+    Training gets the same budget under both objectives (about 100 epochs per
+    day, plus half a day of headroom), so an accuracy trial is never cut short
+    in training where a loss trial would have finished. The eval budget is
+    added on top, with an hour of headroom; objective_minutes=0 means the loss
+    objective, which has no eval.
+    """
+    num_days = int(epochs / 100) + 1
+    train_minutes = num_days * 24 * 60 + 12 * 60
+    eval_minutes = objective_minutes + 60 if objective_minutes else 0
+    return train_minutes + eval_minutes
 
 
 def slurm_duration(minutes):
@@ -122,31 +164,6 @@ def objective_mean(mean_and_variance):
     if isinstance(mean, dict):
         mean = next(iter(mean.values()), None)
     return _finite_or_none(mean)
-
-
-def read_accuracy_records(results_jsonl):
-    """tag -> latest record, from a sweep's shared results jsonl.
-
-    Latest wins, mirroring the benchmark driver's dedup: a rerun overwrites a
-    tag rather than accumulating duplicates. Junk lines (a kill mid-write) are
-    skipped instead of failing the whole resume.
-    """
-    latest = {}
-    if not os.path.isfile(results_jsonl):
-        return latest
-    with open(results_jsonl) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            tag = rec.get('tag') if isinstance(rec, dict) else None
-            if tag is not None:
-                latest[tag] = rec
-    return latest
 
 
 def create_sweep_experiment(ax_client, parameters, accuracy_objective):
@@ -386,6 +403,12 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         raise ValueError("objective: accuracy needs the trial's project_path: the objective is "
                          "tracking accuracy on the trial's own training project "
                          "(train_config.yaml project_path is empty)")
+    if accuracy_objective:
+        # Fail now, not after every trial has trained for hours: a project
+        # without ground truth (or a wrong path) breaks each trial's eval alike.
+        summary = preflight_trained_eval(baseline_params['project_path'],
+                                         source=objective_kwargs['source'])
+        print(f"Objective preflight OK: {summary}", flush=True)
     # Records/embeddings land where the standard benchmark runner looks for
     # them, with the tag scheme it deduplicates on (utils_ground_truth.record_tag).
     results_jsonl = os.path.join(str(experiment_parent_folder), 'exp_results.jsonl')
@@ -411,12 +434,12 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 score = test_losses['test_loss'] if isinstance(test_losses, dict) else None
         except PretrainedArchitectureMismatchError:
             # Systematic config error affecting every trial; fail fast instead of
-            # scoring the failure value and letting Ax optimize noise.
+            # failing every trial in turn.
             raise
         except Exception as e:
             logging.exception(f"Encountered error with trial; quitting gracefully: {e}")
             score = None
-        return {"result": objective_value(score, objective)}
+        return {"result": objective_value(score)}
 
     # Set up the Ax client
     ax_client = AxClient(enforce_sequential_optimization=DEBUG)
@@ -448,7 +471,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     pending_evals = {}
     if len(prior_trials) > 0:
         logging.info(f"Discovered {len(prior_trials)} prior trials, loading...")
-        accuracy_by_tag = read_accuracy_records(results_jsonl) if accuracy_objective else {}
+        accuracy_by_tag = read_results_by_tag(results_jsonl) if accuracy_objective else {}
         for trial_num in prior_trials:
             trial_name = f"trial_{trial_num}"
             trial_path = os.path.join(experiment_parent_folder, trial_name)
@@ -507,27 +530,20 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         executor = AutoExecutor(folder=experiment_parent_folder, cluster='slurm')
         logging.info(f"Running experiments in folder: {experiment_parent_folder}")
 
-    # About 100 epochs per day
-    num_days = int(baseline_params['epochs'] / 100) + 1
-    train_budget_min = 65 * 12 * num_days
-    # A trial now also has to track the whole video, which costs tens of minutes
-    # to hours of mostly-CPU work AFTER training. Size the job for train + eval
-    # and keep headroom, or long trials get killed mid-eval (and lose the
-    # tracking work, though the checkpoint and embedding cache survive).
+    # A trial with objective: accuracy also has to track the whole video, which
+    # costs tens of minutes to hours of mostly-CPU work AFTER training. Size the
+    # job for train + eval and keep headroom, or long trials get killed mid-eval
+    # (and lose the tracking work, though the checkpoint and embedding cache survive).
     objective_minutes = int(hyperparameter_args.get('objective_minutes') or 0) if accuracy_objective else 0
     if accuracy_objective and not objective_minutes:
         objective_minutes = 240
         logging.warning("objective_minutes not set in the template; assuming 240 min for the "
                         "full-video tracking eval. Measure one trial and set it explicitly "
                         "(leifer-scale videos need hours, not minutes).")
-    eval_budget_min = objective_minutes + 60 if accuracy_objective else 0
-    executor.update_parameters(timeout_min=train_budget_min + eval_budget_min)
+    job_minutes = job_budget_minutes(baseline_params['epochs'], objective_minutes)
+    executor.update_parameters(timeout_min=job_minutes)
     if not run_locally:
-        if accuracy_objective:
-            executor.update_parameters(slurm_time=slurm_duration(train_budget_min + eval_budget_min))
-        else:
-            # Unchanged default sizing for the loss objective.
-            executor.update_parameters(slurm_time=f"{num_days}-12:00:00")
+        executor.update_parameters(slurm_time=slurm_duration(job_minutes))
         executor.update_parameters(cpus_per_task=8)
         executor.update_parameters(slurm_mem="128G")
         executor.update_parameters(slurm_job_name=job_name if job_name is not None else "barlow_hyperparameter_search")
@@ -603,6 +619,9 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     submitted_jobs = 0
     trial_offset = 0
     start_time = time.time()
+    failure_guard = ConsecutiveFailureGuard(
+        hyperparameter_args.get('max_consecutive_failures', DEFAULT_MAX_CONSECUTIVE_FAILURES))
+    stop_reason = None
 
     # Run until all the jobs have finished and our budget is used up.
     while submitted_jobs < total_budget or jobs or pending_evals:
@@ -613,22 +632,48 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 # The log file isn't being produced, so print the stdout instead
                 if type(job) in [LocalJob, DebugJob]:
                     print(f"Running trial {trial_index} inline ({type(job).__name__})...", flush=True)
+                # Whether the TRIAL failed is decided by its job alone; Ax
+                # bookkeeping errors below (expected for grid sweeps) are not
+                # trial failures and must not trip the failure guard.
                 try:
                     result = job.result()
-                    ax_client.complete_trial(trial_index=trial_index, raw_data=result)
+                except RuntimeError as e:
+                    # submitit's FailedJobError/UncompletedJobError: the job
+                    # crashed or was killed (e.g. walltime) without a result.
+                    print(f"Encountered Error, trial {trial_index} may need to be rerun: {e}")
+                    result = None
+                failed = trial_failed(result)
+                try:
+                    if failed:
+                        print(f"Trial {trial_index} failed (no usable objective value); "
+                              f"marking it FAILED so Ax leaves it out of the fit", flush=True)
+                        log_trial_failure(ax_client, trial_index)
+                    else:
+                        ax_client.complete_trial(trial_index=trial_index, raw_data=result)
                 except ValueError as e:
                     if direct_parameter_sweep or one_at_a_time_sweep:
                         # We are manually managing the trials, so this is expected
                         print(f"Encountered error in finishing trial {trial_index}, this is expected but may be fixable; {e}")
                     else:
                         raise e
-                except RuntimeError as e:
-                    print(f"Encountered Error, trial {trial_index} may need to be rerun: {e}")
 
                 jobs.remove((job, trial_index))
                 # Display the current and completed trials
                 print(exp_to_df(ax_client.experiment))
-                
+                if failure_guard.record(failed):
+                    stop_reason = (f"{failure_guard.streak} trials failed in a row; stopping the sweep. "
+                                   f"This usually means a config error that breaks every trial: check "
+                                   f"the trial logs in {experiment_parent_folder}. Set "
+                                   f"max_consecutive_failures in the template (0 disables) to change this.")
+                    break
+        if stop_reason is not None:
+            for job, trial_index in jobs:
+                try:
+                    job.cancel()
+                except Exception as e:
+                    logging.warning(f"Could not cancel the job of trial {trial_index}: {e}")
+            raise RuntimeError(stop_reason)
+
         # Schedule new jobs if there is availablity
         # Resumed evals go first: they are cheap (checkpoint + cached
         # embeddings already exist) and a fresh sweep must not start scoring

@@ -37,8 +37,8 @@
 # scale projects are ~2-3x this. Older records in
 # hyperparameter_search_debug/exp_results.jsonl (4-25 min per eval) come from an
 # earlier, much faster pipeline -- treat them as a floor, not a target.
-# The job's walltime is sized as train budget + objective_minutes + 1 h
-# headroom. Tracking is CPU-bound, so each parallel trial saturates a core set:
+# The job's walltime is sized as the loss sweep's train budget (epochs/100 + 1
+# days, plus 12 h) + objective_minutes + 1 h headroom. Tracking is CPU-bound, so each parallel trial saturates a core set:
 # consider --num_parallel_jobs 3-5 (not the default 10) on a shared node.
 #
 # RECORDS: each trial appends a standard record (full weights path + train
@@ -56,6 +56,14 @@
 baseline_params_path: null
 
 objective: loss
+
+# FAILED TRIALS (both objectives): a trial that crashes, is killed, or yields a
+# non-finite score is marked FAILED in Ax and left out of the model fit, rather
+# than scored with a stand-in value. With objective: accuracy, the training
+# project and its ground truth are checked before any job is submitted.
+# The sweep stops (cancelling running jobs) after this many failed trials in a
+# row; 0 disables the stop.
+# max_consecutive_failures: 3
 
 # ---- objective: accuracy settings (ignored when objective: loss) ----------
 # Benchmark-dataset label for this (training project == evaluated project)

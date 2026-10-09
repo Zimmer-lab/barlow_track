@@ -657,10 +657,7 @@ def run_eval(args):
             from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind
             df_pred = add_metadata_to_df_raw_ind(df_pred, src_data.segmentation_metadata)
             # Accuracy vs GT on raw_segmentation_id level (paper recipe)
-            gt_data = ProjectData.load_final_project_data(gt_path, allow_hybrid_loading=True, verbose=0)
-            df_gt = gt_data.get_final_tracks_only_finished_neurons()[0]
-            if df_gt is None or df_gt.empty:
-                df_gt = gt_data.final_tracks
+            df_gt = _load_project_gt(gt_path)
             print(f"[{args.lab}/project] GT: {len(df_gt.columns.get_level_values(0).unique())} neurons, "
                   f"{len(df_gt)} frames; pred: {len(df_pred)} frames", flush=True)
             match_col = 'raw_segmentation_id'
@@ -765,6 +762,49 @@ def _save_embeddings(emb_path, **arrays):
     tmp = f"{emb_path}.tmp.npz"
     np.savez(tmp, **arrays)
     os.replace(tmp, emb_path)
+
+
+def _load_project_gt(gt_path):
+    """Ground-truth tracks of a project: its finished neurons, else all final_tracks."""
+    from wbfm.utils.projects.finished_project_data import ProjectData
+    gt_data = ProjectData.load_final_project_data(gt_path, allow_hybrid_loading=True, verbose=0)
+    df_gt = gt_data.get_final_tracks_only_finished_neurons()[0]
+    if df_gt is None or df_gt.empty:
+        df_gt = gt_data.final_tracks
+    return df_gt
+
+
+def preflight_trained_eval(project, gt=None, source='project'):
+    """Check, cheaply and up front, that evaluate_trained_checkpoint can score `project`.
+
+    The hyperparameter sweep calls this before submitting anything: inside a
+    trial, a missing project or ground truth only surfaces after hours of
+    training, and then identically in every trial. Raises ValueError with the
+    reason; returns a one-line summary of the ground truth otherwise. Uses the
+    same path resolution and GT selection as run_eval.
+    """
+    gt = gt if gt is not None else project
+    if source == 'nwb':
+        if not str(gt).endswith('.nwb'):
+            raise ValueError(f"source 'nwb' needs an NWB file as ground truth, got {gt!r}")
+        if not os.path.isfile(gt):
+            raise ValueError(f"NWB ground truth not found: {gt}")
+        return f"NWB ground truth {gt}"
+    try:
+        df_gt = _load_project_gt(gt)
+    except Exception as e:
+        raise ValueError(f"Could not load the ground-truth project {gt}: {e}") from e
+    if df_gt is None or df_gt.empty:
+        raise ValueError(f"Project {gt} has no ground-truth tracks (no finished neurons and "
+                         f"no final_tracks), so tracking accuracy cannot be measured")
+    if gt != project:
+        from wbfm.utils.projects.finished_project_data import ProjectData
+        try:
+            ProjectData.load_final_project_data(project, allow_hybrid_loading=True, verbose=0)
+        except Exception as e:
+            raise ValueError(f"Could not load the project to embed, {project}: {e}") from e
+    n_neurons = len(df_gt.columns.get_level_values(0).unique())
+    return f"ground truth {gt}: {n_neurons} neurons, {len(df_gt)} frames"
 
 
 def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir,

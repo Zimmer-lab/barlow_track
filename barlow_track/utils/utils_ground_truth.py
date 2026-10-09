@@ -220,6 +220,34 @@ def record_tag(trial_parent_dir, trial_num, dataset_label):
     return f"{parent}_trial{trial_num}_{dataset_label}"
 
 
+def read_results_by_tag(results_jsonl):
+    """tag -> latest record, from a shared results jsonl ({} if there is none).
+
+    The single reader for the files whose tags record_tag defines; both writers
+    (see record_tag) resume from it, so they cannot disagree on which cells are
+    done. Latest wins: a rerun overwrites a tag rather than accumulating
+    duplicates. Junk lines (a kill mid-write) are skipped instead of failing the
+    whole resume -- the safe direction, since a dropped cell is re-run, never
+    misread.
+    """
+    latest = {}
+    if not os.path.isfile(results_jsonl):
+        return latest
+    with open(results_jsonl) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            tag = rec.get('tag') if isinstance(rec, dict) else None
+            if tag is not None:
+                latest[tag] = rec
+    return latest
+
+
 def extract_val_from_json(trial_path, key='val_loss'):
     stats_path = os.path.join(trial_path, "log", "stats.json")
     if not os.path.isfile(stats_path):

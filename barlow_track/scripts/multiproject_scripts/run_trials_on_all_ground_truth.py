@@ -33,7 +33,7 @@ import sys
 # Tag scheme shared with the in-sweep objective (scripts/optimize_hyperparameters.py):
 # both write into one results jsonl that both deduplicate by tag, so the two must
 # agree exactly or a finished cell gets evaluated twice.
-from barlow_track.utils.utils_ground_truth import record_tag
+from barlow_track.utils.utils_ground_truth import read_results_by_tag, record_tag
 
 EVAL_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "eval_accuracy.py")
@@ -117,8 +117,10 @@ def parse_args():
     parser.add_argument("--slurm", action="store_true",
                         help="Submit one Slurm job per evaluation instead of running locally "
                              "(--jobs/--gpus/--sequential then only affect the debug preview)")
-    parser.add_argument("--slurm_time", default="01:00:00",
-                        help="Slurm wall time per evaluation job")
+    parser.add_argument("--slurm_time", default="04:00:00",
+                        help="Slurm wall time per evaluation job (leifer cells and "
+                             "CPU-contended zimmer cells can exceed 1 h; a timeout "
+                             "under --fail_fast cancels every sibling job)")
     parser.add_argument("--slurm_cpus", type=int, default=16,
                         help="CPUs per evaluation job (tracking is CPU-bound)")
     parser.add_argument("--slurm_mem", default="32G", help="Memory per evaluation job")
@@ -137,21 +139,12 @@ def parse_args():
 
 
 def recorded_tags(path):
-    """Tags already present in a results file ({} if there is none).
+    """Tags already present in a results file (empty if there is none).
 
-    The skip/resume decision for a whole (trial, dataset) cell. Tolerates junk
-    lines so one truncated write cannot make the file unreadable.
+    The skip/resume decision for a whole (trial, dataset) cell. Reads through
+    the same reader as the sweep's resume, so the two agree on what is done.
     """
-    done = set()
-    if os.path.isfile(path):
-        with open(path) as f:
-            for line in f:
-                if line.strip():
-                    try:
-                        done.add(json.loads(line).get("tag"))
-                    except (json.JSONDecodeError, AttributeError):
-                        pass
-    return done
+    return set(read_results_by_tag(path))
 
 
 def check_device(device_str):
@@ -265,7 +258,6 @@ def run_slurm(tasks, results_jsonl, args):
     folder = os.path.dirname(os.path.abspath(results_jsonl))
     executor = AutoExecutor(folder=folder, cluster="slurm")
     executor.update_parameters(
-        timeout_min=180,
         slurm_time=args.slurm_time,
         cpus_per_task=args.slurm_cpus,
         slurm_mem=args.slurm_mem,

@@ -35,6 +35,12 @@ import torch
 
 RESULTS = '/tmp/claude/exp_results.jsonl'
 
+# CUDA torch.quantile rejects inputs above its internal size cap
+# ("quantile() input tensor is too large"); stay 2x under with a
+# deterministic stride-subsample (percentiles over millions of voxels
+# are unaffected). Full-frame xy=64 crop stacks exceed the cap.
+_QUANTILE_MAX_ELEMENTS = 1 << 23
+
 LABS = {
     'zimmer': dict(
         project='/tmp/claude/eval_projects/zimmer/project_config.yaml',
@@ -191,9 +197,18 @@ def _rescale_gpu(x, lo_pct=5.0, hi_pct=99.5):
 
     Global cutoffs over the whole stack (as tio does), linear rescale,
     clipped to [0, 1]. Quantiles computed in float64 to match np.percentile.
+    Full-frame xy=64 crop stacks exceed the CUDA torch.quantile input-size
+    cap ("quantile() input tensor is too large"), so deterministically
+    stride-subsample to _QUANTILE_MAX_ELEMENTS first: percentile estimates
+    over millions of voxels are unaffected.
     """
     with torch.no_grad():
-        q = torch.quantile(x.detach().double().reshape(-1),
+        flat = x.detach().double().reshape(-1)
+        n = flat.numel()
+        if n > _QUANTILE_MAX_ELEMENTS:
+            stride = (n + _QUANTILE_MAX_ELEMENTS - 1) // _QUANTILE_MAX_ELEMENTS
+            flat = flat[::stride]
+        q = torch.quantile(flat,
                            torch.tensor([lo_pct / 100.0, hi_pct / 100.0],
                                         dtype=torch.float64, device=x.device))
         lo, hi = q[0].to(x.dtype), q[1].to(x.dtype)

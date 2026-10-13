@@ -94,6 +94,41 @@ def test_cpu_gpu_normalization_match():
     assert float((cpu_out - gpu_out).abs().max()) < 1e-5
 
 
+def test_rescale_gpu_oversize_subsample_close_to_full():
+    """Stacks above the CUDA quantile cap must rescale without error and
+    stay close to the exact full-quantile result (round_flavell xy=64 evals
+    crashed with 'quantile() input tensor is too large')."""
+    torch = pytest.importorskip('torch')
+    from barlow_track.scripts.eval_accuracy import _QUANTILE_MAX_ELEMENTS, _rescale_gpu
+    torch.manual_seed(0)
+    # > cap elements on any device (subsample path); ~40MB, CPU-safe.
+    n = int(_QUANTILE_MAX_ELEMENTS) + 2_000_000
+    x = (torch.rand(n) * 1000).float()
+    out = _rescale_gpu(x.clone())
+    assert out.shape == x.shape
+    assert bool(((out >= 0) & (out <= 1)).all())
+    # Reference: exact quantiles over all elements (CPU has no size cap).
+    with torch.no_grad():
+        q = torch.quantile(x.double().reshape(-1),
+                           torch.tensor([0.05, 0.995], dtype=torch.float64))
+        lo, hi = float(q[0]), float(q[1])
+    ref = ((x.double() - lo) / max(hi - lo, 1e-12)).clamp(0, 1).float()
+    assert float((out - ref).abs().max()) < 1e-3
+    # Deterministic: same input, bit-identical output.
+    assert torch.equal(out, _rescale_gpu(x.clone()))
+
+
+def test_correlation_for_plot_empty_batch_returns_none():
+    """A 0-object view must yield None (skip the plot), not crash the
+    backbone with view(0, -1) (round_flavell trial_2 training crash)."""
+    torch = pytest.importorskip('torch')
+    from barlow_track.scripts.train_barlow_clusterer import _correlation_for_plot
+    empty = (torch.empty(0, 1, 8, 8, 8), torch.empty(0, 1, 8, 8, 8),
+             torch.empty(0, 4, 3), torch.empty(0, 4, 3))
+    assert _correlation_for_plot(None, empty, 'cpu', True) is None
+    assert _correlation_for_plot(None, empty, 'cpu', False) is None
+
+
 def test_calculate_accuracy_key_types():
     df_gt = pd.DataFrame({'a': [1., 2., np.nan], 'b': [1., 2., 3.]})
     df_pred = pd.DataFrame({'a': [1., 9., np.nan], 'b': [1., 2., np.nan]})

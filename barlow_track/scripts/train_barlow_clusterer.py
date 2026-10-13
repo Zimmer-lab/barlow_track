@@ -230,10 +230,11 @@ def train_barlow_network(args):
                         if step % (100*args.print_freq) == 0:
                             with torch.no_grad():
                                 c = _correlation_for_plot(model, batch, gpu, use_position)
-                                save_fname = os.path.join(args.project_dir, 'log', f'correlation_matrix_{step}.png')
-                                fig = visualize_model_performance(c, save_fname=save_fname, vmin=-0.5, vmax=1)
-                                if run is not None:
-                                    run.log({"chart": fig})
+                                if c is not None:
+                                    save_fname = os.path.join(args.project_dir, 'log', f'correlation_matrix_{step}.png')
+                                    fig = visualize_model_performance(c, save_fname=save_fname, vmin=-0.5, vmax=1)
+                                    if run is not None:
+                                        run.log({"chart": fig})
 
             if args.rank == 0:
                 # save checkpoint
@@ -253,7 +254,8 @@ def train_barlow_network(args):
                         # Plot validation embedding
                         if run is not None:
                             c_batch = _correlation_for_plot(model, batch, gpu, use_position)
-                            c = c_batch if c is None else c + c_batch
+                            if c_batch is not None:
+                                c = c_batch if c is None else c + c_batch
                     if run is not None and c is not None and num_val_batches > 0:
                         c /= num_val_batches  # Plot the average
                         fig = visualize_model_performance(c, save_fname=None, vmin=-0.5, vmax=1)
@@ -435,7 +437,15 @@ def _run_forward(model, batch, gpu, use_position):
 
 
 def _correlation_for_plot(model, batch, gpu, use_position):
-    """Feature correlation matrix for the live training plot, either pipeline."""
+    """Feature correlation matrix for the live training plot, either pipeline.
+
+    Returns None for degenerate (empty) batches; callers must skip None.
+    An empty view (0 objects after filtering/dropout) cannot embed, and one
+    bad volume must not kill the whole trial (cf. the grad-free skip in the
+    training loop).
+    """
+    if batch[0].numel() == 0:
+        return None
     if not use_position:
         y1, y2 = _format_vectors_on_gpu(batch[0], batch[1], gpu)
         return model.calculate_correlation_matrix(y1, y2)

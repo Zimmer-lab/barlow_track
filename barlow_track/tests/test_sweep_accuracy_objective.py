@@ -339,12 +339,32 @@ def test_attach_trial_returns_an_integer_index_and_keeps_the_config():
 
 
 def test_attach_prior_trial_completes_with_the_accuracy():
-    client = _ax_client()
+    from ax.service.ax_client import AxClient
+    client = AxClient()
+    oh.create_sweep_experiment(client, [{'name': 'lr', 'type': 'range', 'bounds': [0.1, 1.0]}],
+                               accuracy_objective=True)
     index = oh.attach_prior_trial_to_ax_client(client, {'lr': 0.5}, 0.42)
     df = client.experiment.fetch_data().df
     assert float(df.loc[df.trial_index == index, 'mean'].iloc[0]) == pytest.approx(0.42)
     # get_best_parameters hands back ({metric: mean}, {metric: sem}) in Ax 0.3.
     assert oh.objective_mean(client.get_best_parameters()[1]) == pytest.approx(0.42)
+
+
+def test_resumed_priors_and_fresh_trials_share_one_variance_shape():
+    """Resumed priors must complete with the same (SEM-free) shape as fresh
+    trials: mixing known-variance with unknown-variance arms makes the BoTorch
+    fit fail with 'Mix of known and unknown variances' (round_flavell relaunch)."""
+    from ax.service.ax_client import AxClient
+    client = AxClient()
+    oh.create_sweep_experiment(client, [{'name': 'lr', 'type': 'range', 'bounds': [0.1, 1.0]}],
+                               accuracy_objective=True)
+    prior = oh.attach_prior_trial_to_ax_client(client, {'lr': 0.5}, 0.42)
+    fresh, _ = client.get_next_trials(max_trials=1)
+    fresh = next(iter(fresh))
+    client.complete_trial(fresh, raw_data={'result': 0.51})
+    df = client.experiment.fetch_data().df
+    assert set(df.trial_index) == {prior, fresh}
+    assert df['sem'].isna().all(), "every arm unknown-variance, or BoTorch refuses to fit"
 
 
 def test_attach_prior_trial_rejects_nonfinite_scores():

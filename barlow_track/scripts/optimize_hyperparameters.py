@@ -331,9 +331,11 @@ def attach_prior_trial_to_ax_client(ax_client, full_params, result):
     if not is_finite:
         raise ValueError(f"Non-finite prior trial result {mean!r}; skipping")
     trial_index = _attach_trial(ax_client, full_params)
-    if not isinstance(result, tuple):
-        result = (result, 0.0)  # Fake error bars
-    ax_client.complete_trial(trial_index, raw_data=result)
+    # No SEM: fresh trials complete with {"result": mean} (unknown variance),
+    # and mixing known-variance with unknown-variance arms makes the BoTorch
+    # fit fail with "Mix of known and unknown variances". A resumed prior must
+    # use the identical shape.
+    ax_client.complete_trial(trial_index, raw_data={"result": float(mean)})
     return trial_index
 
 

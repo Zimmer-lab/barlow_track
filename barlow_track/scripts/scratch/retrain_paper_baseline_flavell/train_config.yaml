@@ -1,0 +1,43 @@
+project_path: 
+  /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper/flavell_data/projects/2025_07_01/project_config.yaml
+pretrained_model_path:
+wandb_name: baseline_settings_flavell
+wandb_username: charlesfieseler
+projector: 2048-2048
+projector_final: 512
+embedding_dim: 64
+backbone_kwargs:
+  num_levels: 2
+  f_maps: 4
+target_sz_z: 16
+target_sz_xy: 64
+p_RandomAffine_base: 1.0
+p_RandomBlur_base: 0.1
+p_RandomNoise_base: 0.0
+p_RandomAffine_flip: 1.0
+p_RandomBlur: 0.0
+p_RandomAffine: 1.0
+p_RandomElasticDeformation: 1.0
+zxy_RandomElasticDeformation:
+- 1
+- 3
+- 3
+p_RandomNoise: 0.1
+std_RandomNoise: 0.25
+lambd: 0.0051
+batch_size: 1
+weight_decay: 1.0e-6
+epochs: 50
+lr: 0.0001
+num_frames: 300
+train_fraction: 0.8
+val_fraction: 0.1
+lambd_obj: 0.67
+print_freq: 100
+rank: 0
+dryrun: false
+DEBUG: false
+training_fraction: 0.8
+project_dir: 
+  /home/charles/.cache/barlow_scratch/train/baseline_flavell_head_rerun
+seed: 0

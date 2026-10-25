@@ -4,6 +4,10 @@
 # below are added. Those keys are read only when use_position is true (the
 # use_position: false path is the legacy crop pipeline, which ignores them), so
 # the use_position=false trials train exactly the preprint design.
+# global_augment is deliberately ABSENT: barlow.Transform applies it on the
+# legacy path too (on top of the per-crop transforms), which would change the
+# preprint design. use_position=true trials get DEFAULT_GLOBAL_ARGS instead
+# (same as round_flavell_more_epochs except p_flip 0.0 vs 0.25).
 project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper/flavell_data/projects/2025_07_01/project_config.yaml
 pretrained_model_path:
 wandb_name: barlow_track_round_flavell_paper_ablation
@@ -59,15 +63,6 @@ self_layers: 0
 keypoint_encoder_layers:
 - 32
 - 64
-global_augment:
-  max_degrees_z: 180.0
-  max_translation:
-  - 2
-  - 8
-  - 8
-  p_flip: 0.25
-  p_global_affine: 1.0
-  scale_jitter: 0.1
 crop_photometric:
   p_blur: 0.0
   p_noise: 0.1

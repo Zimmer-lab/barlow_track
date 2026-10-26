@@ -1,0 +1,88 @@
+# Baseline = the preprint flavell baseline (TrainedBarlow/baseline_flavell/trial_0),
+# unchanged except: project_path points at the barlow_track_paper copy, numeric
+# literals carry a decimal point, seed is explicit, and the position-branch keys
+# below are added. Those keys are read only when use_position is true (the
+# use_position: false path is the legacy crop pipeline, which ignores them), so
+# the use_position=false trials train exactly the preprint design.
+# paper_flavell_use_position_elastic: the use_position cell plus a global elastic field
+# matched to real flavell motion (scratch/local_geometry_change.py: std (1.1, 4.1, 4.1),
+# length 41, jitter 0.14-0.34 voxels), num_workers for the slower views, and the local
+# mirror of the flavell project.
+project_path: /home/charles/.cache/barlow_scratch/local_data/flavell/2025_07_01/project_config.yaml
+pretrained_model_path:
+wandb_name: barlow_track_round_flavell_paper_ablation
+wandb_username: charlesfieseler
+projector: 2048-2048
+projector_final: 512
+embedding_dim: 64
+projector_norm: batchnorm
+backbone_kwargs:
+  num_levels: 2
+  f_maps: 4
+target_sz_z: 16
+target_sz_xy: 64
+p_RandomAffine_base: 1.0
+p_RandomBlur_base: 0.1
+p_RandomNoise_base: 0.0
+p_RandomAffine_flip: 1.0
+p_RandomBlur: 0.0
+p_RandomAffine: 1.0
+p_RandomElasticDeformation: 1.0
+zxy_RandomElasticDeformation:
+- 1
+- 3
+- 3
+p_RandomNoise: 0.1
+std_RandomNoise: 0.25
+lambd: 0.0051
+batch_size: 1
+weight_decay: 1.0e-6
+epochs: 50
+lr: 1.0e-4
+num_frames: 300
+train_fraction: 0.8
+val_fraction: 0.1
+lambd_obj: 0.67
+print_freq: 100
+rank: 0
+dryrun: false
+DEBUG: false
+training_fraction: 0.8
+seed: 0
+project_dir: /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_elastic
+num_workers: 6
+
+# Position branch, copied from round_flavell_more_epochs/train_config.yaml
+# (whose trial_27 is the best flavell revision net, use_attention false).
+use_position: true
+use_attention: false
+position_encoder: visnet
+fusion: add
+fusion_norm: layernorm
+center_per_volume: true
+self_layers: 0
+keypoint_encoder_layers:
+- 32
+- 64
+global_augment:
+  max_degrees_z: 180.0
+  max_translation:
+  - 2
+  - 8
+  - 8
+  p_flip: 0.25
+  p_global_affine: 1.0
+  scale_jitter: 0.1
+  elastic_std:
+  - 1.1
+  - 4.1
+  - 4.1
+  elastic_length: 41.0
+crop_photometric:
+  p_blur: 0.0
+  p_noise: 0.1
+  std_noise: 0.25
+position_augment:
+  dropout_p: 0.2
+  jitter_std: 0.3
+  min_keep: 2

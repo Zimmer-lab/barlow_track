@@ -164,6 +164,8 @@ cython_debug/
 *.wandb
 barlow_track/scripts/wandb/
 *.json
+# ...except the ygg research tree's relations, config and Obsidian plugin settings
+!research/tree/**/*.json
 *.xml
 *.pickle
 *.pth

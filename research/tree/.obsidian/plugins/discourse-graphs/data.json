@@ -1,0 +1,337 @@
+{
+  "nodeTypes": [
+    {
+      "id": "node_ygg_question",
+      "name": "Question",
+      "format": "QUE - {content}",
+      "color": "#99890e",
+      "description": "An open question or hypothesis.",
+      "template": "ygg-question",
+      "folderPath": "tree",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "node_ygg_claim",
+      "name": "Claim",
+      "format": "CLM - {content}",
+      "color": "#7DA13E",
+      "description": "An assertion supported by evidence, including claims about methods.",
+      "template": "ygg-claim",
+      "folderPath": "tree",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "node_ygg_evidence",
+      "name": "Evidence",
+      "format": "EVD - {content}",
+      "color": "#DB134A",
+      "description": "What a run, run group or investigation showed, with its caveats.",
+      "template": "ygg-evidence",
+      "folderPath": "tree",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "node_ygg_source",
+      "name": "Source",
+      "format": "@{content}",
+      "color": "#9E9E9E",
+      "description": "A paper, a run or run group, or a detailed project tree.",
+      "template": "ygg-source",
+      "folderPath": "tree",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "node_ygg_dataset",
+      "name": "Dataset",
+      "format": "DATA - {content}",
+      "color": "#3B6FB6",
+      "description": "A dataset, version or subset that results are established on.",
+      "template": "ygg-dataset",
+      "folderPath": "tree",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    }
+  ],
+  "relationTypes": [
+    {
+      "id": "relation_ygg_supports",
+      "label": "supports",
+      "complement": "is supported by",
+      "color": "green",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "relation_ygg_opposes",
+      "label": "opposes",
+      "complement": "is opposed by",
+      "color": "red",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "relation_ygg_informs",
+      "label": "informs",
+      "complement": "is informed by",
+      "color": "grey",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "relation_ygg_derived-from",
+      "label": "derived from",
+      "complement": "has derivation",
+      "color": "blue",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "relation_ygg_addresses",
+      "label": "addresses",
+      "complement": "is addressed by",
+      "color": "light-green",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "relation_ygg_follows-from",
+      "label": "follows from",
+      "complement": "leads to",
+      "color": "violet",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "relation_ygg_supersedes",
+      "label": "supersedes",
+      "complement": "is superseded by",
+      "color": "orange",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "relation_ygg_blocked-by",
+      "label": "blocked by",
+      "complement": "blocks",
+      "color": "light-red",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    }
+  ],
+  "discourseRelations": [
+    {
+      "id": "rel3_ygg_evidence_supports_claim",
+      "sourceId": "node_ygg_evidence",
+      "destinationId": "node_ygg_claim",
+      "relationshipTypeId": "relation_ygg_supports",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_evidence_opposes_claim",
+      "sourceId": "node_ygg_evidence",
+      "destinationId": "node_ygg_claim",
+      "relationshipTypeId": "relation_ygg_opposes",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_evidence_informs_question",
+      "sourceId": "node_ygg_evidence",
+      "destinationId": "node_ygg_question",
+      "relationshipTypeId": "relation_ygg_informs",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_evidence_derived-from_source",
+      "sourceId": "node_ygg_evidence",
+      "destinationId": "node_ygg_source",
+      "relationshipTypeId": "relation_ygg_derived-from",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_evidence_derived-from_dataset",
+      "sourceId": "node_ygg_evidence",
+      "destinationId": "node_ygg_dataset",
+      "relationshipTypeId": "relation_ygg_derived-from",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_source_derived-from_source",
+      "sourceId": "node_ygg_source",
+      "destinationId": "node_ygg_source",
+      "relationshipTypeId": "relation_ygg_derived-from",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_source_derived-from_dataset",
+      "sourceId": "node_ygg_source",
+      "destinationId": "node_ygg_dataset",
+      "relationshipTypeId": "relation_ygg_derived-from",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_dataset_derived-from_dataset",
+      "sourceId": "node_ygg_dataset",
+      "destinationId": "node_ygg_dataset",
+      "relationshipTypeId": "relation_ygg_derived-from",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_claim_addresses_question",
+      "sourceId": "node_ygg_claim",
+      "destinationId": "node_ygg_question",
+      "relationshipTypeId": "relation_ygg_addresses",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_question_follows-from_question",
+      "sourceId": "node_ygg_question",
+      "destinationId": "node_ygg_question",
+      "relationshipTypeId": "relation_ygg_follows-from",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_question_follows-from_claim",
+      "sourceId": "node_ygg_question",
+      "destinationId": "node_ygg_claim",
+      "relationshipTypeId": "relation_ygg_follows-from",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_claim_follows-from_claim",
+      "sourceId": "node_ygg_claim",
+      "destinationId": "node_ygg_claim",
+      "relationshipTypeId": "relation_ygg_follows-from",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_question_supersedes_question",
+      "sourceId": "node_ygg_question",
+      "destinationId": "node_ygg_question",
+      "relationshipTypeId": "relation_ygg_supersedes",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_claim_supersedes_claim",
+      "sourceId": "node_ygg_claim",
+      "destinationId": "node_ygg_claim",
+      "relationshipTypeId": "relation_ygg_supersedes",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_evidence_supersedes_evidence",
+      "sourceId": "node_ygg_evidence",
+      "destinationId": "node_ygg_evidence",
+      "relationshipTypeId": "relation_ygg_supersedes",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_source_supersedes_source",
+      "sourceId": "node_ygg_source",
+      "destinationId": "node_ygg_source",
+      "relationshipTypeId": "relation_ygg_supersedes",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_dataset_supersedes_dataset",
+      "sourceId": "node_ygg_dataset",
+      "destinationId": "node_ygg_dataset",
+      "relationshipTypeId": "relation_ygg_supersedes",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_question_blocked-by_question",
+      "sourceId": "node_ygg_question",
+      "destinationId": "node_ygg_question",
+      "relationshipTypeId": "relation_ygg_blocked-by",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_question_blocked-by_claim",
+      "sourceId": "node_ygg_question",
+      "destinationId": "node_ygg_claim",
+      "relationshipTypeId": "relation_ygg_blocked-by",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_question_blocked-by_evidence",
+      "sourceId": "node_ygg_question",
+      "destinationId": "node_ygg_evidence",
+      "relationshipTypeId": "relation_ygg_blocked-by",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_claim_blocked-by_question",
+      "sourceId": "node_ygg_claim",
+      "destinationId": "node_ygg_question",
+      "relationshipTypeId": "relation_ygg_blocked-by",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_claim_blocked-by_claim",
+      "sourceId": "node_ygg_claim",
+      "destinationId": "node_ygg_claim",
+      "relationshipTypeId": "relation_ygg_blocked-by",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_claim_blocked-by_evidence",
+      "sourceId": "node_ygg_claim",
+      "destinationId": "node_ygg_evidence",
+      "relationshipTypeId": "relation_ygg_blocked-by",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_evidence_blocked-by_question",
+      "sourceId": "node_ygg_evidence",
+      "destinationId": "node_ygg_question",
+      "relationshipTypeId": "relation_ygg_blocked-by",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_evidence_blocked-by_claim",
+      "sourceId": "node_ygg_evidence",
+      "destinationId": "node_ygg_claim",
+      "relationshipTypeId": "relation_ygg_blocked-by",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    },
+    {
+      "id": "rel3_ygg_evidence_blocked-by_evidence",
+      "sourceId": "node_ygg_evidence",
+      "destinationId": "node_ygg_evidence",
+      "relationshipTypeId": "relation_ygg_blocked-by",
+      "created": 1792540800000,
+      "modified": 1792540800000
+    }
+  ],
+  "nodesFolderPath": "tree",
+  "canvasFolderPath": "canvas"
+}

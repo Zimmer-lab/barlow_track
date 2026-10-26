@@ -428,3 +428,21 @@ Correction to the 17:50 entry: the local paper_flavell_use_position run (0.795 N
 ## 2026-10-26 18:12 — decision
 
 Added [[QUE - Which part of the position pipeline costs Flavell accuracy, its augmentation or its position fusion]] (backdated to 2026-10-25 07:25, when the use_position switch run raised it; it had been tracked across runs without a node). Under it: the two competing answers ([[CLM - The position pipeline's augmentation, not position fusion, holds the revision networks below the preprint]], scope revised after the per-crop result; new [[CLM - Position fusion lets the position pipeline skip learning appearance on Flavell]], the position-shortcut idea of the 2026-10-26 entry), the filled per-crop evidence (failed: 0.657/0.487), the neighbour-distance evidence, the in-progress image-only run and the planned elastic run.
+
+## 2026-10-26 22:24 — run
+
+Fused position pipeline with Flavell-matched global elastic deformation (elastic_std (1.1,4.1,4.1), length 41, jitter_std 0.3 instead of 1.0; otherwise the preprint Flavell use_position cell, seed 0, num_workers 6), barlow_track@803401c, scored against the NWB GT at auto and backbone. Fused first because the fused cell has three training seeds to compare against (0.769/0.795/0.848).
+
+run r261026-1722467 · pids 1722467 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_elastic/run.log · for [[EVD - Flavell-matched global elastic deformation in the position pipeline]]
+
+## 2026-10-26 22:25 — decision
+
+r261026-1561729: image features alone in the position pipeline score 0.8186 on Flavell (NWB GT, seed 0), inside the fused cell's training-seed range 0.769-0.848; the data path, not fusion, costs the 14 points. Recorded in [[EVD - Image features alone in the position pipeline]]; [[CLM - Position fusion lets the position pipeline skip learning appearance on Flavell]] refuted as main cause, [[CLM - The position pipeline's augmentation, not position fusion, holds the revision networks below the preprint]] raised to medium.
+
+## 2026-10-26 22:25
+
+r261026-1606883 batch 1 (7 round_flavell_paper_ablation position cells vs NWB GT): offsets NWB minus project GT +2.6 to +4.2 (mean 3.4); seed 921677937 beats seed 43 in all three pairs by 5-12 points. Recorded in [[EVD - Flavell paper ablation grid of pipeline, embedding size and projector norm]]. Batch 2 (12 round_flavell_more_epochs cells) running.
+
+## 2026-10-26 22:25 — surprise
+
+Validation loss: the legacy pipeline's falls throughout training (0.0044 -> 0.0009, train 2.8e-5), while every position-pipeline run's falls for a few epochs and then rises (fused 0.036 -> 0.054, image-only 0.040 -> 0.064, per-crop aug 0.044 -> 0.069; train ~1.2e-4), 40-70x higher. With fusion ruled out, the global data path seems to let the image features fit the training frames without generalizing to held-out ones. Worth checking what the views look like (napari viewer) and how the two data modules differ beyond augmentation.

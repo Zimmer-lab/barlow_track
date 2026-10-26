@@ -4,7 +4,7 @@ nodeInstanceId: 01a17930-f1ba-777d-be30-6f219f30985c
 status: in-progress
 priority: high
 dateCreated: 2026-10-25T07:25
-dateModified: 2026-10-25T07:25
+dateModified: 2026-10-26T22:25:30+01:00
 projects:
   - "[[barlowtrack]]"
 ---
@@ -15,6 +15,6 @@ Switching the preprint Flavell configuration from the legacy crop pipeline to th
 
 ## Context
 
-Tracked across runs since 2026-10-25 before it had a node. Candidate answers so far: the augmentation (the position pipeline lacks the preprint's per-crop rotation and elastic deformation) and a position shortcut (within a training pair both views are one volume under a near-rigid transform, so position almost solves the Barlow loss and the image branch need not learn identity). Both point at the same lever: augmentation that moves neurons non-rigidly between views, which the global elastic deformation (914141c) adds.
+Tracked across runs since 2026-10-25 before it had a node. As of 2026-10-26 the data path, not fusion: training without the position branch scores 0.819, inside the fused cell's training-seed range 0.77-0.85 (NWB GT), against 0.957 for the legacy pipeline. The position-shortcut answer is refuted as the main cause, and missing per-crop augmentation is ruled out (adding it made things worse). Open: which part of the data path. Validation loss rises in every position-pipeline run and falls in the legacy one, so the global data path's image features generalize poorly from training frames; non-rigid deformation between views (global elastic, 914141c) is the first candidate under test.
 
-Single runs settle little here: the position pipeline's Flavell accuracy spreads by about +-4 points across training seeds (round_flavell_paper_ablation seed pairs, round_flavell_more_epochs), while the legacy pipeline's training-seed spread is unmeasured. Read every comparison against that spread.
+Single runs settle little here: the position pipeline's Flavell accuracy spreads by 5-12 points across training seeds (round_flavell_paper_ablation seed pairs), while the legacy pipeline's training-seed spread is unmeasured. Read every comparison against that spread.

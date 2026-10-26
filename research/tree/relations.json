@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastModified": 1793034717245,
+  "lastModified": 1793049930034,
   "relations": {
     "01a1659f-a4ba-700e-91b0-c603dda7da35": {
       "id": "01a1659f-a4ba-700e-91b0-c603dda7da35",
@@ -1835,6 +1835,34 @@
       "source": "01a17932-66a4-7b50-a536-a58ca1587314",
       "destination": "01a17930-f1ba-777d-be30-6f219f30985c",
       "created": 1793034708646
+    },
+    "01a17a19-87be-70ba-a56c-892d4dd67c0d": {
+      "id": "01a17a19-87be-70ba-a56c-892d4dd67c0d",
+      "type": "relation_ygg_derived-from",
+      "source": "01a17a19-87bd-7c95-9f45-a1b5dfde26c1",
+      "destination": "01a1659e-d17b-7b62-b826-8ca81a1db951",
+      "created": 1793049855934
+    },
+    "01a17a19-8841-7e54-9932-f0d164c4f725": {
+      "id": "01a17a19-8841-7e54-9932-f0d164c4f725",
+      "type": "relation_ygg_derived-from",
+      "source": "01a17932-6621-7398-8121-321e354ed94c",
+      "destination": "01a17a19-87bd-7c95-9f45-a1b5dfde26c1",
+      "created": 1793049856065
+    },
+    "01a17a19-d190-75e6-8212-eb263b9dfde9": {
+      "id": "01a17a19-d190-75e6-8212-eb263b9dfde9",
+      "type": "relation_ygg_supports",
+      "source": "01a17932-6621-7398-8121-321e354ed94c",
+      "destination": "01a1776f-cb63-73ca-b611-fc8617478ee9",
+      "created": 1793049874832
+    },
+    "01a17a19-d219-796d-a475-2399b94acb7b": {
+      "id": "01a17a19-d219-796d-a475-2399b94acb7b",
+      "type": "relation_ygg_opposes",
+      "source": "01a17932-6621-7398-8121-321e354ed94c",
+      "destination": "01a17931-af25-7caf-81e1-2a27bf1eebb9",
+      "created": 1793049874969
     }
   }
 }

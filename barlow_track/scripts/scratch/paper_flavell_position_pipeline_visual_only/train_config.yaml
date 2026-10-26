@@ -4,7 +4,9 @@
 # below are added. Those keys are read only when use_position is true (the
 # use_position: false path is the legacy crop pipeline, which ignores them), so
 # the use_position=false trials train exactly the preprint design.
-project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper/flavell_data/projects/2025_07_01/project_config.yaml
+# Local mirror of barlow_track_paper/flavell_data/projects/2025_07_01: two attempts
+# died on EIO reading the zarr over the soft-mounted /lisc CIFS share.
+project_path: /home/charles/.cache/barlow_scratch/local_data/flavell/2025_07_01/project_config.yaml
 pretrained_model_path:
 wandb_name: barlow_track_round_flavell_paper_ablation
 wandb_username: charlesfieseler

@@ -23,7 +23,7 @@ PAPER = '/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper/flav
 
 
 def umeyama_residuals(a, b):
-    """Residuals of b vs the best similarity transform of a onto b (rows matched)."""
+    """Residual vectors of b vs the best similarity transform of a onto b (rows matched)."""
     ma, mb = a.mean(0), b.mean(0)
     A, B = a - ma, b - mb
     U, S, Vt = np.linalg.svd(B.T @ A / len(a))
@@ -32,7 +32,16 @@ def umeyama_residuals(a, b):
     R = U @ D @ Vt
     scale = np.trace(np.diag(S) @ D) / A.var(0).sum()
     fit = scale * A @ R.T + mb
-    return np.linalg.norm(b - fit, axis=1), scale
+    return b - fit, scale
+
+
+def residual_correlation(points, vecs, bins):
+    """Mean cosine-free correlation <v_i . v_j> / <|v|^2> of residual vectors, binned by distance."""
+    dist = np.linalg.norm(points[:, None] - points[None], axis=-1)
+    dots = vecs @ vecs.T / np.mean((vecs ** 2).sum(1))
+    iu = np.triu_indices(len(points), 1)
+    idx = np.digitize(dist[iu], bins)
+    return np.array([dots[iu][idx == k].mean() if np.any(idx == k) else np.nan for k in range(1, len(bins))])
 
 
 def main():
@@ -61,9 +70,12 @@ def main():
     print('training position augmentation: jitter_std 1.0 voxel per axis (|d| median ~1.5), '
           'scale_jitter 0.1, dropout 0.2; nothing non-rigid')
 
+    extent = np.nanpercentile(pos.reshape(-1, 3), 95, axis=0) - np.nanpercentile(pos.reshape(-1, 3), 5, axis=0)
+    print(f'worm extent p5-p95 (z, x, y): {np.round(extent, 1)} voxels')
+    bins = np.array([0, 5, 10, 20, 40, 80, 160, 1000.0])
     rng = np.random.default_rng(args.seed)
     for lag in args.lags:
-        res, scales = [], []
+        res, scales, corr = [], [], []
         for t in rng.integers(0, T - lag, size=args.pairs):
             a, b = pos[t], pos[t + lag]
             ok = np.isfinite(a).all(1) & np.isfinite(b).all(1)
@@ -72,11 +84,16 @@ def main():
             r, s = umeyama_residuals(a[ok], b[ok])
             res.append(r)
             scales.append(s)
+            corr.append(residual_correlation(b[ok], r, bins))
         res = np.concatenate(res)
-        print(f'lag {lag:4d}: residual after similarity fit median {np.median(res):.2f}, '
-              f'p90 {np.percentile(res, 90):.2f} voxels; '
-              f'fraction > half NN distance {np.mean(res > np.median(nn) / 2):.2f}; '
+        mag = np.linalg.norm(res, axis=1)
+        print(f'lag {lag:4d}: residual after similarity fit median {np.median(mag):.2f}, '
+              f'p90 {np.percentile(mag, 90):.2f} voxels; per-axis std (z, x, y) {np.round(res.std(0), 2)}; '
+              f'fraction > half NN distance {np.mean(mag > np.median(nn) / 2):.2f}; '
               f'fitted scale p5-p95 {np.percentile(scales, 5):.3f}-{np.percentile(scales, 95):.3f}')
+        c = np.nanmean(np.array(corr), axis=0)
+        print('          residual correlation by distance: ' +
+              ', '.join(f'{bins[k]:.0f}-{bins[k + 1]:.0f}: {c[k]:.2f}' for k in range(len(c))))
 
 
 if __name__ == '__main__':

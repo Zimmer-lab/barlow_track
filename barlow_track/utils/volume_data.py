@@ -37,7 +37,18 @@ DEFAULT_GLOBAL_ARGS = dict(
     scale_jitter=0.1,
     max_translation=(2, 8, 8),  # (z, x, y) voxels
     p_flip=0.0,  # extra 180 deg in-plane flip; 180 deg range already covers it
+    # Smooth non-rigid deformation of volume AND points (one field per view).
+    # ViSNet position features ignore rotation/translation, so without this the
+    # two views' layouts differ only by scale, jitter and dropout. On flavell,
+    # elastic_std (1, 4, 4), elastic_length 40 with position jitter_std 0.3
+    # matches how much neighbor distances change between real frames, from
+    # 8 to 140 voxels (scratch/local_geometry_change.py); jitter_std 1.0 alone
+    # over-perturbs close pairs and under-perturbs distant ones. Strong short
+    # fields (e.g. std 3 at length 15) fold.
+    elastic_std=0.0,  # voxels, per-axis std of the field; float or (z, x, y). 0 = off
+    elastic_length=40.0,  # voxels, distance at which the field's correlation is 1/e
 )
+ELASTIC_KEYS = ('elastic_std', 'elastic_length')
 
 DEFAULT_CROP_PHOTOMETRIC_ARGS = dict(
     p_blur=0.0,
@@ -125,17 +136,99 @@ def apply_stack_affine(crops, R, t, order=1):
     return out.squeeze(1)
 
 
-def apply_global_affine(volume, points_zxy, R, t, order=1):
+def split_global_args(global_args):
+    """global_augment dict -> (affine kwargs for sample_global_affine, elastic kwargs)."""
+    args = dict(global_args or {})
+    elastic = {k: args.pop(k) for k in ELASTIC_KEYS if k in args}
+    return args, elastic
+
+
+class ElasticField:
+    """Backward displacement field v (voxels, (z, x, y)) on a coarse grid of spacing `step`.
+
+    Output voxel y of the warp shows the input at y + v(y), so the volume warp
+    is exact by construction; a point p moves to the y solving y + v(y) = p,
+    found per point by fixed-point iteration (forward_points). The field is
+    smooth on the scale of `step`; linear interpolation gives it anywhere.
+    """
+
+    def __init__(self, coarse, step):
+        self.coarse = np.asarray(coarse, dtype=np.float32)  # (3, cz, cx, cy)
+        self.step = np.asarray(step, dtype=float)  # (3,)
+
+    def at(self, coords):
+        """v at (3, ...) voxel coordinates -> (3, ...)."""
+        coords = np.asarray(coords, dtype=np.float32)
+        c = coords / self.step.reshape((3,) + (1,) * (coords.ndim - 1))
+        return np.stack([ndimage.map_coordinates(f, c, order=1, mode='nearest') for f in self.coarse])
+
+    def forward_points(self, points_zxy, iterations=50):
+        """(N, 3) input points -> (N, 3) output positions y with y + v(y) = p.
+
+        y <- p - v(y) contracts where |grad v| < 1, i.e. where the warp does not
+        fold; cheap because it only runs on the N points.
+        """
+        p = np.asarray(points_zxy, dtype=float).T
+        y = p - self.at(p)
+        for _ in range(iterations):
+            y = p - self.at(y)
+        return y.T
+
+
+def sample_elastic_field(rng, shape, elastic_std=0.0, elastic_length=15.0):
+    """Smooth random ElasticField over a (D, H, W) volume, or None when off.
+
+    Gaussian-filtered white noise: with filter sigma = elastic_length / 2 the
+    field's spatial correlation is exp(-d^2 / elastic_length^2), i.e. 1/e at
+    elastic_length. Each component is rescaled to std elastic_std (per axis).
+    Draws nothing from rng when off, so disabled configs keep their streams.
+    The grid spacing is ~sigma/2 voxels, fine enough for a field this smooth.
+    """
+    std = _parse_jitter_std(elastic_std)
+    if bool((std == 0).all()):
+        return None
+    length = _parse_jitter_std(elastic_length)
+    shape = np.asarray(shape)
+    sigma = length / 2.0
+    step = np.maximum(1, np.floor(sigma / 2.0)).astype(int)
+    coarse_shape = tuple(np.ceil((shape - 1) / step).astype(int) + 1)
+    coarse = np.empty((3,) + coarse_shape, dtype=np.float32)
+    for a in range(3):
+        smooth = ndimage.gaussian_filter(rng.normal(size=coarse_shape), sigma=sigma / step, mode='reflect')
+        coarse[a] = smooth - smooth.mean()
+    field = ElasticField(coarse, step)
+    # Normalize the std of the interpolated field (linear interpolation between
+    # nodes lowers it a few percent), measured at fixed off-grid probe points
+    # so the caller's rng stream is not touched.
+    probes = np.random.RandomState(0).uniform(0, 1, size=(3, 4096)) * (shape - 1)[:, None]
+    field.coarse *= (std / (field.at(probes).std(1) + 1e-12)).astype(np.float32)[:, None, None, None]
+    return field
+
+
+def apply_global_affine(volume, points_zxy, R, t, order=1, field=None):
     """Apply forward transform x' = R(x - C) + C + t to volume and points.
 
     volume: (D, H, W); points_zxy: (N, 3). Returns (augmented volume, moved points).
+    With an ElasticField v (see sample_elastic_field), output voxel y shows the
+    affine image at y + v(y), and points move on accordingly.
     """
     center = (np.array(volume.shape) - 1) / 2.0
     R_inv = np.linalg.inv(R)
-    offset = center - R_inv @ (center + t)
-    vol_aug = ndimage.affine_transform(np.asarray(volume, dtype=np.float32),
-                                       R_inv, offset=offset, order=order, mode='nearest')
     pts_aug = (points_zxy - center) @ R.T + center + t
+    if field is None:
+        offset = center - R_inv @ (center + t)
+        vol_aug = ndimage.affine_transform(np.asarray(volume, dtype=np.float32),
+                                           R_inv, offset=offset, order=order, mode='nearest')
+        return vol_aug, pts_aug
+    # Output voxel y shows the affine image at w = y + v(y), i.e. the input
+    # voxel R^-1 (w - C - t) + C: one resampling for both maps.
+    y = np.indices(volume.shape, dtype=np.float32)
+    w = y + field.at(y)
+    src = np.tensordot(R_inv.astype(np.float32), w - (center + t).astype(np.float32)[:, None, None, None],
+                       axes=1) + center.astype(np.float32)[:, None, None, None]
+    vol_aug = ndimage.map_coordinates(np.asarray(volume, dtype=np.float32), src, order=order, mode='nearest')
+    if len(pts_aug):
+        pts_aug = field.forward_points(pts_aug)
     return vol_aug, pts_aug
 
 
@@ -342,8 +435,10 @@ class VolumeCoordsDataset(Dataset):
         return y1, y2, k1, k2, i1, i2
 
     def _augmented_view(self, volume, points):
-        R, t_vec = sample_global_affine(self.rng, **self.global_args)
-        vol_aug, pts_aug = apply_global_affine(volume, points, R, t_vec)
+        affine_args, elastic_args = split_global_args(self.global_args)
+        R, t_vec = sample_global_affine(self.rng, **affine_args)
+        field = sample_elastic_field(self.rng, volume.shape, **elastic_args)
+        vol_aug, pts_aug = apply_global_affine(volume, points, R, t_vec, field=field)
         # Position-only jitter: shift crop centers AND keypoints together
         pts_aug = apply_position_jitter(pts_aug, self.rng,
                                         self.position_args.get('jitter_std', 0.0))

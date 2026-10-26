@@ -12,10 +12,13 @@ from test_step0_embed_and_augment import PROJECT_PATH, requires_project
 
 from barlow_track.utils.volume_data import (
     VolumeCoordsDataset,
+    DEFAULT_GLOBAL_ARGS,
     apply_global_affine,
     get_centroids_for_volume,
     load_volume,
+    sample_elastic_field,
     sample_global_affine,
+    split_global_args,
 )
 
 
@@ -59,6 +62,68 @@ def test_affine_rotation_about_z_keeps_z():
     pts = np.array([[3.0, 5.0, 7.0]])
     _, pts_aug = apply_global_affine(np.zeros((8, 20, 20), dtype=np.float32), pts, R, t)
     assert pts_aug[0, 0] == pytest.approx(3.0)  # z untouched by in-plane rotation
+
+
+# ---------------------------------------------------------- elastic field (synthetic, fast)
+def test_elastic_off_draws_nothing():
+    # Default (elastic_std 0) must leave existing configs' RNG streams untouched
+    rng = np.random.RandomState(0)
+    state = rng.get_state()[1].copy()
+    _, elastic = split_global_args(DEFAULT_GLOBAL_ARGS)
+    assert sample_elastic_field(rng, (8, 20, 20), **elastic) is None
+    assert np.array_equal(rng.get_state()[1], state)
+
+
+def test_elastic_field_std_and_correlation_length():
+    rng = np.random.RandomState(0)
+    std, length = (1.0, 3.0, 5.0), 10.0
+    field = sample_elastic_field(rng, (32, 96, 96), elastic_std=std, elastic_length=length)
+    full = field.at(np.indices((32, 96, 96)))
+    assert full.shape == (3, 32, 96, 96)
+    assert np.allclose(full.reshape(3, -1).std(1), std, rtol=0.05)
+    # Correlation exp(-d^2 / L^2): ~1/e at d = L along x, near 0 at 2L
+    f = full[2] / full[2].std()
+    corr = lambda d: np.mean(f[:, :-d] * f[:, d:])
+    assert 0.2 < corr(int(length)) < 0.55
+    assert abs(corr(2 * int(length))) < 0.15
+
+
+def test_elastic_moves_volume_with_points():
+    # Blobs at the input points must land at the output points (affine + field)
+    shape = (16, 64, 64)
+    pts = np.array([[8.0, 20.0, 20.0], [6.0, 40.0, 30.0], [10.0, 30.0, 45.0]])
+    zz, xx, yy = np.indices(shape)
+    vol = np.zeros(shape, dtype=np.float32)
+    for p in pts:
+        vol += np.exp(-((zz - p[0]) ** 2 + (xx - p[1]) ** 2 + (yy - p[2]) ** 2) / (2 * 1.5 ** 2))
+    rng = np.random.RandomState(3)
+    R, t = sample_global_affine(rng, max_degrees_z=30.0, scale_jitter=0.05, max_translation=(1, 3, 3))
+    field = sample_elastic_field(rng, shape, elastic_std=(1.0, 3.0, 3.0), elastic_length=15.0)
+    vol_aug, pts_aug = apply_global_affine(vol, pts, R, t, field=field)
+    _, pts_rigid = apply_global_affine(vol, pts, R, t)
+    assert np.linalg.norm(pts_aug - pts_rigid, axis=1).max() > 1.0  # the field did move them
+    for q in pts_aug:
+        lo = np.maximum(np.round(q).astype(int) - 4, 0)
+        win = vol_aug[lo[0]:lo[0] + 9, lo[1]:lo[1] + 9, lo[2]:lo[2] + 9]
+        peak = lo + np.array(np.unravel_index(np.argmax(win), win.shape))
+        assert np.linalg.norm(peak - q) <= 1.5
+
+
+def test_elastic_forward_points_inverts_backward_map():
+    rng = np.random.RandomState(1)
+    # Moderate field (no folding, max |grad v| < 1); strong fields fold and the
+    # fixed point cannot converge everywhere
+    field = sample_elastic_field(rng, (16, 64, 64), elastic_std=(0.5, 1.5, 1.5), elastic_length=15.0)
+    p = np.random.RandomState(2).uniform([2, 8, 8], [13, 55, 55], size=(200, 3))
+    y = field.forward_points(p)
+    assert np.abs(y + field.at(y.T).T - p).max() < 0.05
+
+
+def test_legacy_crop_path_rejects_elastic():
+    from barlow_track.utils.barlow import Transform
+    tr = Transform(dict(global_augment=dict(elastic_std=2.0)))
+    with pytest.raises(ValueError, match="elastic_std"):
+        tr(torch.rand(3, 4, 16, 16))
 
 
 # ---------------------------------------------------------- dataset on real project

@@ -18,7 +18,7 @@ import math
 import logging
 
 from barlow_track.utils.data_loading import get_bbox_data_for_volume_with_label
-from barlow_track.utils.volume_data import apply_stack_affine, sample_global_affine
+from barlow_track.utils.volume_data import apply_stack_affine, sample_global_affine, split_global_args
 
 
 def off_diagonal(x):
@@ -251,7 +251,13 @@ class Transform:
         """
         if not self.global_args:
             return x
-        R, t = sample_global_affine(np.random, **self.global_args)
+        affine_args, elastic_args = split_global_args(self.global_args)
+        if np.any(np.asarray(elastic_args.get('elastic_std', 0.0)) != 0):
+            # Crop stacks carry no full volume to warp; the legacy path has its
+            # own per-crop RandomElasticDeformation (p_RandomElasticDeformation).
+            raise ValueError("global_augment elastic_std needs the full-volume pipeline "
+                             "(use_position true); the legacy crop path cannot apply it")
+        R, t = sample_global_affine(np.random, **affine_args)
         return apply_stack_affine(x, R, t)
 
     def normalize(self, img):

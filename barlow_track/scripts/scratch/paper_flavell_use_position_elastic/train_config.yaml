@@ -6,8 +6,7 @@
 # the use_position=false trials train exactly the preprint design.
 # paper_flavell_use_position_elastic: the use_position cell plus a global elastic field
 # matched to real flavell motion (scratch/local_geometry_change.py: std (1.1, 4.1, 4.1),
-# length 41, jitter 0.14-0.34 voxels), num_workers for the slower views, and the local
-# mirror of the flavell project.
+# length 41, jitter 0.14-0.34 voxels) and the local mirror of the flavell project.
 project_path: /home/charles/.cache/barlow_scratch/local_data/flavell/2025_07_01/project_config.yaml
 pretrained_model_path:
 wandb_name: barlow_track_round_flavell_paper_ablation
@@ -50,7 +49,9 @@ DEBUG: false
 training_fraction: 0.8
 seed: 0
 project_dir: /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_elastic
-num_workers: 6
+# num_workers > 0 crashes (BadZipFile, Bad CRC-32): forked workers share the zarr
+# ZipStore's file handle. Serial loading: ~2.35 s per item with the elastic warp.
+num_workers: 0
 
 # Position branch, copied from round_flavell_more_epochs/train_config.yaml
 # (whose trial_27 is the best flavell revision net, use_attention false).

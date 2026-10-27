@@ -565,3 +565,9 @@ run r261027-562757 · pids 562757 · host charles-Precision-7820-Tower · logs /
 ## 2026-10-27 18:16 — run
 
 r261027-2876617: norot final checkpoint on the proxy's 30 whole-video frames: 0.499 fused / 0.497 backbone, against the rotating cell's 0.477 / 0.366. Accuracy moved -0.8 fused and +2.4 backbone points, so the proxy ranked the fused pair the wrong way (within noise) and overstated the backbone gain (+13 proxy points for +2.4 accuracy). It orders networks roughly, not by the few points that separate close arms.
+
+## 2026-10-27 18:16 — ask
+
+Every use_position network since 2026-10-05 trained on one fixed augmented view pair per frame (i261027-1). barlow_track@7f9f7bc adds reaugment_each_epoch, off by default per the keep-new-behaviour-off rule, so cluster rounds still train frozen unless their configs set it. r261027-562757 tests whether it closes the Flavell gap (result about 23:00).
+
+- [ ] ask a261027-1 · on [[QUE - Which part of the position pipeline costs Flavell accuracy, its augmentation or its position fusion]] · Once the re-augmentation test is in, should reaugment_each_epoch default to true, or stay opt-in and be set per round?

@@ -497,3 +497,13 @@ Val loss vs accuracy: val loss scores the training augmentation's pretext task o
 ## 2026-10-27 11:41
 
 r261027-2062947 epoch 0: proxy works in the loop (30 held-out frames, 435 pairs, ~1 min): match auto 0.390, backbone 0.361 (the rotating use_position cell's final checkpoint: 0.373 / 0.366 on whole-video frames); val loss 0.0091.
+
+## 2026-10-27 11:42 — run
+
+Rescore round_flavell_paper_ablation legacy cells 0, 1, 3 (seed 43) and position cell 15 (seed 921677937) against the NWB GT from cached embeddings, CPU. Gives the legacy pipeline's first same-code seed points for the seed-spread comparison.
+
+run r261027-2071685 · pids 2071685 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/rescore/round_flavell_paper_ablation_batch2.log · for [[EVD - Flavell paper ablation grid of pipeline, embedding size and projector norm]]
+
+## 2026-10-27 13:43 — run
+
+r261027-2071685: legacy seed-43 cells 0.953 (64 bn), 0.950 (64 ln), 0.944 (512 ln) against the NWB GT, position trial15 (512 ln, seed 921677937) 0.901. Legacy cells all at preprint level; recorded in [[EVD - Flavell paper ablation grid of pipeline, embedding size and projector norm]]. Legacy training-seed spread waits on cluster cells 8-11.

@@ -129,6 +129,7 @@ def train_barlow_network(args):
     test_losses = None
     val_losses = None
     train_losses = None
+    oom_error = None
 
     # Initialize wandb run, if the user enables it
     if args.wandb_name and args.wandb_username:
@@ -347,8 +348,11 @@ def train_barlow_network(args):
     except KeyboardInterrupt:
         print("Interrupted training, saving model")
     except torch.cuda.OutOfMemoryError as e:
-        print("Out of memory error, saving model")
+        print("Out of memory error, saving the partial model as resnet50_oom.pth")
         print(e)
+        oom_error = e
+        # Last stats entry without 'epoch': check_training_finished reads it as unfinished
+        json_stats.append(dict(out_of_memory=str(e)))
     finally:
         if test_losses is None:
             # Then the run failed in some way, and an alternate value should be returned
@@ -373,8 +377,9 @@ def train_barlow_network(args):
         if args.rank == 0:
             # Never save a model from a crashed trial (e.g. non-finite loss):
             # a poisoned checkpoint would silently pass the "has resnet50.pth"
-            # check and get benchmarked as if trained. Interrupt/OOM keep the
-            # legacy save-what-we-have behavior.
+            # check and get benchmarked as if trained. Interrupt keeps the
+            # legacy save-what-we-have behavior; an OOM saves under a name no
+            # reader takes for a finished trial, and is re-raised below.
             _exc = sys.exc_info()[1]
             _crashed = (_exc is not None
                         and not isinstance(_exc, (KeyboardInterrupt, torch.cuda.OutOfMemoryError)))
@@ -382,7 +387,8 @@ def train_barlow_network(args):
                 logging.warning(f"Not saving model: trial crashed with {_exc!r}")
             else:
                 # save final model (not in checkpoint dir)
-                fname = get_sequential_filename(args.project_dir + '/resnet50.pth')
+                name = 'resnet50_oom.pth' if oom_error is not None else 'resnet50.pth'
+                fname = get_sequential_filename(os.path.join(args.project_dir, name))
                 torch.save(model.state_dict(), fname)
                 args.model_fname = fname
 
@@ -392,7 +398,11 @@ def train_barlow_network(args):
             pickle.dump(args, f)
 
         print("Training complete")
-        
+
+    if oom_error is not None:
+        # A partial model must not count as a finished trial (the sweep scores
+        # an exception as a failure, never as its last validation loss)
+        raise oom_error
     return test_losses
 
 

@@ -346,18 +346,22 @@ def _ensure_ind_level(df_gt):
 
 
 def _load_nwb_arrays(nwb_project):
-    """Vectorized GT access for an NWB project (per-cell iloc is ~50ms)."""
+    """Vectorized GT access for an NWB project (per-cell iloc is ~50ms).
+
+    Column j of every array is neurons[j]. Each field is selected by neuron
+    name: df.loc[:, (slice(None), field)] returns a field's columns in frame
+    order, and in flavell_data.nwb the id fields come in a different neuron
+    order than x/y/z, which labelled each crop with another neuron's ids
+    (issue i261026-1; fixed here, records carry nwb_arrays='by_name').
+    """
     df_gt = _ensure_ind_level(nwb_project.final_tracks)
     neurons = list(df_gt.columns.get_level_values(0).unique())
-    return dict(
-        df_gt=df_gt,
-        neurons=neurons,
-        gx=df_gt.loc[:, (slice(None), 'x')].values.astype(float),
-        gy=df_gt.loc[:, (slice(None), 'y')].values.astype(float),
-        gz=df_gt.loc[:, (slice(None), 'z')].values.astype(float),
-        gr=df_gt.loc[:, (slice(None), 'raw_neuron_ind_in_list')].values.astype(float),
-        gs=df_gt.loc[:, (slice(None), 'raw_segmentation_id')].values.astype(float),
-    )
+
+    def field(name):
+        return df_gt.loc[:, [(n, name) for n in neurons]].values.astype(float)
+
+    return dict(df_gt=df_gt, neurons=neurons, gx=field('x'), gy=field('y'), gz=field('z'),
+                gr=field('raw_neuron_ind_in_list'), gs=field('raw_segmentation_id'))
 
 
 def _nwb_all_objects(nwb_project, arrays, frame_list, tol=0.5):
@@ -366,10 +370,10 @@ def _nwb_all_objects(nwb_project, arrays, frame_list, tol=0.5):
     Returns ({t: (labels (M,), centroids (M, 3) zxy)}, gt_label (T, n_gt)):
     gt_label[t, j] is the mask label whose regionprops centroid is GT neuron
     j's position at t (within tol voxels), NaN when none is. On the Flavell NWB
-    each GT position is exactly one label's centroid. The NWB's own
-    raw_segmentation_id is not the mask label (another ID space), so labels
-    are the shared ID for both predictions and GT here. Two GT neurons on one
-    label are both left unmapped.
+    each GT position is exactly one label's centroid, and that label equals
+    the GT's raw_segmentation_id and raw_neuron_ind_in_list, so this mapping
+    reproduces the NWB ids while checking them against the masks. Two GT
+    neurons on one label are both left unmapped.
     """
     from skimage.measure import regionprops
     if getattr(nwb_project, 'raw_segmentation', None) is None:
@@ -832,6 +836,7 @@ def run_eval(args):
                    crop_window=(getattr(args, 'crop_window', 'pad') if device.type == 'cuda' else 'cpu'),
                    crop_center='trunc' if args.source != 'nwb' and not _round_centers else 'round',
                    nwb_objects=(getattr(args, 'nwb_objects', 'gt') if args.source == 'nwb' else None),
+                   nwb_arrays=('by_name' if args.source == 'nwb' else None),
                    emb_path=os.path.abspath(emb_path),
                    accuracy=float(stats['accuracy']),
                    misses=int(stats['total_misses']),

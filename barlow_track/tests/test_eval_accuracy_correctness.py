@@ -238,3 +238,20 @@ def test_build_accuracy_dict_atomic_appends(tmp_path, monkeypatch):
     assert result['accuracy'][1] == 0.75
     assert result['embedding_dim'][1] is None
     assert detailed['per_neuron_accuracy'][1] == 0.75
+
+
+def test_nwb_arrays_select_each_field_by_neuron_name():
+    """Columns stored field by field in different neuron orders (as in
+    flavell_data.nwb) must still give column j = neurons[j] in every array."""
+    from barlow_track.scripts.eval_accuracy import _load_nwb_arrays
+    fields = ['x', 'y', 'z', 'raw_neuron_ind_in_list', 'raw_segmentation_id']
+    neurons = ['a', 'b', 'c']
+    value = {('a', f): 10 + i for i, f in enumerate(fields)}
+    value.update({('b', f): 20 + i for i, f in enumerate(fields)})
+    value.update({('c', f): 30 + i for i, f in enumerate(fields)})
+    cols = [(n, f) for f in fields[:3] for n in neurons]  # x/y/z in a, b, c order
+    cols += [(n, f) for f in fields[3:] for n in ['c', 'a', 'b']]  # ids in c, a, b order
+    df = pd.DataFrame([[value[c] for c in cols]] * 2, columns=pd.MultiIndex.from_tuples(cols))
+    arr = _load_nwb_arrays(type('P', (), {'final_tracks': df})())
+    for key, i in (('gx', 0), ('gy', 1), ('gz', 2), ('gr', 3), ('gs', 4)):
+        assert arr[key][0].tolist() == [10 + i + 10 * k for k in range(len(arr['neurons']))], key

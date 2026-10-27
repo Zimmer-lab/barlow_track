@@ -58,7 +58,8 @@ def train_barlow_network(args):
             global_args=getattr(args, 'global_augment', None),
             photometric_args=getattr(args, 'crop_photometric', None),
             position_args=getattr(args, 'position_augment', None),
-            seed=seed, num_workers=int(getattr(args, 'num_workers', 0) or 0))
+            seed=seed, num_workers=int(getattr(args, 'num_workers', 0) or 0),
+            round_bounds=bool(getattr(args, 'round_crop_bounds', False)))
     else:
         data_module = NeuronCropImageDataModule(project_data=project_data1, num_frames=args.num_frames, batch_size=1,
                                                 train_fraction=args.train_fraction,

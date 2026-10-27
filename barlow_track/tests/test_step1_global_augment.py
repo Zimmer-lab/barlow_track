@@ -160,6 +160,35 @@ def test_loader_repeats_views_until_set_epoch(monkeypatch):
     assert not any(a.shape == b.shape and torch.equal(a, b) for a, b in zip(first, later))
 
 
+def test_rounded_bounds_match_the_crop_rounding():
+    from barlow_track.utils.volume_data import extract_crops, in_bounds_mask
+    shape = (8, 40, 30)
+    pts = np.array([[4.0, 20.0, 29.6], [4.0, 20.0, 29.4], [-0.4, 20.0, 15.0], [7.6, 20.0, 15.0]])
+    assert in_bounds_mask(pts, shape).tolist() == [True, True, False, True]
+    rounded = in_bounds_mask(pts, shape, rounded=True)
+    assert rounded.tolist() == [False, True, True, False]
+    # Exactly the points rounded keeps get a real (non-placeholder) crop.
+    vol = np.ones(shape, dtype=np.float32)
+    crops = extract_crops(vol, pts, (4, 16, 16))
+    assert (crops.reshape(len(pts), -1).max(1) > 0).tolist() == rounded.tolist()
+
+
+def test_dataset_round_bounds_leaves_no_placeholder_crops(monkeypatch):
+    import barlow_track.utils.volume_data as vd
+    vol = 1.0 + np.random.RandomState(0).rand(8, 40, 30).astype(np.float32)  # no real crop is blank
+    pts = np.array([[4.0, 12.0, 12.0], [4.0, 20.0, 29.6], [3.0, 28.0, 15.0]])
+    monkeypatch.setattr(vd, 'load_volume', lambda project_data, t: vol)
+    monkeypatch.setattr(vd, 'get_centroids_for_volume', lambda project_data, t: (pts, np.arange(1, 4)))
+    no_motion = dict(p_global_affine=0.0)
+    for round_bounds, n_kept in ((False, 3), (True, 2)):
+        ds = vd.VolumeCoordsDataset(None, [0], target_sz=(4, 16, 16), seed=0, global_args=no_motion,
+                                    photometric_args=dict(p_noise=0.0), round_bounds=round_bounds)
+        y1 = ds[0][0]
+        assert len(y1) == n_kept
+        n_blank = int((y1.reshape(len(y1), -1).std(1) == 0).sum())
+        assert n_blank == (0 if round_bounds else 1)
+
+
 def test_legacy_crop_path_rejects_elastic():
     from barlow_track.utils.barlow import Transform
     tr = Transform(dict(global_augment=dict(elastic_std=2.0)))

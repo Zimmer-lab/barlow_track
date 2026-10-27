@@ -316,17 +316,23 @@ def load_volume(project_data, t):
     return np.asarray(vol, dtype=np.float32)
 
 
-def in_bounds_mask(points_zxy, vol_shape):
+def in_bounds_mask(points_zxy, vol_shape, rounded=False):
     """Bool mask of points whose centroid lies inside the volume.
 
     Non-square (H, W) volumes rotate points completely outside on large
     z-rotations; their clipped crops would be nonsensical edge duplicates
     with out-of-range keypoints, so callers drop them (keeping original
     indices for intersection alignment).
+
+    rounded tests the rounded centroid, which is what extract_crops crops
+    around: without it a point within half a voxel of the far edge (y 119.6
+    in a 120-wide volume) is kept and then gets a zero placeholder crop.
     """
     pts = np.asarray(points_zxy, dtype=float)
     if pts.size == 0:
         return np.zeros((0,), dtype=bool)
+    if rounded:
+        pts = np.round(pts)
     shape = np.asarray(vol_shape, dtype=float)
     return ((pts[:, 0] >= 0) & (pts[:, 0] < shape[0]) &
             (pts[:, 1] >= 0) & (pts[:, 1] < shape[1]) &
@@ -390,8 +396,11 @@ class VolumeCoordsDataset(Dataset):
     """
 
     def __init__(self, project_data, frame_indices, target_sz,
-                 global_args=None, photometric_args=None, position_args=None, seed=0, epoch=0):
+                 global_args=None, photometric_args=None, position_args=None, seed=0, epoch=0,
+                 round_bounds=False):
         self.project_data = project_data
+        # in_bounds_mask(rounded=...): off by default so earlier runs reproduce
+        self.round_bounds = bool(round_bounds)
         self.frame_indices = list(frame_indices)
         self.target_sz = np.array(target_sz)
         self.global_args = {**DEFAULT_GLOBAL_ARGS, **(global_args or {})}
@@ -456,7 +465,7 @@ class VolumeCoordsDataset(Dataset):
         # clipped crops would be edge duplicates with out-of-range keypoints.
         # Keep original indices so the loss can still align the intersection.
         n_raw = len(pts_aug)
-        valid = in_bounds_mask(pts_aug, vol_aug.shape)
+        valid = in_bounds_mask(pts_aug, vol_aug.shape, rounded=self.round_bounds)
         n_inbounds = int(np.asarray(valid).sum()) if n_raw else 0
         valid_orig_idx = np.where(valid)[0]
         pts_valid = pts_aug[valid] if len(pts_aug) else pts_aug
@@ -551,8 +560,9 @@ class VolumeCoordsDataModule(LightningDataModule):
     def __init__(self, project_data=None, num_frames=100, batch_size=1,
                  train_fraction=0.8, val_fraction=0.1, target_sz=(8, 64, 64),
                  global_args=None, photometric_args=None, position_args=None, seed=0,
-                 num_workers=0):
+                 num_workers=0, round_bounds=False):
         super().__init__()
+        self.round_bounds = bool(round_bounds)
         self.project_data = project_data
         self.num_frames = num_frames
         self.batch_size = batch_size
@@ -597,7 +607,7 @@ class VolumeCoordsDataModule(LightningDataModule):
                                       global_args=self.global_args,
                                       photometric_args=self.photometric_args,
                                       position_args=self.position_args, seed=self.seed,
-                                      epoch=self._current_epoch())
+                                      epoch=self._current_epoch(), round_bounds=self.round_bounds)
         n = len(alldata)
         if n == 0:
             raise ValueError("VolumeCoordsDataModule.setup: no valid frames found")

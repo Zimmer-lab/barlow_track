@@ -523,3 +523,17 @@ run r261027-2180262 · pids 2180262 · host charles-Precision-7820-Tower · logs
 Croprot arm: preprint Flavell config with use_position on, global rotation and flip off, per-crop rotation up to 180 deg about each crop's own z axis (barlow_track@44c0e11 config, proxy from db105ba); compares with norot to test whether image features need rotation diversity. Started by the handoff r261027-2180262.
 
 run r261027-2190583 · pids 2190583 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_croprot/run.log · for [[EVD - Global rotation off in the position pipeline]]
+
+## 2026-10-27 16:44 — run
+
+r261027-2190583 (croprot) epoch 0: proxy 0.463 fused / 0.391 backbone, against norot's 0.390 / 0.361 at epoch 0 (val loss 0.0144, not comparable across augmentations). Runs at 8.2 GB GPU beside the two norot CPU evals.
+
+## 2026-10-27 18:00 — decision
+
+Correction to the r261027-2062947 epoch-0 entry: the rotating use_position cell's final checkpoint scored 0.477 fused / 0.366 backbone on the proxy (proxy_30.jsonl), not 0.373 / 0.366.
+
+## 2026-10-27 18:00 — run
+
+Proxy on the norot final checkpoint with the same 30 whole-video frames as the 24-checkpoint batch (CPU), so it compares with the rotating cell's 0.477 / 0.366.
+
+run r261027-2876617 · pids 2876617 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/val_matching/proxy_30_norot.log

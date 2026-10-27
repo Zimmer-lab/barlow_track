@@ -4,7 +4,7 @@ nodeInstanceId: 01a17cd8-2cf4-7abe-8829-a1639ac83031
 status: in-progress
 priority: high
 dateCreated: 2026-10-27T11:11:44+01:00
-dateModified: 2026-10-27T11:11:44+01:00
+dateModified: 2026-10-27T18:00:34+01:00
 confidence: low
 projects:
   - "[[barlowtrack]]"
@@ -22,6 +22,14 @@ What would answer it: an arm at 0.90 or above fused (beyond 18 of 20 position-pi
 
 ## Results
 
+norot (training r261027-2062947, evals from cached embeddings in r261027-2180262 via barlow_track@b39f823:barlow_track/scripts/scratch/paper_flavell_use_position_norot/eval_then_croprot.sh): fused 0.787, backbone 0.780 against the NWB GT (comparator 0.795 / 0.756). Per epoch, val loss bottomed at epoch 10 (0.0061) and rose to 0.0110 at epoch 49 while the frame-pair matching proxy on 30 held-out frames rose 0.390 -> 0.474 fused and 0.361 -> 0.469 backbone (Spearman of val loss with the proxy across epochs +0.80).
+
+croprot (r261027-2190583): running; epoch-0 proxy 0.463 fused / 0.391 backbone against norot's 0.390 / 0.361.
+
 ## Conclusion
 
+Partial (norot only). Turning off the global rotation and flip leaves fused accuracy where it was (0.787 against 0.795) and moves the image features by 2.4 points (0.780 against 0.756), inside the 5-12 point training-seed spread, so the whole-volume rotation and its loss of edge neurons are not what costs the position pipeline its Flavell accuracy.
+
 ## Caveats
+
+One training seed per arm. The comparator differs from norot in rotation and flip together. Scale and translation of the global affine are still on in both arms.

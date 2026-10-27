@@ -605,6 +605,24 @@ GPU eval crops differ from training crops at volume edges: _extract_crops_gpu cl
 Code review of training, eval and sweep code (subagent, 2026-10-27; top two verified by reading). Also found: 1) the benchmark driver passes no --gt, so zimmer_1123 and zimmer_1210 cells score against the 1128 GT; 2) reusing a train dir pairs files from different runs (get_sequential_filename writes stats-1.json, args-1.pickle, resnet50-1.pth while readers use the fixed names; live in paper_flavell_use_position_reaug, whose log/stats.json is from the crashed attempt); 3) center_per_volume defaults True in training but False on load when the key is missing (latent for attention configs); 4) an OOM mid-training saves a partial model that counts as a finished trial; 5) the NWB-source eval embeds only GT neurons, so position features see a sparser point set; 6) training rounds crop centres, eval truncates; 7) the embedding cache is keyed only by lab, stage and tag; 8) a resumed direct grid resubmits the whole grid with repeated seeds; 9) val and test losses are sums, in train and eval mode respectively; 10) RandomNoise std 0.25 is added before rescaling, so it is about 0.1% of range and does nothing.
 
 - [ ] Fix _extract_crops_gpu to slide windows like the CPU path, behind a flag, after r261027-589796 sizes the effect
-- [ ] Pass --gt for zimmer_1123 and zimmer_1210 in run_trials_on_all_ground_truth.py
-- [ ] Make train_barlow_clusterer refuse or clean a train dir that already holds a run
+- [x] Pass --gt for zimmer_1123 and zimmer_1210 in run_trials_on_all_ground_truth.py
+- [x] Make train_barlow_clusterer refuse or clean a train dir that already holds a run
 - [ ] Round, not truncate, centroids in the eval and val_matching crop paths
+
+## 2026-10-27 19:47 — decision
+
+Fixes in tonight (user asked for them before going to sleep): benchmark driver passes --gt per dataset (barlow_track@98a157b); training moves an earlier run's outputs to superseded/<time>/ (f847c81); eval_accuracy --crop_window slide, val_match_crop_window and val_matching_on_checkpoints --crop_window give GPU crops identical to the CPU path and training (c4a4221, default pad so recorded scores reproduce). Each has a synthetic regression test.
+
+- [ ] Decide with the user whether crop_window slide and reaugment_each_epoch become the defaults (see a261027-1)
+
+## 2026-10-27 19:47 — done
+
+barlow_track@98a157b
+
+Done: Pass --gt for zimmer_1123 and zimmer_1210 in run_trials_on_all_ground_truth.py
+
+## 2026-10-27 19:47 — done
+
+moves earlier outputs aside, barlow_track@f847c81
+
+Done: Make train_barlow_clusterer refuse or clean a train dir that already holds a run

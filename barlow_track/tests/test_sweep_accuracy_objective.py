@@ -490,3 +490,51 @@ def test_accuracy_trial_gets_the_full_training_budget_plus_the_eval(epochs):
 def test_slurm_job_for_an_accuracy_sweep_of_25_epochs():
     # 1 day + 12 h of training, 4 h of eval, 1 h of headroom
     assert oh.slurm_duration(oh.job_budget_minutes(25, objective_minutes=240)) == '1-17:00:00'
+
+
+# --------------------------------------------------------------------------
+# Resuming a grid sweep
+# --------------------------------------------------------------------------
+
+def _grid(reps):
+    from barlow_track.utils.utils_seeding import replicate_seed
+    plan = [{'embedding_dim': d, 'fusion_norm': n} for d in (64, 512) for n in ('bn', 'ln')] * reps
+    return plan, [replicate_seed(43, i // 4) for i in range(len(plan))]
+
+
+def test_resumed_grid_leaves_out_jobs_that_already_ran():
+    plan, seeds = _grid(reps=2)
+    priors = [  # yaml round trip: the saved config has every key and the seed it ran with
+        {'embedding_dim': 64, 'fusion_norm': 'bn', 'seed': 43, 'epochs': 50},
+        {'embedding_dim': 512.0, 'fusion_norm': 'ln', 'seed': 43},
+        {'embedding_dim': 64, 'fusion_norm': 'bn', 'seed': seeds[4]},  # replicate 1 of job 0
+    ]
+    assert oh.completed_grid_jobs(plan, seeds, priors, 43) == {0, 3, 4}
+
+
+def test_one_prior_covers_one_replicate_only():
+    plan, seeds = _grid(reps=1)
+    plan, seeds = plan + plan[:1], seeds + seeds[:1]  # the same job planned twice
+    priors = [{'embedding_dim': 64, 'fusion_norm': 'bn', 'seed': 43}]
+    assert oh.completed_grid_jobs(plan, seeds, priors, 43) == {0}
+
+
+def test_grid_prior_without_seed_ran_with_the_base_seed():
+    plan, seeds = _grid(reps=2)
+    priors = [{'embedding_dim': 64, 'fusion_norm': 'bn'}]
+    assert oh.completed_grid_jobs(plan, seeds, priors, 43) == {0}
+    assert oh.completed_grid_jobs(plan, seeds, priors, 7) == set()
+
+
+def test_grid_prior_with_another_value_or_seed_is_not_a_match():
+    plan, seeds = _grid(reps=1)
+    priors = [{'embedding_dim': 64, 'fusion_norm': 'ln', 'seed': 44},
+              {'embedding_dim': 128, 'fusion_norm': 'bn', 'seed': 43},
+              {'fusion_norm': 'bn', 'seed': 43}]
+    assert oh.completed_grid_jobs(plan, seeds, priors, 43) == set()
+
+
+def test_grid_job_that_sweeps_the_seed_matches_on_the_swept_seed():
+    plan = [{'seed': 1, 'lr': 1e-4}, {'seed': 2, 'lr': 1e-4}]
+    priors = [{'seed': 2, 'lr': 0.0001}]
+    assert oh.completed_grid_jobs(plan, [43, 43], priors, 43) == {1}

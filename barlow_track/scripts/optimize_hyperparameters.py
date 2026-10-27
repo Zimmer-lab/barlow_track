@@ -340,9 +340,41 @@ def attach_prior_trial_to_ax_client(ax_client, full_params, result):
 
 
 
-def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_parallel_jobs=None, 
-                             direct_parameter_sweep=False, one_at_a_time_sweep=False, repetitions=1, 
-                             job_name=None, DEBUG=False, total_budget=None):
+def _same_value(a, b):
+    """yaml round trips turn tuples into lists and may turn 1.0 into 1."""
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_same_value(x, y) for x, y in zip(a, b))
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
+        return float(a) == float(b)
+    return a == b
+
+
+def completed_grid_jobs(planned, planned_seeds, prior_configs, base_seed):
+    """Indices of planned grid jobs that a finished prior trial already ran.
+
+    A job is covered when a prior trial has the same value for every swept
+    parameter and the same seed (a prior without a seed ran with base_seed).
+    Each prior covers at most one job, so a grid with --repetitions keeps
+    the replicates the folder does not have yet.
+    """
+    unused = list(prior_configs)
+    covered = set()
+    for i, (params, seed) in enumerate(zip(planned, planned_seeds)):
+        want = dict(params)
+        want.setdefault('seed', seed)
+        for j, prior in enumerate(unused):
+            have = dict(prior)
+            have.setdefault('seed', base_seed)
+            if all(k in have and _same_value(have[k], v) for k, v in want.items()):
+                covered.add(i)
+                del unused[j]
+                break
+    return covered
+
+
+def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_parallel_jobs=None,
+                             direct_parameter_sweep=False, one_at_a_time_sweep=False, repetitions=1,
+                             job_name=None, DEBUG=False, total_budget=None, skip_completed_grid_jobs=False):
     """
     Parameters
     ---------------------
@@ -471,6 +503,9 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     # checkpoint survives, so only the tracking eval has to run again (the
     # embedding cache in emb_cache makes that cheap). Keyed by Ax trial index.
     pending_evals = {}
+    # Configs of prior trials whose training finished (scored or not); a
+    # resumed grid sweep uses them to leave out the jobs that already ran.
+    finished_prior_configs = []
     if len(prior_trials) > 0:
         logging.info(f"Discovered {len(prior_trials)} prior trials, loading...")
         accuracy_by_tag = read_results_by_tag(results_jsonl) if accuracy_objective else {}
@@ -486,6 +521,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 if not check_training_finished(trial_path, int(config['epochs']) - 1):
                     print(f"Prior trial {trial_name}: training was not finished; skipping")
                     continue
+                finished_prior_configs.append(config)
                 if accuracy_objective:
                     tag = record_tag(experiment_parent_folder, trial_num, dataset_label)
                     record = accuracy_by_tag.get(tag)
@@ -596,6 +632,23 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         # i % n_unique_configs, and the replicate index drives the seed policy.
         n_unique_configs = len(all_combinations)
         all_combinations = all_combinations * repetitions
+        # Grid/ablation sweeps: every config shares the base seed, so the
+        # differences between configs stay attributable to the
+        # hyperparameter. Only a *replicate* of a config (the
+        # --repetitions duplicates) gets a fresh seed; before this, N
+        # repetitions were literally the same job, which made Ax see
+        # zero variance where there should be measurement noise.
+        job_seeds = [replicate_seed(base_seed, i // n_unique_configs) for i in range(len(all_combinations))]
+        covered = completed_grid_jobs(all_combinations, job_seeds, finished_prior_configs, base_seed)
+        if covered and skip_completed_grid_jobs:
+            print(f"Resuming: {len(covered)} of {len(all_combinations)} grid jobs already ran in "
+                  f"{experiment_parent_folder}; leaving them out", flush=True)
+            all_combinations = [c for i, c in enumerate(all_combinations) if i not in covered]
+            job_seeds = [s for i, s in enumerate(job_seeds) if i not in covered]
+        elif covered:
+            logging.warning(f"{len(covered)} of {len(all_combinations)} grid jobs match a finished prior "
+                            f"trial (same parameters and seed) and will be trained again into new "
+                            f"folders. Pass --skip_completed_grid_jobs to resume the grid instead.")
         total_budget = len(all_combinations)
         # Audit trail: the exact grid being run (names AND values). Miswired
         # name/value pairings here have silently mistargeted sweeps before.
@@ -694,13 +747,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 trial = ax_client.experiment.new_trial()
                 parameters = all_combinations[i]
                 trial_index_to_param[trial.index] = parameters
-                # Grid/ablation sweeps: every config shares the base seed, so the
-                # differences between configs stay attributable to the
-                # hyperparameter. Only a *replicate* of a config (the
-                # --repetitions duplicates) gets a fresh seed; before this, N
-                # repetitions were literally the same job, which made Ax see
-                # zero variance where there should be measurement noise.
-                trial_seeds[trial.index] = replicate_seed(base_seed, i // n_unique_configs)
+                trial_seeds[trial.index] = job_seeds[i]
         else:
             trial_index_to_param, _ = ax_client.get_next_trials(
                 max_trials=min(free_slots, total_budget - submitted_jobs))
@@ -818,6 +865,10 @@ if __name__ == '__main__':
     parser.add_argument('--direct_parameter_sweep', action='store_true')
     parser.add_argument('--one_at_a_time_sweep', action='store_true')
     parser.add_argument('--repetitions', default=1)
+    parser.add_argument('--skip_completed_grid_jobs', action='store_true',
+                        help='direct/one-at-a-time sweeps: leave out grid jobs that a finished trial '
+                             'in the folder already ran (same parameters and seed), instead of '
+                             'training them again')
     parser.add_argument('--job_name', default=None)
     parser.add_argument('--DEBUG', action='store_true')
 
@@ -834,4 +885,4 @@ if __name__ == '__main__':
 
     optimize_hyperparameters(hyperparameter_template_path, run_locally, num_parallel_jobs, 
          direct_parameter_sweep, one_at_a_time_sweep, repetitions, job_name, DEBUG=DEBUG,
-         total_budget=total_budget)
+         total_budget=total_budget, skip_completed_grid_jobs=args.skip_completed_grid_jobs)

@@ -110,12 +110,16 @@ def train_barlow_network(args):
     # Actually train
     start_time = time.time()
     log_dir = os.path.join(args.project_dir, 'log')
-    stats_file = get_sequential_filename(os.path.join(log_dir, 'stats.json'))
-    checkpoint_file = get_sequential_filename(os.path.join(args.project_dir, 'checkpoints', 'checkpoint.pth'))
     print(f"Starting training with args: {args}. Stats in folder: {args.project_dir}")
     if args.dryrun:
         print("Dryrun, therefore stopping before actual training")
         return
+    # Readers (load_barlow_model, check_training_finished, top_k_trials) use the
+    # fixed names, so an earlier run's outputs move aside rather than this run
+    # writing resnet50-1.pth / args-1.pickle / stats-1.json next to them
+    _archive_previous_run(args.project_dir, keep=[pretrained_model_path])
+    stats_file = get_sequential_filename(os.path.join(log_dir, 'stats.json'))
+    checkpoint_file = get_sequential_filename(os.path.join(args.project_dir, 'checkpoints', 'checkpoint.pth'))
 
     wandb_opt = dict(mode="disabled") if args.DEBUG else {}
     json_stats = []
@@ -386,6 +390,29 @@ def train_barlow_network(args):
         print("Training complete")
         
     return test_losses
+
+
+RUN_OUTPUT_GLOBS = ('resnet50*.pth', 'args*.pickle', 'log/stats*.json', 'checkpoints/checkpoint*.pth')
+
+
+def _archive_previous_run(project_dir, keep=()):
+    """Move an earlier run's outputs into project_dir/superseded/<time>/; returns that dir or None.
+
+    Files in keep (e.g. a pretrained checkpoint inside project_dir) stay in place.
+    """
+    root = Path(project_dir)
+    keep = {Path(k).resolve() for k in keep if k}
+    found = [p for g in RUN_OUTPUT_GLOBS for p in sorted(root.glob(g))
+             if p.is_file() and p.resolve() not in keep]
+    if not found:
+        return None
+    dest = root / 'superseded' / time.strftime('%Y%m%d_%H%M%S')
+    for p in found:
+        target = dest / p.relative_to(root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        p.rename(target)
+    logging.warning(f"Moved {len(found)} outputs of an earlier run to {dest}")
+    return dest
 
 
 def _validation_descriptor_diagnostics(model, data_module, gpu, use_position):

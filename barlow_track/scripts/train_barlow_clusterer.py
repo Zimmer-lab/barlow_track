@@ -94,6 +94,9 @@ def train_barlow_network(args):
         if use_attention:
             args.model_type = 'attention'
             model = BarlowVolumeAttention(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)
+            # Record the effective value: the class defaults to True, but
+            # load_barlow_model pins a missing key to False (pre-centering checkpoints)
+            args.center_per_volume = model.center_per_volume
         elif use_position:
             args.model_type = 'position'
             model = BarlowWithPosition(args, backbone=ResidualEncoder3D, **backbone_kwargs).to(gpu)

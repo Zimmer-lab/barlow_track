@@ -332,9 +332,9 @@ resolved i261026-1
 
 From the Flavell reproduction (2026-10-23 to 25).
 
-- [ ] fix eval_accuracy._load_nwb_arrays: select each NWB field by neuron name (i261026-1), then rescore NWB-path Flavell records
+- [x] fix eval_accuracy._load_nwb_arrays: select each NWB field by neuron name (i261026-1), then rescore NWB-path Flavell records
 - [ ] rescore round_flavell* cells against the NWB GT (the accuracy objective scores against the project GT)
-- [ ] make the NWB path not hand the tracker only GT objects (user: the algorithm should not see only GT objects)
+- [x] make the NWB path not hand the tracker only GT objects (user: the algorithm should not see only GT objects)
 
 ## 2026-10-26 10:00 — note
 
@@ -467,7 +467,7 @@ r261026-1730274 at epoch 30 (7,200 steps, 2.57 s/step, ends ~07:00): val loss fa
 
 r261026-1730274 ended: elastic position cell fused 0.7175, backbone 0.5982 vs 0.7953 / 0.7559 without elastic at the same seed. Elastic is not what the position pipeline lacks; added geometric augmentation keeps making its image features worse (per-crop: backbone 0.487), unlike in the legacy pipeline. Filled [[EVD - Flavell-matched global elastic deformation in the position pipeline]].
 
-- [ ] extract_crops zero-fills points at y≈119.5 that in_bounds_mask keeps (Flavell volume 120 wide): align the bounds test with the crop rounding
+- [x] extract_crops zero-fills points at y≈119.5 that in_bounds_mask keeps (Flavell volume 120 wide): align the bounds test with the crop rounding
 
 ## 2026-10-27 11:11 — run
 
@@ -491,7 +491,7 @@ run r261027-2062947 · pids 2062947 · host charles-Precision-7820-Tower · logs
 
 Val loss vs accuracy: val loss scores the training augmentation's pretext task on ~30 held-out frames, re-augmented every epoch (shared dataset, set_epoch), in train mode (no model.eval(); batchnorm projector uses and updates batch stats on val). Not comparable across augmentation settings. Added a GT-based proxy (frame-pair matching on never-sampled frames, val_match_frames; db105ba): Spearman 0.74 with full accuracy over 24 checkpoints, recorded in [[EVD - Frame-pair matching on held-out frames ranks Flavell networks by tracking accuracy]].
 
-- [ ] Validation runs in train mode: add model.eval() around the val loss (changes logged val numbers, not training)
+- [x] Validation runs in train mode: add model.eval() around the val loss (changes logged val numbers, not training)
 - [ ] GT-free variant of the matching proxy (cycle consistency over frame triples) for users without ground truth
 
 ## 2026-10-27 11:41
@@ -604,10 +604,10 @@ GPU eval crops differ from training crops at volume edges: _extract_crops_gpu cl
 
 Code review of training, eval and sweep code (subagent, 2026-10-27; top two verified by reading). Also found: 1) the benchmark driver passes no --gt, so zimmer_1123 and zimmer_1210 cells score against the 1128 GT; 2) reusing a train dir pairs files from different runs (get_sequential_filename writes stats-1.json, args-1.pickle, resnet50-1.pth while readers use the fixed names; live in paper_flavell_use_position_reaug, whose log/stats.json is from the crashed attempt); 3) center_per_volume defaults True in training but False on load when the key is missing (latent for attention configs); 4) an OOM mid-training saves a partial model that counts as a finished trial; 5) the NWB-source eval embeds only GT neurons, so position features see a sparser point set; 6) training rounds crop centres, eval truncates; 7) the embedding cache is keyed only by lab, stage and tag; 8) a resumed direct grid resubmits the whole grid with repeated seeds; 9) val and test losses are sums, in train and eval mode respectively; 10) RandomNoise std 0.25 is added before rescaling, so it is about 0.1% of range and does nothing.
 
-- [ ] Fix _extract_crops_gpu to slide windows like the CPU path, behind a flag, after r261027-589796 sizes the effect
+- [x] Fix _extract_crops_gpu to slide windows like the CPU path, behind a flag, after r261027-589796 sizes the effect
 - [x] Pass --gt for zimmer_1123 and zimmer_1210 in run_trials_on_all_ground_truth.py
 - [x] Make train_barlow_clusterer refuse or clean a train dir that already holds a run
-- [ ] Round, not truncate, centroids in the eval and val_matching crop paths
+- [x] Round, not truncate, centroids in the eval and val_matching crop paths
 
 ## 2026-10-27 19:47 — decision
 
@@ -626,3 +626,79 @@ Done: Pass --gt for zimmer_1123 and zimmer_1210 in run_trials_on_all_ground_trut
 moves earlier outputs aside, barlow_track@f847c81
 
 Done: Make train_barlow_clusterer refuse or clean a train dir that already holds a run
+
+## 2026-10-27 19:51 — decision
+
+Review fixes, all opt-in or bookkeeping. 5d2beb6: args.pickle records the effective center_per_volume of BarlowVolumeAttention models (it was the config value, not what the model used). 36872fe: a trial that runs out of GPU memory is now a failure: partial model to resnet50_oom.pth, stats.json ends with an out_of_memory entry so check_training_finished reads it unfinished, error re-raised after saving (py_compile only, not exercised at runtime). 29d4c76: --skip_completed_grid_jobs in optimize_hyperparameters.py leaves out grid jobs a finished prior trial already ran (same swept values and seed); without it a resumed grid warns, since it retrains exact duplicates with repeated seeds. Tests: test_sweep_accuracy_objective.py 55 passed.
+
+## 2026-10-27 19:51 — done
+
+c4a4221, --crop_window slide (default pad); r261027-589796 still sizing the effect
+
+Done: Fix _extract_crops_gpu to slide windows like the CPU path, behind a flag, after r261027-589796 sizes the effect
+
+## 2026-10-27 19:55 — run
+
+r261027-572595 (reaug) at epoch 12 of 50: re-augmentation is not lifting the proxy so far. Fused proxy 0.429 -> 0.458 (ep 1) -> 0.433, backbone 0.324 -> 0.372 (ep 4) -> 0.311; fused effective rank falls 23 -> 14, where the frozen norot run's rose 31 -> 48 over training. Val loss noisy (0.149 spike at ep 7; val views are re-drawn each epoch). Calibration from proxy_30.jsonl (whole-video frames): legacy baseline_flavell_head_rerun (0.95+ accuracy) scores 0.600 / 0.600, position-pipeline networks 0.36-0.55. Not judging before the end-of-training eval; if fused accuracy stays near 0.80, frozen pairs are not the cause of the gap.
+
+## 2026-10-27 19:59 — done
+
+979ec48: val_eval_mode (default off) plus val_mean_batch_loss; projector-only BN, so tracking descriptors are unaffected either way
+
+Done: Validation runs in train mode: add model.eval() around the val loss (changes logged val numbers, not training)
+
+## 2026-10-27 19:59 — done
+
+b4b0a6a: --round_crop_centers / val_match_round_crop_centers (default off); NWB path already rounded
+
+Done: Round, not truncate, centroids in the eval and val_matching crop paths
+
+## 2026-10-27 19:59 — decision
+
+36872fe (OOM is a failure) now exercised at runtime: slow smoke test with a forced OutOfMemoryError raises, leaves resnet50_oom.pth and no resnet50.pth, check_training_finished False (979ec48). Side note from reading the legacy loader: legacy crops come from regionprops bbox midpoints (truncated) of all segmented objects, on frames with at most 200 objects; the eval crops at metadata centroids. Legacy still scores 0.95 under that mismatch, so crop-center precision is unlikely to explain the position pipeline's gap.
+
+## 2026-10-27 20:07 — run
+
+Check of --nwb_objects (barlow_track@850e8f4, script be9460e): legacy baseline_flavell_head_rerun on the first 60 Flavell NWB frames, CPU, GT objects only vs every detection of the NWB raw_segmentation. Expect all <= gt and both plausible. Found while writing it: each Flavell NWB GT position is exactly one mask label's regionprops centroid (5 frames checked, distance 0.00, one to one), with 20-40 non-GT detections per frame; the NWB raw_segmentation_id is not that label.
+
+run r261027-625851 · pids 625851 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/nwb_objects_check/run.log
+
+## 2026-10-27 20:09 — done
+
+barlow_track@<see log>: round_crop_bounds (default off)
+
+Done: extract_crops zero-fills points at y≈119.5 that in_bounds_mask keeps (Flavell volume 120 wide): align the bounds test with the crop rounding
+
+## 2026-10-27 20:09 — decision
+
+Review fixes, cont. b4b0a6a --round_crop_centers (project-path eval crops at the rounded centroid as training does; default truncates). 979ec48 val_eval_mode + val_mean_batch_loss. 6acc0ba embedding cache keyed on sha1 of the checkpoint plus source (a retrain into the same trial folder no longer reuses stale embeddings; keyless old caches still reused). 850e8f4 --nwb_objects all (the NWB source tracks every raw_segmentation detection; default gt). e225a55 round_crop_bounds (in_bounds_mask on the rounded centre; default off). All opt-in; tests pass (test_sweep_accuracy_objective, test_eval_accuracy_correctness, test_benchmark_driver, test_step1_global_augment, test_train_position --runslow).
+
+## 2026-10-27 20:09 — dropped
+
+Compromised: _load_nwb_arrays still has the Flavell neuron-order bug (i261026-1), so the gt arm crops one neuron and labels it with another's ids, and the all arm's GT relabelling indexes columns in arrays['neurons'] order. Rerun after fixing the loader.
+
+Stopped PID 625851.
+
+dropped r261027-625851
+
+## 2026-10-27 20:12 — run
+
+Rerun of the --nwb_objects check on barlow_track@79abd66 (NWB arrays selected by neuron name): legacy baseline_flavell_head_rerun, first 60 Flavell NWB frames, CPU, gt vs all. 79abd66 fixes _load_nwb_arrays (i261026-1): with it every Flavell GT position is the centroid of the mask label equal to its raw_segmentation_id (= raw_neuron_ind_in_list), so my 20:07 entry's 'NWB raw_segmentation_id is not that label' was the bug talking.
+
+run r261027-630225 · pids 630225 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/nwb_objects_check/run.log
+
+## 2026-10-27 20:12 — done
+
+79abd66; NWB-path Flavell records before it carry no nwb_arrays field and are suspect; rescore still to do
+
+Done: fix eval_accuracy._load_nwb_arrays: select each NWB field by neuron name (i261026-1), then rescore NWB-path Flavell records
+
+## 2026-10-27 20:12 — done
+
+850e8f4 --nwb_objects all (default gt); check r261027-630225 running
+
+Done: make the NWB path not hand the tracker only GT objects (user: the algorithm should not see only GT objects)
+
+## 2026-10-27 20:12
+
+The 20:09 tick of the in_bounds_mask to-do says 'barlow_track@<see log>': the commit is barlow_track@e225a55 (round_crop_bounds, default off).

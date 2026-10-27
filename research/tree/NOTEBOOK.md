@@ -571,3 +571,15 @@ r261027-2876617: norot final checkpoint on the proxy's 30 whole-video frames: 0.
 Every use_position network since 2026-10-05 trained on one fixed augmented view pair per frame (i261027-1). barlow_track@7f9f7bc adds reaugment_each_epoch, off by default per the keep-new-behaviour-off rule, so cluster rounds still train frozen unless their configs set it. r261027-562757 tests whether it closes the Flavell gap (result about 23:00).
 
 - [ ] ask a261027-1 · on [[QUE - Which part of the position pipeline costs Flavell accuracy, its augmentation or its position fusion]] · Once the re-augmentation test is in, should reaugment_each_epoch default to true, or stay opt-in and be set per round?
+
+## 2026-10-27 18:36 — dropped
+
+Crashed in the epoch-0 validation plot: a fresh view with 0 objects reached _correlation_for_plot, which guarded only view 1 (fixed in barlow_track@0de29c9). Epoch 0 had val loss 0.0447, proxy 0.428 / 0.325. Log moved to run_attempt1_crash.log.
+
+dropped r261027-562757
+
+## 2026-10-27 18:36 — run
+
+Re-augmentation test, attempt 2 (barlow_track@0de29c9; config unchanged from aa2dbea): the use_position cell with only reaugment_each_epoch true. Near 0.95 fused means the frozen view pairs (i261027-1) cost the position pipeline its Flavell accuracy.
+
+run r261027-572595 · pids 572595 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_reaug/run.log

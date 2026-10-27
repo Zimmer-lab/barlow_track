@@ -517,3 +517,9 @@ r261027-2062947 (norot) training done. Per epoch, val loss and the frame-pair ma
 Norot evals handed off: eval_then_croprot.sh (barlow_track@b39f823) stops run.sh once each stage's embedding is cached, starts the croprot training, then tracks both norot stages from cache on CPU. Replaces the eval half of r261027-2062947.
 
 run r261027-2180262 · pids 2180262 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_norot/eval_then_croprot.log · for [[EVD - Global rotation off in the position pipeline]]
+
+## 2026-10-27 16:19 — run
+
+Croprot arm: preprint Flavell config with use_position on, global rotation and flip off, per-crop rotation up to 180 deg about each crop's own z axis (barlow_track@44c0e11 config, proxy from db105ba); compares with norot to test whether image features need rotation diversity. Started by the handoff r261027-2180262.
+
+run r261027-2190583 · pids 2190583 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_croprot/run.log · for [[EVD - Global rotation off in the position pipeline]]

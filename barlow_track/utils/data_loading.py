@@ -45,7 +45,7 @@ def get_bbox_data_for_volume(project_data, t, target_sz=np.array([8, 64, 64]), r
 
 
 def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 64, 64]), which_neurons=None,
-                                        include_untracked=False, skip_crops=False):
+                                        include_untracked=False, skip_crops=False, round_centroids=False):
     """
     Like get_bbox_data_for_volume, but only returns objects that have an ID in the final tracks (unless include_untracked=True)
     Instead of returning a list of arrays, returns a dict indexed by the string name as found in project_data
@@ -53,6 +53,10 @@ def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 
     If skip_crops is True, no image data is read or sliced; the returned dict
     maps each name to its centroid [z, x, y] instead of a crop array, so the
     caller can slice on its own device (e.g. GPU).
+
+    round_centroids crops around the rounded centroid, as training's
+    volume_data.extract_crops does; the default (False, kept so recorded scores
+    reproduce) duplicates the centroid into a bbox, which truncates it.
     """
     if which_neurons is None:
         which_neurons = project_data.finished_neuron_names()
@@ -142,7 +146,7 @@ def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 
     for this_name, zxy in specs:
         # Repeat to be zxyzxy
         zxyzxy = [zxy[0], zxy[1], zxy[2], zxy[0], zxy[1], zxy[2]]
-        dat, _ = get_3d_crop_using_bbox_or_centroid(zxyzxy, sz, target_sz, this_red)
+        dat, _ = get_3d_crop_using_bbox_or_centroid(zxy if round_centroids else zxyzxy, sz, target_sz, this_red)
         if dat is None:
             continue
         if this_name in all_dat_dict:

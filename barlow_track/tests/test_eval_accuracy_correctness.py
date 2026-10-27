@@ -114,6 +114,27 @@ def test_gpu_slide_crops_match_cpu_crops(vol_shape, target):
     assert not np.array_equal(cpu, pad.numpy())
 
 
+def test_project_crop_centers_truncate_by_default_and_round_like_training():
+    """The project path duplicates the centroid into a bbox (truncation);
+    --round_crop_centers crops as training's extract_crops does."""
+    torch = pytest.importorskip('torch')
+    from barlow_track.scripts.eval_accuracy import _extract_crops_gpu
+    from barlow_track.utils.data_loading import get_3d_crop_using_bbox_or_centroid
+    from barlow_track.utils.volume_data import extract_crops
+    rng = np.random.RandomState(1)
+    vol = rng.rand(22, 90, 70).astype(np.float32)
+    target = np.array([8, 32, 32])
+    pts = rng.uniform([0, 0, 0], [21.4, 89.4, 69.4], size=(200, 3))
+    sz = np.array([1, *vol.shape])
+    trunc_cpu = np.stack([get_3d_crop_using_bbox_or_centroid([*p, *p], sz, target, vol)[0] for p in pts])
+    trunc_gpu = _extract_crops_gpu(torch.from_numpy(vol), pts, target, round_centroids=False, crop_window='slide')
+    assert np.array_equal(trunc_cpu, trunc_gpu.numpy())
+    train = extract_crops(vol, pts, target)
+    round_gpu = _extract_crops_gpu(torch.from_numpy(vol), pts, target, round_centroids=True, crop_window='slide')
+    assert np.array_equal(train, round_gpu.numpy())
+    assert not np.array_equal(train, trunc_cpu)
+
+
 def test_rescale_gpu_oversize_subsample_close_to_full():
     """Stacks above the CUDA quantile cap must rescale without error and
     stay close to the exact full-quantile result (round_flavell xy=64 evals

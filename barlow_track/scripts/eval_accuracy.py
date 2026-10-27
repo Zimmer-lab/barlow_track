@@ -271,14 +271,15 @@ def _embed_frame(mode, crops, kpts, models, tmodel, args, device, chunk=32):
 
 
 def _iter_project_frames(project_data, target_sz, normalizer, frame_list, device=None,
-                         crop_window='pad'):
+                         crop_window='pad', round_centers=False):
     """Yield per-frame dicts (crops, kpts, meta) from segmentation crops.
 
     meta: list of (raw_ind, seg) aligned with crops rows. Frames with < 2
     detections are skipped (no relative geometry; matches legacy filter).
     With a CUDA device, the volume is transferred once per frame and crops +
     intensity normalization happen on the GPU (numerically identical to CPU
-    with crop_window 'slide'; see _centroid_boxes).
+    with crop_window 'slide'; see _centroid_boxes). round_centers crops around
+    the rounded centroid as training does; the default truncates it.
     """
     from barlow_track.utils.data_loading import get_bbox_data_for_volume_with_label
     from barlow_track.utils.volume_data import VolumeCoordsDataset, load_volume
@@ -287,7 +288,7 @@ def _iter_project_frames(project_data, target_sz, normalizer, frame_list, device
         vol = load_volume(project_data, t)
         dat_d, seg2name, _ = get_bbox_data_for_volume_with_label(
             project_data, t, target_sz=target_sz, include_untracked=True,
-            skip_crops=use_gpu)
+            skip_crops=use_gpu, round_centroids=round_centers)
         names = sorted(dat_d)
         if len(names) < 2:
             continue
@@ -301,7 +302,7 @@ def _iter_project_frames(project_data, target_sz, normalizer, frame_list, device
             zxy = np.array([dat_d[n] for n in names], dtype=np.float32)
             vol_t = torch.from_numpy(np.ascontiguousarray(vol)).to(device, dtype=torch.float32)
             crops = _rescale_gpu(
-                _extract_crops_gpu(vol_t, zxy, target_sz, round_centroids=False,
+                _extract_crops_gpu(vol_t, zxy, target_sz, round_centroids=round_centers,
                                    crop_window=crop_window)).unsqueeze(1)
         else:
             crops = torch.from_numpy(np.stack([dat_d[n] for n in names]).astype(np.float32))
@@ -455,6 +456,10 @@ def _parse_args(argv=None):
     ap.add_argument('--crop_window', choices=['pad', 'slide'], default='pad',
                     help="GPU crops near a volume edge: 'slide' matches training and the CPU "
                          "path; 'pad' (default) is the older clip-and-zero-pad window")
+    ap.add_argument('--round_crop_centers', action='store_true',
+                    help='project source: crop around the rounded centroid, as training does, '
+                         'instead of the truncated one (default, kept so recorded scores reproduce); '
+                         'the NWB source always rounds')
     ap.add_argument('--track_device', choices=['embed_device', 'cpu', 'cuda'],
                     default='embed_device',
                     help='device for label propagation / tracking. Full-video kNN graphs have '
@@ -601,13 +606,15 @@ def run_eval(args):
     normalizer = tio.RescaleIntensity(percentiles=(5, 99.5))  # in sync with training
     n_frames = src_data.num_frames if args.max_frames is None else min(args.max_frames, src_data.num_frames)
     frame_list = list(range(n_frames))
+    _round_centers = bool(getattr(args, 'round_crop_centers', False)) and args.source != 'nwb'
     if args.source == 'nwb':
         arrays = _load_nwb_arrays(src_data)
         frame_iter_fn = lambda: _iter_nwb_frames(src_data, arrays, target_sz, normalizer, frame_list,
                                                 device=device, crop_window=args.crop_window)
     else:
         frame_iter_fn = lambda: _iter_project_frames(src_data, target_sz, normalizer, frame_list,
-                                                     device=device, crop_window=args.crop_window)
+                                                     device=device, crop_window=args.crop_window,
+                                                     round_centers=_round_centers)
 
     modes = ['image', 'position'] if args.mode == 'both' else [args.mode]
     records = []
@@ -621,6 +628,8 @@ def run_eval(args):
             suffix += "_l2"
         if getattr(args, 'crop_window', 'pad') == 'slide' and device.type == 'cuda':
             suffix += "_slide"
+        if _round_centers:
+            suffix += "_round"
         emb_dir = args.emb_dir or '/tmp/claude'
         os.makedirs(emb_dir, exist_ok=True)
         tag_suffix = f"_{args.tag}" if args.tag else ""
@@ -751,6 +760,7 @@ def run_eval(args):
                    center_per_volume=bool(args.center_per_volume),
                    l2_per_volume=bool(args.l2_per_volume),
                    crop_window=(getattr(args, 'crop_window', 'pad') if device.type == 'cuda' else 'cpu'),
+                   crop_center='trunc' if args.source != 'nwb' and not _round_centers else 'round',
                    emb_path=os.path.abspath(emb_path),
                    accuracy=float(stats['accuracy']),
                    misses=int(stats['total_misses']),
@@ -860,7 +870,7 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
                                 descriptor_stage='auto', max_frames=None,
                                 center_per_volume=False, l2_per_volume=False,
                                 track_device='cpu', skip_embed=True, extra_record=None,
-                                crop_window='pad'):
+                                crop_window='pad', round_crop_centers=False):
     """Track one trained checkpoint on `project` and return its accuracy record.
 
     Programmatic entry point used by the hyperparameter sweep's in-job
@@ -884,7 +894,7 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
         descriptor_stage=descriptor_stage, center_per_volume=center_per_volume,
         l2_per_volume=l2_per_volume, device=device, track_device=track_device,
         results_jsonl=results_jsonl, emb_dir=emb_dir, tag=tag, extra_record=extra_record,
-        crop_window=crop_window)
+        crop_window=crop_window, round_crop_centers=round_crop_centers)
     _check_args(args)
     return run_eval(args)[-1]
 

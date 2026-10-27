@@ -734,3 +734,21 @@ r261027-589796: norot auto re-embedded with CPU (sliding-window) crops scores 0.
 ## 2026-10-27 22:55 — decision
 
 i261027-2 judged from r261027-589796: edge-crop padding moved one network's Flavell accuracy by 0.5 pt (0.787 GPU pad, 0.782 CPU slide). None of the 15 notes rests on a difference that small, so none needs a rerun on Flavell. Not resolved yet: only Flavell and one network were measured, and Zimmer and Leifer have more neurons near the volume edge in z; c4a4221's --crop_window slide lets a later eval check.
+
+## 2026-10-27 23:55 — run
+
+r261027-631777 second half: legacy baseline_flavell_head_rerun re-tracked after per-frame centring: 0.958 vs 0.956 uncentred (NWB GT, 1600 frames). Centring moves neither network (comparator +0.7, legacy +0.2): the per-frame mean is not part of the gap.
+
+## 2026-10-27 23:55 — run
+
+r261027-665732 auto: the re-augmenting use_position cell at epoch 32 of 50 (crashed run's last checkpoint) scores 0.652 fused on Flavell (NWB GT), against the frozen comparator's 0.795 at 50 epochs, same seed and config otherwise. Its proxy at epoch 30 (0.460) matched the frozen norot run's (0.463), so the proxy missed a 14-point drop. Re-drawing views each epoch does not close the gap; like per-crop augmentation (0.657) and global elastic (0.718), more augmentation diversity makes the position pipeline worse, where the legacy pipeline re-draws every epoch and scores 0.95. Caveat: 32 epochs, one seed; backbone stage still tracking.
+
+## 2026-10-27 23:55 — decision
+
+i261027-1 judged from r261027-665732: frozen view pairs are not what holds the position networks below legacy (re-augmenting scored 0.652, frozen 0.795), so the notes resting on frozen-pair runs keep their direction; their numbers describe frozen training, which is what the cluster rounds ran. Not resolved: whether reaug hurts at 50 epochs and other seeds is unmeasured.
+
+## 2026-10-27 23:56 — run
+
+Two runs from one script (barlow_track@61894ab round_centers_check.sh): (1) comparator paper_flavell_use_position auto re-embedded with --round_crop_centers (training crops at rounded centroids, the eval truncates; legacy truncates in both), tracked on CPU, vs 0.795 truncated. (2) Once the reaug backbone eval frees the GPU, the legacy-matched bisection (barlow_track@b3f816b): position data path with image features only, preprint per-crop transforms, no global volume affine, no crop-centre jitter or dropout, re-drawn views; backbone eval vs NWB GT. Near 0.95 puts the gap in the position pipeline's geometric augmentation (global affine, jitter); near 0.80 in the rest of its data path. About 23 h.
+
+run r261027-808962 · pids 808962 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/round_centers_check/run.log, /home/charles/.cache/barlow_scratch/train/paper_flavell_position_pipeline_legacy_matched/run.log · for [[QUE - Which part of the position pipeline costs Flavell accuracy, its augmentation or its position fusion]]

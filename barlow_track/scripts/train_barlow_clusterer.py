@@ -137,6 +137,21 @@ def train_barlow_network(args):
     else:
         json_stats.append(dict(run_name="Non-wandb-run", run_id=None))
 
+    # Held-out frames for the per-epoch matching proxy: evenly spaced over the
+    # frames the data module did not sample (train, val and test alike)
+    match_frames, match_stages = [], ('auto',)
+    n_match = int(getattr(args, 'val_match_frames', 0) or 0)
+    if n_match > 0:
+        from barlow_track.utils.val_matching import held_out_frames
+        if use_position:
+            used = data_module.alldata.frame_indices
+            match_stages = ('auto', 'backbone')
+        else:
+            used = data_module.selected_frames
+            match_stages = ('backbone',)
+        match_frames = held_out_frames(project_data1.num_frames, used, n_match)
+        print(f"Frame-pair matching proxy on {len(match_frames)} held-out frames: {match_frames}", flush=True)
+
     num_skipped_batches = 0
     prev_gate = None  # previous attention-gate value, for update magnitudes
     gate_grad_norm = None  # captured after backward, before grads are cleared
@@ -272,6 +287,18 @@ def train_barlow_network(args):
                     val_losses.update({f"val_{k}": v for k, v in _diag.items()})
                 except (RuntimeError, ValueError, AttributeError, StopIteration) as e:
                     logging.warning(f"Descriptor diagnostics failed: {e}")
+                # Tracking proxy on frames training never sampled (val_matching.py);
+                # off unless val_match_frames > 0. Draws no random numbers.
+                if match_frames:
+                    try:
+                        from barlow_track.utils.val_matching import frame_pair_matching_accuracy
+                        acc, n_pairs = frame_pair_matching_accuracy(
+                            model, project_data1, match_frames, target_sz, gpu, stages=match_stages)
+                        for stage, a in acc.items():
+                            val_losses[f"val_match_accuracy_{stage}"] = a
+                        val_losses["val_match_pairs"] = n_pairs
+                    except (RuntimeError, ValueError, KeyError, IndexError, AttributeError) as e:
+                        logging.warning(f"Frame-pair matching accuracy failed: {e}")
                 if run is not None:
                     run.log(val_losses)
                 # Printing

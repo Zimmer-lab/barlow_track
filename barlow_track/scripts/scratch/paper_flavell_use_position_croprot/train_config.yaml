@@ -52,6 +52,9 @@ project_dir: /home/charles/.cache/barlow_scratch/train/paper_flavell_use_positio
 # num_workers > 0 crashes (BadZipFile, Bad CRC-32): forked workers share the zarr
 # ZipStore's file handle, so load serially.
 num_workers: 0
+# Per-epoch frame-pair matching proxy on 30 never-sampled frames (utils/val_matching.py);
+# does not change training (no random draws).
+val_match_frames: 30
 
 # Position branch, copied from round_flavell_more_epochs/train_config.yaml
 # (whose trial_27 is the best flavell revision net, use_attention false).

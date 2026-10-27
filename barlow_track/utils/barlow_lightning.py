@@ -68,7 +68,8 @@ class NeuronCropImageDataModule(LightningDataModule):
         project_data = self.project_data
         crop_kwargs = self.crop_kwargs
 
-        list_of_neurons_of_volumes = get_crops_from_project(crop_kwargs, frames, project_data)
+        list_of_neurons_of_volumes, self.selected_frames = get_crops_from_project(
+            crop_kwargs, frames, project_data, return_frames=True)
         alldata = self.base_dataset_class(list_of_neurons_of_volumes)
 
         self.list_of_neurons_of_volumes = list_of_neurons_of_volumes
@@ -103,7 +104,7 @@ class NeuronCropImageDataModule(LightningDataModule):
         return DataLoader(self.test_dataset, batch_size=self.batch_size)
 
 
-def get_crops_from_project(crop_kwargs, frames, project_data):
+def get_crops_from_project(crop_kwargs, frames, project_data, return_frames=False):
     # Get a permutation of the entire dataset
     max_num_frames = project_data.num_frames
     random_sample = random.sample(range(max_num_frames), max_num_frames)
@@ -131,4 +132,6 @@ def get_crops_from_project(crop_kwargs, frames, project_data):
 
     print("Number of frames selected: " + str(len(selected_frames)))
     print(selected_frames)
+    if return_frames:
+        return list_of_neurons_of_volumes, selected_frames
     return list_of_neurons_of_volumes

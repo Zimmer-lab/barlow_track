@@ -462,3 +462,9 @@ r261026-1606883 batch 2 (round_flavell_more_epochs 17-26, 28, 29, NWB GT): 0.802
 ## 2026-10-27 04:01
 
 r261026-1730274 at epoch 30 (7,200 steps, 2.57 s/step, ends ~07:00): val loss falls to 0.0182 at epoch 8, rises to 0.0316 at epoch 25, back to 0.023 by epoch 29. Its minimum is half that of the same cell without elastic (0.036) and of image-only (0.040), although its val views are deformed more, so the rise over training is smaller but not gone. Val loss tracks accuracy weakly; wait for the eval.
+
+## 2026-10-27 10:31 — todo
+
+r261026-1730274 ended: elastic position cell fused 0.7175, backbone 0.5982 vs 0.7953 / 0.7559 without elastic at the same seed. Elastic is not what the position pipeline lacks; added geometric augmentation keeps making its image features worse (per-crop: backbone 0.487), unlike in the legacy pipeline. Filled [[EVD - Flavell-matched global elastic deformation in the position pipeline]].
+
+- [ ] extract_crops zero-fills points at y≈119.5 that in_bounds_mask keeps (Flavell volume 120 wide): align the bounds test with the crop rounding

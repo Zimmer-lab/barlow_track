@@ -478,7 +478,7 @@ def _correlation_for_plot(model, batch, gpu, use_position):
     bad volume must not kill the whole trial (cf. the grad-free skip in the
     training loop).
     """
-    if batch[0].numel() == 0:
+    if batch[0].numel() == 0 or batch[1].numel() == 0:
         return None
     if not use_position:
         y1, y2 = _format_vectors_on_gpu(batch[0], batch[1], gpu)

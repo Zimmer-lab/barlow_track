@@ -117,3 +117,41 @@ def test_embed_volumes_with_position(tmp_path):
     for t in (0, 1):
         assert out[t].shape == (len(seg[t]), 8)
         assert np.isfinite(out[t]).all()
+
+
+@requires_project
+@pytest.mark.slow
+def test_train_val_eval_mode_logs_a_per_batch_val_loss(tmp_path):
+    import json
+    from barlow_track.scripts.train_barlow_clusterer import train_barlow_network
+    for sub in ('checkpoints', 'log'):
+        (Path(tmp_path) / sub).mkdir(parents=True, exist_ok=True)
+    args = _smoke_args(tmp_path, 'position')
+    args.projector_norm = 'batchnorm'  # the default; the mode matters only with batch norm
+    args.num_frames, args.train_fraction, args.val_fraction = 6, 0.5, 0.34
+    args.val_eval_mode = True
+    test_losses = train_barlow_network(args)
+    assert np.isfinite(test_losses['test_loss'])
+    stats = json.load(open(Path(tmp_path) / 'log' / 'stats.json'))
+    val = [s for s in stats if 'val_loss' in s]
+    assert val and np.isfinite(val[-1]['val_mean_batch_loss'])
+
+
+@requires_project
+@pytest.mark.slow
+def test_train_out_of_memory_is_a_failure_with_the_partial_model_aside(tmp_path, monkeypatch):
+    """An OOM'd trial must not leave a resnet50.pth a sweep would score."""
+    from barlow_track.scripts import train_barlow_clusterer as tbc
+    from barlow_track.utils.utils_ground_truth import check_training_finished
+    for sub in ('checkpoints', 'log'):
+        (Path(tmp_path) / sub).mkdir(parents=True, exist_ok=True)
+
+    def _oom(*a, **k):
+        raise torch.cuda.OutOfMemoryError("CUDA out of memory (test)")
+    monkeypatch.setattr(tbc, '_run_forward', _oom)
+    args = _smoke_args(tmp_path, 'position')
+    with pytest.raises(torch.cuda.OutOfMemoryError):
+        tbc.train_barlow_network(args)
+    assert (Path(tmp_path) / 'resnet50_oom.pth').exists()
+    assert not (Path(tmp_path) / 'resnet50.pth').exists()
+    assert check_training_finished(str(tmp_path), args.epochs - 1) is False

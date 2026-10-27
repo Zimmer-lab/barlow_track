@@ -270,7 +270,13 @@ def train_barlow_network(args):
                 # save checkpoint
                 state = dict(epoch=epoch + 1, model=model.state_dict(), optimizer=optimizer.state_dict())
                 torch.save(state, checkpoint_file)
-                # Calculate validation loss
+                # Calculate validation loss. By default in train mode (batch-norm
+                # projectors use and update batch stats, as before); val_eval_mode
+                # scores it like the test loss. Tracking descriptors are taken
+                # before the projector, so neither changes tracking accuracy.
+                val_eval_mode = bool(getattr(args, 'val_eval_mode', False))
+                if val_eval_mode:
+                    model.eval()
                 with torch.no_grad():
                     val_loss, val_loss_original, val_loss_transpose = 0, 0, 0
                     c = None
@@ -290,8 +296,13 @@ def train_barlow_network(args):
                         c /= num_val_batches  # Plot the average
                         fig = visualize_model_performance(c, save_fname=None, vmin=-0.5, vmax=1)
                         run.log({"validation_chart": fig})
+                if val_eval_mode:
+                    model.train()
 
                 val_losses = {"val_loss": val_loss, "val_loss_original": val_loss_original, "val_loss_transpose": val_loss_transpose}
+                # val_loss is a sum over val batches; the mean compares across
+                # runs with different numbers of val frames.
+                val_losses["mean_batch_loss"] = val_loss / num_val_batches if num_val_batches else float('nan')
                 # Anti-collapse descriptor health (pre-projector): effective rank,
                 # off-diag correlation, dead dims, per-volume mean fraction,
                 # attention entropy/gate, position jitter sensitivity. SSL loss

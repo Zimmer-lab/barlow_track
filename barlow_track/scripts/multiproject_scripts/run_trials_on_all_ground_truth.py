@@ -302,6 +302,33 @@ def run_slurm(tasks, results_jsonl, args):
     return failures
 
 
+def build_eval_cmd(lab, tag, weights, args, results_jsonl, emb_dir):
+    """eval_accuracy.py command line for one (dataset, checkpoint) cell."""
+    spec = DATASETS[lab]
+    cmd = [sys.executable, "-u", EVAL_SCRIPT, "--lab", LAB_FOR_DATASET[lab],
+           "--source", spec["source"], "--mode", args.mode,
+           "--device", args.device,
+           "--cluster", args.cluster, "--num_seeds", str(args.num_seeds),
+           "--descriptor_stage", args.descriptor_stage,
+           "--tag", tag, "--results_jsonl", results_jsonl, "--emb_dir", emb_dir]
+    if weights is not None:
+        cmd += ["--weights", weights]
+    if spec["source"] == "nwb":
+        cmd += ["--nwb", spec["nwb"]]
+    else:
+        cmd += ["--project", os.path.join(spec["project"], "project_config.yaml")]
+        # Without --gt, eval_accuracy falls back to its lab-level GT (the 1128
+        # project for every zimmer dataset)
+        cmd += ["--gt", os.path.join(spec["gt"], "project_config.yaml")]
+    if args.max_frames is not None:
+        cmd += ["--max_frames", str(args.max_frames)]
+    if args.center_per_volume:
+        cmd += ["--center_per_volume"]
+    if args.l2_per_volume:
+        cmd += ["--l2_per_volume"]
+    return cmd
+
+
 def main():
     args = parse_args()
     trial_parent_dir = os.path.abspath(args.trial_parent_dir)
@@ -345,26 +372,7 @@ def main():
             print("Nothing left to run.")
             return
     for lab, trial_num, tag, weights in trial_jobs:
-            spec = DATASETS[lab]
-            cmd = [sys.executable, "-u", EVAL_SCRIPT, "--lab", LAB_FOR_DATASET[lab],
-                   "--source", spec["source"], "--mode", args.mode,
-                   "--device", args.device,
-                   "--cluster", args.cluster, "--num_seeds", str(args.num_seeds),
-                   "--descriptor_stage", args.descriptor_stage,
-                   "--tag", tag, "--results_jsonl", results_jsonl, "--emb_dir", emb_dir]
-            if weights is not None:
-                cmd += ["--weights", weights]
-            if spec["source"] == "nwb":
-                cmd += ["--nwb", spec["nwb"]]
-            else:
-                cmd += ["--project", os.path.join(spec["project"], "project_config.yaml")]
-            if args.max_frames is not None:
-                cmd += ["--max_frames", str(args.max_frames)]
-            if args.center_per_volume:
-                cmd += ["--center_per_volume"]
-            if args.l2_per_volume:
-                cmd += ["--l2_per_volume"]
-            tasks.append((lab, trial_num, tag, cmd))
+        tasks.append((lab, trial_num, tag, build_eval_cmd(lab, tag, weights, args, results_jsonl, emb_dir)))
     tags = [(lab, trial_num, tag) for lab, trial_num, tag, _ in tasks]
 
     gpus = resolve_gpus(args.gpus)

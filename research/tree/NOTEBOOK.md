@@ -702,3 +702,35 @@ Done: make the NWB path not hand the tracker only GT objects (user: the algorith
 ## 2026-10-27 20:12
 
 The 20:09 tick of the in_bounds_mask to-do says 'barlow_track@<see log>': the commit is barlow_track@e225a55 (round_crop_bounds, default off).
+
+## 2026-10-27 20:14 — run
+
+Per-frame centring test from cached embeddings (barlow_track@bcb80f8, centered_check.sh): comparator paper_flavell_use_position auto (0.795 uncentred) and legacy baseline_flavell_head_rerun (0.956) re-tracked after subtracting each frame's descriptor mean, CPU, NWB GT. Motivation: every Flavell network's descriptors are dominated by a per-frame mean (mean_frac legacy 0.986, position 0.990-1.000); the position nets' residuals are smaller (mean pairwise cosine 0.998-1.000 vs legacy 0.972) and the per-frame mean drifts more relative to them (|m_t - m| / within-frame residual 0.07-0.10 vs legacy 0.056, every 40th frame). If centring lifts the comparator toward 0.95, mean drift costs the position nets.
+
+run r261027-631777 · pids 631777 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/centered_check/run.log
+
+## 2026-10-27 20:58 — run
+
+r261027-630225: legacy baseline_flavell_head_rerun, first 60 Flavell NWB frames, CPU, barlow_track@79abd66. GT objects only 0.944 (259 misses, 235 mismatches of 8882); every raw_segmentation detection (--nwb_objects all) 0.932 (217 misses, 385 mismatches, same 8882 GT entries, so the label mapping keeps the GT intact). Distractors cost 1.2 points here, mostly as mismatches. The dropped run r261027-625851's gt arm finished after the drop and appended to the same results.jsonl (its process outlived --kill): 0.856 with the old _load_nwb_arrays on the same 60 frames, i.e. i261026-1 cost 8.8 points on the NWB path. results: ~/.cache/barlow_scratch/nwb_objects_check/results.jsonl.
+
+## 2026-10-27 21:28 — run
+
+r261027-572595 (reaug) crashed at epoch 31 in the validation correlation plot: a 1-object view reached the train-mode batch-norm projector ('Expected more than 1 value per channel'); no resnet50.pth saved. Fixed in barlow_track@33094f9 (_correlation_for_plot skips views with <2 objects, as the training step already does). Proxy over epochs 13-30 stayed flat: fused 0.39-0.47 (0.460 at ep 30), backbone 0.23-0.38 (0.357), against frozen norot's 0.463 / 0.453 at ep 30. Val loss spiked at ep 7, 18, 19, 23 (0.08-0.16).
+
+## 2026-10-27 21:28 — run
+
+Eval of the partial reaug model (last per-epoch checkpoint, 32 of 50 epochs; barlow_track@33094f9 eval_partial.sh): auto then backbone, Flavell project source, NWB GT, embed cuda, track cpu. Compares with the frozen comparator's 0.795 / 0.756 (50 epochs); near 0.95 would make frozen pairs the cause even at 32 epochs.
+
+run r261027-665732 · pids 665732 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_reaug/eval_partial.log
+
+## 2026-10-27 21:56 — run
+
+r261027-631777 first half: comparator paper_flavell_use_position auto re-tracked after per-frame centring of its cached embeddings: 0.802 vs 0.795 uncentred (+0.7 points, NWB GT, 25 seeds). The per-frame mean drift is not what holds the position nets ~15 points below legacy. Legacy centred control still running.
+
+## 2026-10-27 22:55 — run
+
+r261027-589796: norot auto re-embedded with CPU (sliding-window) crops scores 0.782 on Flavell NWB GT (1600 frames), against 0.787 with the GPU padded crops. The edge-crop difference of i261027-2 is worth about half a point at most, in the other direction, so it does not explain the 15-point gap to legacy. GPU eval numbers stand.
+
+## 2026-10-27 22:55 — decision
+
+i261027-2 judged from r261027-589796: edge-crop padding moved one network's Flavell accuracy by 0.5 pt (0.787 GPU pad, 0.782 CPU slide). None of the 15 notes rests on a difference that small, so none needs a rerun on Flavell. Not resolved yet: only Flavell and one network were measured, and Zimmer and Leifer have more neurons near the volume edge in z; c4a4221's --crop_window slide lets a later eval check.

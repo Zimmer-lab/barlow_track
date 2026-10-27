@@ -507,3 +507,13 @@ run r261027-2071685 · pids 2071685 · host charles-Precision-7820-Tower · logs
 ## 2026-10-27 13:43 — run
 
 r261027-2071685: legacy seed-43 cells 0.953 (64 bn), 0.950 (64 ln), 0.944 (512 ln) against the NWB GT, position trial15 (512 ln, seed 921677937) 0.901. Legacy cells all at preprint level; recorded in [[EVD - Flavell paper ablation grid of pipeline, embedding size and projector norm]]. Legacy training-seed spread waits on cluster cells 8-11.
+
+## 2026-10-27 15:54 — run
+
+r261027-2062947 (norot) training done. Per epoch, val loss and the frame-pair matching proxy move together, the wrong way: val loss bottoms at epoch 10 (0.0061) and climbs to 0.0110 at epoch 49 (Spearman with epoch +0.80), while the proxy rises almost monotonically 0.390 -> 0.474 fused, 0.361 -> 0.469 backbone (Spearman with epoch +0.96). Spearman(val loss, proxy) = +0.80: early stopping on val loss would keep epoch 10 (proxy 0.42). Proxy at the end is above the rotating cell's 0.373 / 0.366. Full evals (auto, backbone) now running.
+
+## 2026-10-27 15:56 — run
+
+Norot evals handed off: eval_then_croprot.sh (barlow_track@b39f823) stops run.sh once each stage's embedding is cached, starts the croprot training, then tracks both norot stages from cache on CPU. Replaces the eval half of r261027-2062947.
+
+run r261027-2180262 · pids 2180262 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_norot/eval_then_croprot.log · for [[EVD - Global rotation off in the position pipeline]]

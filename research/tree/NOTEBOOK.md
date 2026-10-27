@@ -468,3 +468,32 @@ r261026-1730274 at epoch 30 (7,200 steps, 2.57 s/step, ends ~07:00): val loss fa
 r261026-1730274 ended: elastic position cell fused 0.7175, backbone 0.5982 vs 0.7953 / 0.7559 without elastic at the same seed. Elastic is not what the position pipeline lacks; added geometric augmentation keeps making its image features worse (per-crop: backbone 0.487), unlike in the legacy pipeline. Filled [[EVD - Flavell-matched global elastic deformation in the position pipeline]].
 
 - [ ] extract_crops zero-fills points at y≈119.5 that in_bounds_mask keeps (Flavell volume 120 wide): align the bounds test with the crop rounding
+
+## 2026-10-27 11:11 — run
+
+Train + eval the flavell use_position cell with the global rotation and flip off (norot; scale/translation kept), seed 0, local mirror, NWB GT at auto and backbone. Tests whether rotating the 284x120 volume (10% objects lost, 18% crops off-centre) costs the position pipeline's Flavell accuracy.
+
+run r261027-2053863 · pids 2053863 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_norot/run.log · for [[EVD - Global rotation off in the position pipeline]]
+
+## 2026-10-27 11:26 — dropped
+
+stopped at step ~200 to restart with the per-epoch matching proxy (val_match_frames 30), which does not change training
+
+dropped r261027-2053863
+
+## 2026-10-27 11:26 — run
+
+Restart of r261027-2053863 (norot cell) with val_match_frames 30: the per-epoch frame-pair matching proxy gives a learning curve on the tracking task to set against val loss.
+
+run r261027-2062947 · pids 2062947 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_norot/run.log · for [[EVD - Global rotation off in the position pipeline]]
+
+## 2026-10-27 11:27 — decision
+
+Val loss vs accuracy: val loss scores the training augmentation's pretext task on ~30 held-out frames, re-augmented every epoch (shared dataset, set_epoch), in train mode (no model.eval(); batchnorm projector uses and updates batch stats on val). Not comparable across augmentation settings. Added a GT-based proxy (frame-pair matching on never-sampled frames, val_match_frames; db105ba): Spearman 0.74 with full accuracy over 24 checkpoints, recorded in [[EVD - Frame-pair matching on held-out frames ranks Flavell networks by tracking accuracy]].
+
+- [ ] Validation runs in train mode: add model.eval() around the val loss (changes logged val numbers, not training)
+- [ ] GT-free variant of the matching proxy (cycle consistency over frame triples) for users without ground truth
+
+## 2026-10-27 11:41
+
+r261027-2062947 epoch 0: proxy works in the loop (30 held-out frames, 435 pairs, ~1 min): match auto 0.390, backbone 0.361 (the rotating use_position cell's final checkpoint: 0.373 / 0.366 on whole-video frames); val loss 0.0091.

@@ -583,3 +583,28 @@ dropped r261027-562757
 Re-augmentation test, attempt 2 (barlow_track@0de29c9; config unchanged from aa2dbea): the use_position cell with only reaugment_each_epoch true. Near 0.95 fused means the frozen view pairs (i261027-1) cost the position pipeline its Flavell accuracy.
 
 run r261027-572595 · pids 572595 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_reaug/run.log
+
+## 2026-10-27 19:01 — run
+
+r261027-572595 (reaug) past the crash point. Val loss 0.0446, 0.0248, 0.0224 over epochs 0-2, against the frozen comparator's 0.0446, 0.0381, 0.0348 (its val views are now re-drawn each epoch too, so the curves compare loosely). Proxy 0.429 -> 0.444 fused, 0.324 -> 0.343 backbone.
+
+## 2026-10-27 19:08 — run
+
+Review finding (subagent, verified by reading): with --device cuda, eval_accuracy's _extract_crops_gpu (eval_accuracy.py:147-192) still clips and zero-pads edge crops, while the CPU path (data_loading.get_3d_crop_using_bbox_or_centroid) and training slide the window inside the volume since barlow_track@726c913 (2026-10-05). About 7% of Flavell crops differ. Every --device cuda eval since then, including all of this project's Flavell scores, embedded edge neurons on crops unlike training. This run measures the size: norot auto re-embedded on CPU, against 0.787 from GPU crops.
+
+run r261027-589796 · pids 589796 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_norot/eval_auto_cpucrops.log
+
+## 2026-10-27 19:08 — issue
+
+GPU eval crops differ from training crops at volume edges: _extract_crops_gpu clips and zero-pads while training and the CPU eval path slide the window inside the volume (since barlow_track@726c913, 2026-10-05). About 7% of Flavell crops, more on thin-z Zimmer volumes; zeros also shift the 5th-percentile normalisation of the frame. Size being measured in r261027-589796.
+
+- [ ] issue i261027-2 · affects [[@BarlowTrack revision accuracy evaluation]], [[@BarlowTrack Flavell sweep cells rescored against the NWB GT]]
+
+## 2026-10-27 19:08 — idea
+
+Code review of training, eval and sweep code (subagent, 2026-10-27; top two verified by reading). Also found: 1) the benchmark driver passes no --gt, so zimmer_1123 and zimmer_1210 cells score against the 1128 GT; 2) reusing a train dir pairs files from different runs (get_sequential_filename writes stats-1.json, args-1.pickle, resnet50-1.pth while readers use the fixed names; live in paper_flavell_use_position_reaug, whose log/stats.json is from the crashed attempt); 3) center_per_volume defaults True in training but False on load when the key is missing (latent for attention configs); 4) an OOM mid-training saves a partial model that counts as a finished trial; 5) the NWB-source eval embeds only GT neurons, so position features see a sparser point set; 6) training rounds crop centres, eval truncates; 7) the embedding cache is keyed only by lab, stage and tag; 8) a resumed direct grid resubmits the whole grid with repeated seeds; 9) val and test losses are sums, in train and eval mode respectively; 10) RandomNoise std 0.25 is added before rescaling, so it is about 0.1% of range and does nothing.
+
+- [ ] Fix _extract_crops_gpu to slide windows like the CPU path, behind a flag, after r261027-589796 sizes the effect
+- [ ] Pass --gt for zimmer_1123 and zimmer_1210 in run_trials_on_all_ground_truth.py
+- [ ] Make train_barlow_clusterer refuse or clean a train dir that already holds a run
+- [ ] Round, not truncate, centroids in the eval and val_matching crop paths

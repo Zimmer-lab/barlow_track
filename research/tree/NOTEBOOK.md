@@ -537,3 +537,31 @@ Correction to the r261027-2062947 epoch-0 entry: the rotating use_position cell'
 Proxy on the norot final checkpoint with the same 30 whole-video frames as the 24-checkpoint batch (CPU), so it compares with the rotating cell's 0.477 / 0.366.
 
 run r261027-2876617 · pids 2876617 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/val_matching/proxy_30_norot.log
+
+## 2026-10-27 18:15 — issue
+
+Position-pipeline training repeats the same augmented view pairs every epoch. VolumeCoordsDataset seeds each item from (seed, epoch, index) and its epoch advances only via a Lightning trainer; train_barlow_clusterer.py builds the loader once and runs its own epoch loop, so the epoch stays 0 and all 50 epochs see one fixed pair per training frame (~240 pairs). Confirmed on the local Flavell project (crops and keypoints identical across two passes of the loader). In since barlow_track@80a2bbd (2026-10-05, Fix determinism #144), so it covers every use_position network of the Oct 2026 rounds; the legacy crop pipeline draws from the global RNG and is not affected. Opt-in fix reaugment_each_epoch in barlow_track@7f9f7bc. Fits the rising validation loss of every position run and the finding that stronger augmentation made things worse.
+
+- [ ] issue i261027-1 · affects [[@BarlowTrack revision benchmark sweeps]], [[@BarlowTrack preprint Flavell configuration with the position pipeline]], [[@BarlowTrack preprint Flavell configuration in the position pipeline with image features only]], [[@BarlowTrack preprint Flavell configuration with the position pipeline and preprint per-crop augmentation]], [[EVD - Flavell-matched global elastic deformation in the position pipeline]], [[EVD - Global rotation off in the position pipeline]]
+
+## 2026-10-27 18:15 — dropped
+
+Stopped at about epoch 25 to free the GPU: like every position run it trained on frozen view pairs (issue i261027-1), so the per-crop rotation question waits on the re-augmentation test.
+
+Stopped PID 2190583.
+
+dropped r261027-2190583
+
+## 2026-10-27 18:16 — decision
+
+Correction to the r261027-2190583 drop: croprot had finished 8 epochs, not 25.
+
+## 2026-10-27 18:16 — run
+
+Re-augmentation test: the use_position cell (paper_flavell_use_position, fused 0.795 / backbone 0.756, seed 0, global rotation on) with only reaugment_each_epoch true (barlow_track@aa2dbea:barlow_track/scripts/scratch/paper_flavell_use_position_reaug/run.sh). Near 0.95 fused means the frozen view pairs (i261027-1) are what costs the position pipeline its Flavell accuracy.
+
+run r261027-562757 · pids 562757 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_reaug/run.log
+
+## 2026-10-27 18:16 — run
+
+r261027-2876617: norot final checkpoint on the proxy's 30 whole-video frames: 0.499 fused / 0.497 backbone, against the rotating cell's 0.477 / 0.366. Accuracy moved -0.8 fused and +2.4 backbone points, so the proxy ranked the fused pair the wrong way (within noise) and overstated the backbone gain (+13 proxy points for +2.4 accuracy). It orders networks roughly, not by the few points that separate close arms.

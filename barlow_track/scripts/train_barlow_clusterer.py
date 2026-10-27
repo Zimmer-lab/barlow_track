@@ -304,7 +304,8 @@ def train_barlow_network(args):
                     try:
                         from barlow_track.utils.val_matching import frame_pair_matching_accuracy
                         acc, n_pairs = frame_pair_matching_accuracy(
-                            model, project_data1, match_frames, target_sz, gpu, stages=match_stages)
+                            model, project_data1, match_frames, target_sz, gpu, stages=match_stages,
+                            crop_window=getattr(args, 'val_match_crop_window', 'pad'))
                         for stage, a in acc.items():
                             val_losses[f"val_match_accuracy_{stage}"] = a
                         val_losses["val_match_pairs"] = n_pairs

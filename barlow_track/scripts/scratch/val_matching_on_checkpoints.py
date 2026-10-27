@@ -25,6 +25,7 @@ def main():
     ap.add_argument('--weights', nargs='+', required=True)
     ap.add_argument('--n_frames', type=int, default=20)
     ap.add_argument('--jsonl')
+    ap.add_argument('--crop_window', choices=['pad', 'slide'], default='pad')
     args = ap.parse_args()
     from wbfm.utils.projects.finished_project_data import ProjectData
     project_data = ProjectData.load_final_project_data(args.project, allow_hybrid_loading=True)
@@ -36,8 +37,10 @@ def main():
         model = model.to(device).eval()
         target_sz = np.array([targs.target_sz_z, targs.target_sz_xy, targs.target_sz_xy])
         stages = ('auto', 'backbone') if hasattr(model, 'fused_descriptors') else ('backbone',)
-        acc, n_pairs = frame_pair_matching_accuracy(model, project_data, frames, target_sz, device, stages=stages)
+        acc, n_pairs = frame_pair_matching_accuracy(model, project_data, frames, target_sz, device, stages=stages,
+                                                    crop_window=args.crop_window)
         rec = dict(weights=w, frames=frames, n_pairs=n_pairs, minutes=(time.time() - t0) / 60,
+                   crop_window=args.crop_window if device.type == 'cuda' else 'cpu',
                    **{f'match_{k}': v for k, v in acc.items()})
         print(json.dumps(rec), flush=True)
         if args.jsonl:

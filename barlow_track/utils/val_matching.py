@@ -39,12 +39,13 @@ def _seg_to_name(project_data, t):
     return {int(v): k for k, v in row.items() if v == v}
 
 
-def frame_pair_matching_accuracy(model, project_data, frames, target_sz, device, stages=('auto',)):
+def frame_pair_matching_accuracy(model, project_data, frames, target_sz, device, stages=('auto',),
+                                 crop_window='pad'):
     """{stage: mean accuracy over frame pairs} and the number of pairs scored.
 
     A pair's accuracy is the fraction of GT-named neurons present in both frames
     whose assigned partner carries the same name. Restores the model's train/eval
-    mode afterwards.
+    mode afterwards. crop_window: GPU edge crops, as eval_accuracy --crop_window.
     """
     import torchio as tio
     from barlow_track.scripts.eval_accuracy import _iter_project_frames, _trained_stage_emb
@@ -54,7 +55,8 @@ def frame_pair_matching_accuracy(model, project_data, frames, target_sz, device,
     per_frame = []  # (names (N,), {stage: unit-norm embedding (N, D)})
     try:
         with torch.no_grad():
-            for f in _iter_project_frames(project_data, target_sz, normalizer, frames, device=device):
+            for f in _iter_project_frames(project_data, target_sz, normalizer, frames, device=device,
+                                          crop_window=crop_window):
                 seg2name = _seg_to_name(project_data, f['t'])
                 names = np.array([seg2name.get(int(seg)) for _, seg in f['meta']], dtype=object)
                 embs = {}

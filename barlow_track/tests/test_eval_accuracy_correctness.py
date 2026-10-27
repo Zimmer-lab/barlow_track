@@ -94,6 +94,26 @@ def test_cpu_gpu_normalization_match():
     assert float((cpu_out - gpu_out).abs().max()) < 1e-5
 
 
+@pytest.mark.parametrize('vol_shape, target', [((22, 90, 70), (8, 32, 32)), ((5, 40, 40), (8, 16, 16))])
+def test_gpu_slide_crops_match_cpu_crops(vol_shape, target):
+    """crop_window 'slide' reproduces data_loading's window exactly, edges and
+    volumes thinner than the crop included; 'pad' differs at edges."""
+    torch = pytest.importorskip('torch')
+    from barlow_track.scripts.eval_accuracy import _extract_crops_gpu
+    from barlow_track.utils.data_loading import get_3d_crop_using_bbox_or_centroid
+    rng = np.random.RandomState(0)
+    vol = rng.rand(*vol_shape).astype(np.float32)
+    pts = rng.uniform(0, np.array(vol_shape) - 0.51, size=(200, 3))
+    Z, X, Y = vol_shape
+    pts[:4] = [[0, 0, 0], [Z - 1, X - 1, Y - 1], [0, X // 2, 0], [Z // 2, 0, Y - 1]]
+    sz = np.array([1, *vol_shape])
+    cpu = np.stack([get_3d_crop_using_bbox_or_centroid(p, sz, np.array(target), vol)[0] for p in pts])
+    gpu = _extract_crops_gpu(torch.from_numpy(vol), pts, target, round_centroids=True, crop_window='slide')
+    assert np.array_equal(cpu, gpu.numpy())
+    pad = _extract_crops_gpu(torch.from_numpy(vol), pts, target, round_centroids=True)
+    assert not np.array_equal(cpu, pad.numpy())
+
+
 def test_rescale_gpu_oversize_subsample_close_to_full():
     """Stacks above the CUDA quantile cap must rescale without error and
     stay close to the exact full-quantile result (round_flavell xy=64 evals

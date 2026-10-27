@@ -144,7 +144,16 @@ def _trained_stage_emb(tmodel, crops, kpts, stage, device, chunk=32):
     raise ValueError(f"Unknown descriptor_stage '{stage}'")
 
 
-def _centroid_boxes(zxy, target_sz, vol_shape, round_centroids=True):
+def _slide_window(mean, dim, target):
+    """data_loading.get_3d_crop_using_bbox_or_centroid's window: slid back inside the
+    volume, so a crop near an edge is off-centre rather than zero-padded."""
+    if dim <= target:
+        return 0, dim  # whole axis; the caller zero-pads before it
+    start = max(0, min(mean - target // 2, dim - target))
+    return start, start + target
+
+
+def _centroid_boxes(zxy, target_sz, vol_shape, round_centroids=True, crop_window='pad'):
     """Integer (z0, z1, x0, x1, y0, y1) boxes replicating
     data_loading.get_3d_crop_using_bbox_or_centroid (centroid input).
 
@@ -152,15 +161,27 @@ def _centroid_boxes(zxy, target_sz, vol_shape, round_centroids=True):
     the 6-value branch with duplicated centroids (int((c + c) / 2), i.e.
     truncation). The project path uses duplicated centroids, the NWB path
     plain ones.
+
+    crop_window 'slide' matches the CPU crop and training since 726c913;
+    'pad' (default, kept so recorded scores reproduce) is the older clip and
+    zero-pad window, which differs for objects within half a crop of an edge.
     """
     tz, tx, ty = int(target_sz[0]), int(target_sz[1]), int(target_sz[2])
     Z, X, Y = (int(s) for s in vol_shape)
+    if crop_window not in ('pad', 'slide'):
+        raise ValueError(f"Unknown crop_window '{crop_window}'; use 'pad' or 'slide'")
     boxes = []
     for z, x, y in np.asarray(zxy, dtype=float):
         if round_centroids:
             zm, xm, ym = int(round(z)), int(round(x)), int(round(y))
         else:
             zm, xm, ym = int(z), int(x), int(y)
+        if crop_window == 'slide':
+            z0, z1 = _slide_window(zm, Z, tz)
+            x0, x1 = _slide_window(xm, X, tx)
+            y0, y1 = _slide_window(ym, Y, ty)
+            boxes.append((z0, z1, x0, x1, y0, y1))
+            continue
         z0 = min(max(zm - tz // 2, 0), Z); z1 = min(max(zm + tz // 2, 0), Z)
         if z1 - z0 > tz:
             z1 = z0 + tz
@@ -174,17 +195,17 @@ def _centroid_boxes(zxy, target_sz, vol_shape, round_centroids=True):
     return boxes
 
 
-def _extract_crops_gpu(vol_t, zxy, target_sz, round_centroids=True):
+def _extract_crops_gpu(vol_t, zxy, target_sz, round_centroids=True, crop_window='pad'):
     """GPU replica of volume_data.extract_crops: centroid boxes, pad-before zeros.
 
     vol_t: (Z, X, Y) tensor already on the target device. Returns
-    (N, tz, tx, ty) on the same device. Bit-identical values to the numpy path
-    (same box math, same zero padding); only the slicing device differs.
+    (N, tz, tx, ty) on the same device. Bit-identical to the numpy path only with
+    crop_window 'slide' (see _centroid_boxes); only the slicing device differs.
     """
     tz, tx, ty = int(target_sz[0]), int(target_sz[1]), int(target_sz[2])
     out = torch.zeros((len(zxy), tz, tx, ty), dtype=vol_t.dtype, device=vol_t.device)
     for i, (z0, z1, x0, x1, y0, y1) in enumerate(
-            _centroid_boxes(zxy, target_sz, vol_t.shape, round_centroids)):
+            _centroid_boxes(zxy, target_sz, vol_t.shape, round_centroids, crop_window)):
         crop = vol_t[z0:z1, x0:x1, y0:y1]
         if crop.numel():
             dz, dx, dy = tz - crop.shape[0], tx - crop.shape[1], ty - crop.shape[2]
@@ -249,13 +270,15 @@ def _embed_frame(mode, crops, kpts, models, tmodel, args, device, chunk=32):
     return d.cpu().numpy()
 
 
-def _iter_project_frames(project_data, target_sz, normalizer, frame_list, device=None):
+def _iter_project_frames(project_data, target_sz, normalizer, frame_list, device=None,
+                         crop_window='pad'):
     """Yield per-frame dicts (crops, kpts, meta) from segmentation crops.
 
     meta: list of (raw_ind, seg) aligned with crops rows. Frames with < 2
     detections are skipped (no relative geometry; matches legacy filter).
     With a CUDA device, the volume is transferred once per frame and crops +
-    intensity normalization happen on the GPU (numerically identical to CPU).
+    intensity normalization happen on the GPU (numerically identical to CPU
+    with crop_window 'slide'; see _centroid_boxes).
     """
     from barlow_track.utils.data_loading import get_bbox_data_for_volume_with_label
     from barlow_track.utils.volume_data import VolumeCoordsDataset, load_volume
@@ -278,7 +301,8 @@ def _iter_project_frames(project_data, target_sz, normalizer, frame_list, device
             zxy = np.array([dat_d[n] for n in names], dtype=np.float32)
             vol_t = torch.from_numpy(np.ascontiguousarray(vol)).to(device, dtype=torch.float32)
             crops = _rescale_gpu(
-                _extract_crops_gpu(vol_t, zxy, target_sz, round_centroids=False)).unsqueeze(1)
+                _extract_crops_gpu(vol_t, zxy, target_sz, round_centroids=False,
+                                   crop_window=crop_window)).unsqueeze(1)
         else:
             crops = torch.from_numpy(np.stack([dat_d[n] for n in names]).astype(np.float32))
             crops = normalizer(crops).unsqueeze(1).float()
@@ -335,7 +359,8 @@ def _load_nwb_arrays(nwb_project):
     )
 
 
-def _iter_nwb_frames(nwb_project, arrays, target_sz, normalizer, frame_list, device=None):
+def _iter_nwb_frames(nwb_project, arrays, target_sz, normalizer, frame_list, device=None,
+                     crop_window='pad'):
     """Yield per-frame dicts (crops, kpts, meta) cropped around GT xyz.
 
     Same dict schema as _iter_project_frames; meta entries are
@@ -361,7 +386,8 @@ def _iter_nwb_frames(nwb_project, arrays, target_sz, normalizer, frame_list, dev
         zxy = np.array(zxy_l, dtype=np.float32)
         if use_gpu:
             vol_t = torch.from_numpy(np.ascontiguousarray(vol)).to(device)
-            crops = _rescale_gpu(_extract_crops_gpu(vol_t, zxy, target_sz)).unsqueeze(1)
+            crops = _rescale_gpu(_extract_crops_gpu(vol_t, zxy, target_sz,
+                                                    crop_window=crop_window)).unsqueeze(1)
         else:
             crops_l = [get_3d_crop_using_bbox_or_centroid([z, x, y], sz, target_sz, vol)[0]
                        for z, x, y in zxy_l]
@@ -426,6 +452,9 @@ def _parse_args(argv=None):
                     help='row-wise L2-normalize descriptors before saving embeddings')
     ap.add_argument('--device', default='cpu',
                     help="torch device for embedding (use 'cuda' on a GPU node)")
+    ap.add_argument('--crop_window', choices=['pad', 'slide'], default='pad',
+                    help="GPU crops near a volume edge: 'slide' matches training and the CPU "
+                         "path; 'pad' (default) is the older clip-and-zero-pad window")
     ap.add_argument('--track_device', choices=['embed_device', 'cpu', 'cuda'],
                     default='embed_device',
                     help='device for label propagation / tracking. Full-video kNN graphs have '
@@ -575,10 +604,10 @@ def run_eval(args):
     if args.source == 'nwb':
         arrays = _load_nwb_arrays(src_data)
         frame_iter_fn = lambda: _iter_nwb_frames(src_data, arrays, target_sz, normalizer, frame_list,
-                                                device=device)
+                                                device=device, crop_window=args.crop_window)
     else:
         frame_iter_fn = lambda: _iter_project_frames(src_data, target_sz, normalizer, frame_list,
-                                                     device=device)
+                                                     device=device, crop_window=args.crop_window)
 
     modes = ['image', 'position'] if args.mode == 'both' else [args.mode]
     records = []
@@ -590,6 +619,8 @@ def run_eval(args):
             suffix += "_centered"
         if args.l2_per_volume:
             suffix += "_l2"
+        if getattr(args, 'crop_window', 'pad') == 'slide' and device.type == 'cuda':
+            suffix += "_slide"
         emb_dir = args.emb_dir or '/tmp/claude'
         os.makedirs(emb_dir, exist_ok=True)
         tag_suffix = f"_{args.tag}" if args.tag else ""
@@ -719,6 +750,7 @@ def run_eval(args):
                    descriptor_stage=args.descriptor_stage if mode == 'trained' else None,
                    center_per_volume=bool(args.center_per_volume),
                    l2_per_volume=bool(args.l2_per_volume),
+                   crop_window=(getattr(args, 'crop_window', 'pad') if device.type == 'cuda' else 'cpu'),
                    emb_path=os.path.abspath(emb_path),
                    accuracy=float(stats['accuracy']),
                    misses=int(stats['total_misses']),
@@ -827,7 +859,8 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
                                 cluster='labelprop', num_seeds=25, seed=0,
                                 descriptor_stage='auto', max_frames=None,
                                 center_per_volume=False, l2_per_volume=False,
-                                track_device='cpu', skip_embed=True, extra_record=None):
+                                track_device='cpu', skip_embed=True, extra_record=None,
+                                crop_window='pad'):
     """Track one trained checkpoint on `project` and return its accuracy record.
 
     Programmatic entry point used by the hyperparameter sweep's in-job
@@ -850,7 +883,8 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
         num_seeds=num_seeds, seed=seed, skip_embed=skip_embed, fuse_norm=False,
         descriptor_stage=descriptor_stage, center_per_volume=center_per_volume,
         l2_per_volume=l2_per_volume, device=device, track_device=track_device,
-        results_jsonl=results_jsonl, emb_dir=emb_dir, tag=tag, extra_record=extra_record)
+        results_jsonl=results_jsonl, emb_dir=emb_dir, tag=tag, extra_record=extra_record,
+        crop_window=crop_window)
     _check_args(args)
     return run_eval(args)[-1]
 

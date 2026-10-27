@@ -575,6 +575,12 @@ class VolumeCoordsDataModule(LightningDataModule):
         if hasattr(ds, 'set_epoch'):
             ds.set_epoch(epoch)
 
+    def set_epoch(self, epoch):
+        """Rotate augmentation for loops that drive epochs themselves (no Lightning
+        trainer, so _current_epoch() is always 0). The split Subsets share one dataset,
+        so validation views rotate too; loaders built earlier see the change."""
+        self._set_epoch(epoch)
+
     def setup(self, stage: Optional[str] = None):
         max_frames = self.project_data.num_frames
         sampled = random.Random(self.seed).sample(range(max_frames), max_frames)

@@ -155,8 +155,15 @@ def train_barlow_network(args):
     num_skipped_batches = 0
     prev_gate = None  # previous attention-gate value, for update magnitudes
     gate_grad_norm = None  # captured after backward, before grads are cleared
+    # VolumeCoordsDataset draws each item's augmentation from (seed, epoch, index), and
+    # without a Lightning trainer its epoch stays 0, so every epoch repeats the same view
+    # pairs. reaugment_each_epoch advances it; off by default to keep existing runs
+    # reproducible. The legacy crop pipeline draws from the global RNG and needs nothing.
+    reaugment = bool(getattr(args, 'reaugment_each_epoch', False)) and use_position
     try:
         for epoch in range(0, args.epochs):
+            if reaugment:
+                data_module.set_epoch(epoch)
             for step, batch in enumerate(loader, start=epoch * len(loader)):
                 loss, loss_original, loss_transpose, loss_match = _run_forward(model, batch, gpu, use_position)
 

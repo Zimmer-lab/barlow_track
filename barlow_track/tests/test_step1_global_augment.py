@@ -138,6 +138,28 @@ def test_crop_rotation_off_by_default_and_about_crop_z_axis():
     assert abs(np.hypot(peaks[1][1] - 16, peaks[1][2] - 16) - 10) <= 1.5  # rotated in-plane
 
 
+def test_loader_repeats_views_until_set_epoch(monkeypatch):
+    # train_barlow_clusterer builds the loader once and drives epochs itself (no
+    # Lightning trainer): views repeat every epoch unless set_epoch advances them
+    import barlow_track.utils.volume_data as vd
+    rng = np.random.RandomState(0)
+    vol = rng.rand(8, 40, 40).astype(np.float32)
+    pts = np.array([[4.0, 12.0, 12.0], [4.0, 20.0, 25.0], [3.0, 28.0, 15.0]])
+    monkeypatch.setattr(vd, 'load_volume', lambda project_data, t: vol)
+    monkeypatch.setattr(vd, 'get_centroids_for_volume', lambda project_data, t: (pts, np.arange(1, 4)))
+    project = type('P', (), {'num_frames': 3})()
+    dm = vd.VolumeCoordsDataModule(project_data=project, num_frames=3, train_fraction=1.0,
+                                   val_fraction=0.0, target_sz=(4, 16, 16), seed=0)
+    dm.setup()
+    loader = dm.train_dataloader()
+    first = [b[0] for b in loader]
+    again = [b[0] for b in loader]
+    assert all(torch.equal(a, b) for a, b in zip(first, again))
+    dm.set_epoch(1)
+    later = [b[0] for b in loader]
+    assert not any(a.shape == b.shape and torch.equal(a, b) for a, b in zip(first, later))
+
+
 def test_legacy_crop_path_rejects_elastic():
     from barlow_track.utils.barlow import Transform
     tr = Transform(dict(global_augment=dict(elastic_std=2.0)))

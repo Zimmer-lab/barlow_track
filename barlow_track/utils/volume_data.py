@@ -54,6 +54,12 @@ DEFAULT_CROP_PHOTOMETRIC_ARGS = dict(
     p_blur=0.0,
     p_noise=0.1,
     std_noise=0.25,
+    # Per-crop rotation about each crop's own centre and z axis, as the legacy
+    # crop pipeline does (one angle per view). With the global rotation reduced
+    # (max_degrees_z), image features still learn rotation invariance without
+    # rotating a long, narrow volume (flavell 284 x 120) and losing or
+    # off-centring the objects near its edges. 0 = off.
+    crop_degrees_z=0.0,
 )
 
 DEFAULT_POSITION_ARGS = dict(
@@ -70,7 +76,11 @@ def build_photometric_transform(photometric_args=None):
     augmentation viewer, so the two cannot drift apart.
     """
     photo = {**DEFAULT_CROP_PHOTOMETRIC_ARGS, **(photometric_args or {})}
-    return tio.Compose([
+    rotation = []
+    if photo['crop_degrees_z']:
+        # (N, Z, X, Y) tensor: torchio's first spatial axis is z, as in barlow.Transform
+        rotation = [tio.RandomAffine(degrees=(float(photo['crop_degrees_z']), 0, 0), scales=0)]
+    return tio.Compose(rotation + [
         tio.RandomBlur(p=photo['p_blur']),
         tio.RandomNoise(std=photo['std_noise'], p=photo['p_noise']),
         # (5, 99.5): the max (100) lets one hot voxel compress contrast for

@@ -119,6 +119,25 @@ def test_elastic_forward_points_inverts_backward_map():
     assert np.abs(y + field.at(y.T).T - p).max() < 0.05
 
 
+def test_crop_rotation_off_by_default_and_about_crop_z_axis():
+    from barlow_track.utils.volume_data import build_photometric_transform
+    off = build_photometric_transform(dict(p_blur=0.0, p_noise=0.0))
+    assert not any(isinstance(t, tio.RandomAffine) for t in off.transforms)
+    rot = build_photometric_transform(dict(p_blur=0.0, p_noise=0.0, crop_degrees_z=180.0))
+    # Two crops (N, Z, X, Y): blob at the crop centre, blob off-centre in x, both at z = 2
+    zz, xx, yy = np.indices((6, 33, 33))
+    blob = lambda x: np.exp(-((zz - 2) ** 2 + (xx - x) ** 2 + (yy - 16) ** 2) / 2.0)
+    crops = torch.from_numpy(np.stack([blob(16), blob(26)]).astype(np.float32))
+    torch.manual_seed(5)
+    out = rot(crops).numpy()
+    # Centre of the clipped top (RescaleIntensity saturates the 99.5th percentile, so argmax ties)
+    from scipy import ndimage
+    peaks = [np.array(ndimage.center_of_mass(c >= 0.99 * c.max())) for c in out]
+    assert np.allclose(peaks[0], [2, 16, 16], atol=0.5)  # centre stays put
+    assert peaks[1][0] == pytest.approx(2, abs=0.5)  # z untouched
+    assert abs(np.hypot(peaks[1][1] - 16, peaks[1][2] - 16) - 10) <= 1.5  # rotated in-plane
+
+
 def test_legacy_crop_path_rejects_elastic():
     from barlow_track.utils.barlow import Transform
     tr = Transform(dict(global_augment=dict(elastic_std=2.0)))

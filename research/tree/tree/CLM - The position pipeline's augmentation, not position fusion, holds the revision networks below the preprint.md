@@ -4,7 +4,7 @@ nodeInstanceId: 01a1776f-cb63-73ca-b611-fc8617478ee9
 status: open
 priority: normal
 dateCreated: 2026-10-26T09:59:37+01:00
-dateModified: 2026-10-26T22:24:55+01:00
+dateModified: 2026-10-27T04:00:51+01:00
 confidence: medium
 projects:
   - "[[barlowtrack]]"
@@ -20,4 +20,4 @@ Switching only use_position on the preprint config drops Flavell from 0.957 to 0
 
 ## Scope
 
-Flavell only; the image-only arm has one training seed. Which part of the data path costs the accuracy is open: the preprint's per-crop rotation and elastic deformation added on top made it worse (0.657, [[EVD - Preprint per-crop augmentation in the position pipeline]]), so it is not simply missing per-crop augmentation. Candidates: no non-rigid deformation between views (tested by [[EVD - Flavell-matched global elastic deformation in the position pipeline]]), global resampling of the volume, and other differences between VolumeCoordsDataModule and the legacy NeuronCropImageDataModule (crop source, frame sampling, batch composition). On Zimmer, the training set of most sweeps, the same pipeline reaches 0.94-0.97, so the cost is Flavell-specific or training-set-specific.
+Flavell only; the image-only arm has one training seed. In the position pipeline the training seed alone moves Flavell accuracy by up to 12 points ([[EVD - Position-pipeline Flavell accuracy spans 12 points across training seeds]]), so a single-seed arm can only be read against that range, and the spread may itself be a symptom of the data path if the legacy pipeline turns out to be tighter (its seed spread is still being measured). Which part of the data path costs the accuracy is open: the preprint's per-crop rotation and elastic deformation added on top made it worse (0.657, [[EVD - Preprint per-crop augmentation in the position pipeline]]), so it is not simply missing per-crop augmentation. Candidates: no non-rigid deformation between views (tested by [[EVD - Flavell-matched global elastic deformation in the position pipeline]]), global resampling of the volume, and other differences between VolumeCoordsDataModule and the legacy NeuronCropImageDataModule (crop source, frame sampling, batch composition). On Zimmer, the training set of most sweeps, the same pipeline reaches 0.94-0.97, so the cost is Flavell-specific or training-set-specific.

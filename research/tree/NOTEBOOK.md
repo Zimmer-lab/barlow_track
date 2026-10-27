@@ -446,3 +446,19 @@ r261026-1606883 batch 1 (7 round_flavell_paper_ablation position cells vs NWB GT
 ## 2026-10-26 22:25 — surprise
 
 Validation loss: the legacy pipeline's falls throughout training (0.0044 -> 0.0009, train 2.8e-5), while every position-pipeline run's falls for a few epochs and then rises (fused 0.036 -> 0.054, image-only 0.040 -> 0.064, per-crop aug 0.044 -> 0.069; train ~1.2e-4), 40-70x higher. With fusion ruled out, the global data path seems to let the image features fit the training frames without generalizing to held-out ones. Worth checking what the views look like (napari viewer) and how the two data modules differ beyond augmentation.
+
+## 2026-10-26 22:38 — run
+
+r261026-1722467 crashed at its first batch: BadZipFile (Bad CRC-32) in a DataLoader worker. The local zip passes testzip; forked workers share the zarr ZipStore's file handle, so num_workers > 0 is unsafe with zip-stored projects (fails loudly; no sweep config sets num_workers). Relaunched with num_workers 0 (barlow_track@01e6be3), otherwise identical; ~2.35 s per item, so ~8 h of training.
+
+- [ ] make VolumeCoordsDataModule worker-safe with zip-stored zarr (reopen red_data per worker in worker_init_fn) if data loading becomes the bottleneck
+
+run r261026-1730274 · pids 1730274 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_use_position_elastic/run.log · for [[EVD - Flavell-matched global elastic deformation in the position pipeline]]
+
+## 2026-10-27 04:00 — surprise
+
+r261026-1606883 batch 2 (round_flavell_more_epochs 17-26, 28, 29, NWB GT): 0.802-0.886; with trial27 (0.927) 13 seeds of one config span 0.80-0.93, median 0.865. trial27 was the best seed, so the 2.8-pt gap in [[EVD - Revision networks trail the preprint by 1 to 3 points once Flavell is scored correctly]] is best-of-13; typical gap ~9 pt. Recorded in [[EVD - Position-pipeline Flavell accuracy spans 12 points across training seeds]].
+
+## 2026-10-27 04:01
+
+r261026-1730274 at epoch 30 (7,200 steps, 2.57 s/step, ends ~07:00): val loss falls to 0.0182 at epoch 8, rises to 0.0316 at epoch 25, back to 0.023 by epoch 29. Its minimum is half that of the same cell without elastic (0.036) and of image-only (0.040), although its val views are deformed more, so the rise over training is smaller but not gone. Val loss tracks accuracy weakly; wait for the eval.

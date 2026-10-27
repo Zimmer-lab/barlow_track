@@ -450,6 +450,37 @@ def test_embedding_cache_of_the_wrong_length_is_re_embedded(tmp_path):
     assert ea._load_cached_embeddings(emb, expected_n_frames=60) is None
 
 
+def test_embedding_cache_from_another_checkpoint_is_re_embedded(tmp_path):
+    """A retrain into the same trial folder keeps lab, mode and tag, so the
+    file name alone would reuse the old checkpoint's embeddings."""
+    from types import SimpleNamespace
+    w = tmp_path / 'resnet50.pth'
+    w.write_bytes(b'first checkpoint')
+    args = SimpleNamespace(source='project', weights=str(w))
+    key_old = ea._embedding_cache_key(args)
+    emb = str(tmp_path / 'emb.npz')
+    ea._save_embeddings(emb, X=np.zeros((4, 3), dtype=np.float32),
+                        time_to_lin={0: [0, 1], 1: [2, 3]}, lin_to_t_seg={}, n_frames=2,
+                        cache_key=key_old)
+    assert ea._load_cached_embeddings(emb, expected_n_frames=2, expected_key=key_old) is not None
+    copied = tmp_path / 'copy.pth'
+    copied.write_bytes(w.read_bytes())
+    assert ea._embedding_cache_key(SimpleNamespace(source='project', weights=str(copied))) == key_old
+    w.write_bytes(b'retrained checkpoint')
+    key_new = ea._embedding_cache_key(args)
+    assert key_new != key_old
+    assert ea._load_cached_embeddings(emb, expected_n_frames=2, expected_key=key_new) is None
+    assert ea._embedding_cache_key(SimpleNamespace(source='nwb', weights=str(copied))) != key_old
+
+
+def test_embedding_cache_without_a_key_is_reused(tmp_path):
+    """Caches written before keys were stored keep reproducing recorded scores."""
+    emb = str(tmp_path / 'emb.npz')
+    ea._save_embeddings(emb, X=np.zeros((4, 3), dtype=np.float32),
+                        time_to_lin={0: [0, 1], 1: [2, 3]}, lin_to_t_seg={}, n_frames=2)
+    assert ea._load_cached_embeddings(emb, expected_n_frames=2, expected_key='{"source": "x"}') is not None
+
+
 def test_embeddings_are_written_atomically(tmp_path):
     """No half-written cache at emb_path: a kill leaves only a temp file."""
     emb = str(tmp_path / 'emb.npz')

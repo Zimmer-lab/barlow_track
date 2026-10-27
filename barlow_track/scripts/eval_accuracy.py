@@ -634,8 +634,9 @@ def run_eval(args):
         os.makedirs(emb_dir, exist_ok=True)
         tag_suffix = f"_{args.tag}" if args.tag else ""
         emb_path = os.path.join(emb_dir, f'emb_{args.lab}_{suffix}{tag_suffix}.npz')
+        cache_key = _embedding_cache_key(args)
         if args.skip_embed and os.path.exists(emb_path):
-            cached = _load_cached_embeddings(emb_path, expected_n_frames=n_frames)
+            cached = _load_cached_embeddings(emb_path, expected_n_frames=n_frames, expected_key=cache_key)
             if cached is not None:
                 X, time_to_lin, lin_to_t_seg, n_frames = cached
                 did_embed = False
@@ -665,7 +666,7 @@ def run_eval(args):
             X = np.vstack(X_parts)
             print(f"[{args.lab}/{mode}] embedded {n_frames} frames, {X.shape} in {time.time()-t1:.0f}s", flush=True)
             _save_embeddings(emb_path, X=X, time_to_lin=dict(time_to_lin),
-                             lin_to_t_seg=lin_to_t_seg, n_frames=n_frames)
+                             lin_to_t_seg=lin_to_t_seg, n_frames=n_frames, cache_key=cache_key)
             # Fail here with the trial tag, not pages later inside sklearn:
             # non-finite embeddings mean a poisoned/NaN checkpoint.
             n_bad = int(np.isnan(X).sum())
@@ -779,13 +780,32 @@ def run_eval(args):
     return records
 
 
-def _load_cached_embeddings(emb_path, expected_n_frames=None):
+def _embedding_cache_key(args):
+    """What a cache must have been embedded from to be reused: the checkpoint's
+    content (sha1, so a copied checkpoint still hits) and the data source.
+    The file name only carries lab, mode and tag, which a retrain into the
+    same trial folder keeps."""
+    import hashlib
+    key = dict(source=args.source)
+    weights = getattr(args, 'weights', None)
+    if weights and os.path.isfile(weights):
+        h = hashlib.sha1()
+        with open(weights, 'rb') as f:
+            for chunk in iter(lambda: f.read(1 << 20), b''):
+                h.update(chunk)
+        key['weights_sha1'] = h.hexdigest()
+    return json.dumps(key, sort_keys=True)
+
+
+def _load_cached_embeddings(emb_path, expected_n_frames=None, expected_key=None):
     """Read a cached embedding stack, or None if it cannot be reused.
 
     A cache written by a killed run can be truncated (npz is a zip), and a
     cached run can cover a different number of frames than the one requested
     now (e.g. --max_frames changed between attempts). Both cases re-embed
-    instead of crashing or silently tracking the wrong frames.
+    instead of crashing or silently tracking the wrong frames. So does a cache
+    whose stored key (_embedding_cache_key) differs from expected_key; caches
+    written before keys were stored are reused as before.
     """
     if not os.path.exists(emb_path):
         return None
@@ -796,6 +816,7 @@ def _load_cached_embeddings(emb_path, expected_n_frames=None):
             lin_to_t_seg = d['lin_to_t_seg'].item()
             # Older leifer-script caches lack n_frames; fall back to frame count.
             n_frames = int(d['n_frames']) if 'n_frames' in d else len(time_to_lin)
+            cache_key = str(d['cache_key']) if 'cache_key' in d else None
     except Exception as e:
         print(f"ignoring unusable embedding cache {emb_path} ({e}); re-embedding", flush=True)
         return None
@@ -805,6 +826,10 @@ def _load_cached_embeddings(emb_path, expected_n_frames=None):
     if expected_n_frames is not None and n_frames != int(expected_n_frames):
         print(f"ignoring embedding cache {emb_path}: covers {n_frames} frames, "
               f"this run evaluates {expected_n_frames}; re-embedding", flush=True)
+        return None
+    if expected_key is not None and cache_key is not None and cache_key != expected_key:
+        print(f"ignoring embedding cache {emb_path}: embedded from {cache_key}, this run "
+              f"needs {expected_key}; re-embedding", flush=True)
         return None
     print(f"[{os.path.basename(emb_path)}] loaded saved embeddings {X.shape}", flush=True)
     return X, time_to_lin, lin_to_t_seg, n_frames

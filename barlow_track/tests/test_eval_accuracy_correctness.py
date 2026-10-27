@@ -255,3 +255,13 @@ def test_nwb_arrays_select_each_field_by_neuron_name():
     arr = _load_nwb_arrays(type('P', (), {'final_tracks': df})())
     for key, i in (('gx', 0), ('gy', 1), ('gz', 2), ('gr', 3), ('gs', 4)):
         assert arr[key][0].tolist() == [10 + i + 10 * k for k in range(len(arr['neurons']))], key
+
+
+def test_correlation_for_plot_single_object_view_returns_none():
+    """A 1-object view crashes a train-mode batch-norm projector (reaug run,
+    epoch-31 validation plot); the plot must skip it."""
+    torch = pytest.importorskip('torch')
+    from barlow_track.scripts.train_barlow_clusterer import _correlation_for_plot
+    one = (torch.rand(1, 1, 8, 8, 8), torch.rand(3, 1, 8, 8, 8),
+           torch.rand(1, 3), torch.rand(3, 3))
+    assert _correlation_for_plot(None, one, 'cpu', True) is None

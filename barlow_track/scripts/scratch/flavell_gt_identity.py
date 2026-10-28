@@ -73,6 +73,27 @@ def main():
     exact = np.isfinite(da) & (da < 1e-3)
     print(f'identical position (<1e-3 voxel): {exact.sum() / max(present_a.sum(), 1):.4f} of paired entries')
 
+    # Where A disagrees: is its partner absent in that frame (filtering only removes entries,
+    # so this would be A having data where B has none), or present elsewhere (A sits on a
+    # different neuron)? For the latter, does A's position coincide with another B neuron?
+    bad = present_a & ~agree
+    partner_missing = bad & ~np.isfinite(da)
+    partner_far = bad & np.isfinite(da)
+    print(f'disagreeing entries {int(bad.sum())}: partner absent in B {int(partner_missing.sum())}, '
+          f'partner present but >= {args.tol} voxels away {int(partner_far.sum())}')
+    if partner_far.any():
+        q = np.percentile(da[partner_far], [10, 50, 90])
+        print(f'  distance to partner when far: p10 {q[0]:.1f}, median {q[1]:.1f}, p90 {q[2]:.1f} voxels')
+    a_pos = A[:, ra[paired]]
+    d_any = np.linalg.norm(a_pos[:, :, None, :] - B[:, None, :, :], axis=-1)  # (T, paired, nb)
+    nearest = np.nanmin(np.where(np.isfinite(d_any), d_any, np.inf), axis=-1)
+    for name, m in [('partner absent', partner_missing), ('partner far', partner_far)]:
+        if m.any():
+            print(f'  {name}: A sits within {args.tol} voxels of some other B neuron in '
+                  f'{np.mean(nearest[m] < args.tol):.3f} of these')
+    # Unpaired A neurons: tracks with no B counterpart
+    print(f'unpaired A neurons {int((~paired).sum())} with {int(np.isfinite(A[:, ra[~paired], 0]).sum())} entries')
+
 
 if __name__ == '__main__':
     main()

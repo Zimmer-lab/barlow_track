@@ -45,8 +45,10 @@ B=/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_
 for D in zimmer flavell samuel; do
   R=$B/round_posonly_$D
   mkdir -p $R && cp barlow_track/scripts/scratch/round_posonly_$D/*.yaml $R/
-  python barlow_track/scripts/optimize_hyperparameters.py -p $R/hyperparameter_search_template.yaml \
-      --direct_parameter_sweep --repetitions 1
+  # The dispatcher stays in the foreground until its sweep ends: background each
+  # one, or the labs run one after another.
+  nohup python barlow_track/scripts/optimize_hyperparameters.py -p $R/hyperparameter_search_template.yaml \
+      --direct_parameter_sweep --repetitions 1 > $R/dispatcher.log 2>&1 &
 done
 ```
 

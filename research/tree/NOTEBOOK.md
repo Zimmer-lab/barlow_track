@@ -893,3 +893,7 @@ round_posonly_zimmer early read (16:10): position-only trains fast, 50 epochs in
 ## 2026-10-28 16:28 — decision
 
 round_posonly_samuel did not launch: the accuracy objective's preflight found no GT in samuel_data/projects/2025_07_30_gt_traces (samuel GT is only in 153.nwb; earlier samuel rounds used objective: loss). Switched the template to objective: loss; trials are scored afterwards with run_trials_on_all_ground_truth.py --labs samuel (NWB), as every earlier samuel number was.
+
+## 2026-10-28 16:31 — decision
+
+Correction to the 16:28 decision: the samuel project does have GT. Its tracks live only in its NWB (nwb/nwb_config.yaml: nwb_filename nwb/153.nwb, read by hybrid loading), and nwb/153.nwb is missing from 2025_07_30_gt_traces, so final_tracks loads as None. samuel_data/153.nwb is the same recording: 98 neurons x 1331 frames, and at frame 100 all 87 tracked centroids fall on project masks. Fix is to link it in (project/nwb/153.nwb -> ../../../153.nwb); template reverted to objective: accuracy. Earlier samuel rounds were unaffected (objective: loss for training, NWB for scoring).

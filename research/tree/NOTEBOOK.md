@@ -1092,3 +1092,27 @@ r261028-3159902 Leifer done: trial 27 backbone 0.958, auto 0.972. Auto (fused) h
 Batch 2: best position-only cell (cutoff_nn 0, elastic 1.0, RBF fix on) at 60 epochs with full-video zimmer_1128 eval (--eval), queued behind the Samuel follow-up queue (r261028-3286550). Asks whether the proxy keeps rising past epoch 14 and what accuracy a 0.40-proxy network tracks at. Code 095e9e2.
 
 run r261028-3310541 · pids 3310541 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/b2_nn0_el1.0_ep60.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-28 21:20 — decision
+
+dd0e82e: get_bbox_data_for_volume_with_label skips objects with non-finite centroids (Samuel 153 project: 96 empty-mask objects in 93 frames, NaN centroids). int(NaN) raised, so this crashed eval --source project and production embedding (legacy and position paths) on that project; no recorded result can change. Test fails without the fix. Project-source Samuel cell to rerun once the GPU frees.
+
+- [ ] Rerun sc_bayes0_153_project (Samuel 153 --source project) after dd0e82e
+
+## 2026-10-28 21:20 — run
+
+r261028-3286550 partial: paper-era trial 8 on 184-004 0.899 (bayes0 0.913).
+
+## 2026-10-28 22:10 — run
+
+Batch 3: six 15-epoch position-only screens on Zimmer, one change each from batch 1's best (proxy 0.400 at ep 14): reaugment_each_epoch, num_frames 300, visnet_hidden 128, visnet_layers 5, lr 3e-4, visnet_cutoff 0.25. Runs beside batch 2's CPU label propagation. Code bcca61b.
+
+run r261028-3359025 · pids 3359025 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch3.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-28 22:10 — run
+
+r261028-3310541 training done: proxy 0.401 at ep 14 (reproduces batch 1's 0.400), 0.45 at 25, 0.48 at 40, 0.50 from ep 50 to 59 (plateau). Full-video zimmer_1128 eval running. Every Zimmer project load warns metadata.pickle 'likely corrupted' and loads backup_metadata.pickle; this happens in every posonly run, not new.
+
+## 2026-10-28 22:10 — run
+
+Samuel per recording complete (labelprop-25, oracle detections). bayes0 / paper-era trial 8 / image: 153 0.951/0.949/0.821, 137 0.848/0.807/0.641, 184-004 0.913/0.899/0.801. r261028-3286550 done.

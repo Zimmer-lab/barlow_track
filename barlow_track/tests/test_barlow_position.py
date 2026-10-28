@@ -232,6 +232,21 @@ def test_position_only_ignores_visual(batch):
     assert torch.isfinite(loss)
 
 
+def test_visual_only_ignores_position(batch):
+    y1, y2, k1, k2 = batch
+    model = BarlowWithPosition(_args(fusion='visual_only'), backbone=ResidualEncoder3D,
+                               **_backbone_kwargs())
+    model.eval()
+    with torch.no_grad():
+        d = model.fused_descriptors(y1, k1)
+        assert torch.allclose(d, model.backbone(y1))
+        assert torch.allclose(d, model.fused_descriptors(y1, k1 + 0.3))  # no position leakage
+    loss, _, _ = model(y1, y2, k1, k2)
+    assert torch.isfinite(loss)
+    with pytest.raises(ValueError, match="visual_only"):
+        BarlowWithPosition(_args(fusion='bogus'), backbone=ResidualEncoder3D, **_backbone_kwargs())
+
+
 def test_position_only_with_attention(batch):
     y1, y2, k1, k2 = batch
     model = BarlowVolumeAttention(_attn_args(fusion='position_only'), backbone=ResidualEncoder3D,

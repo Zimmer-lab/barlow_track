@@ -139,6 +139,29 @@ def test_train_val_eval_mode_logs_a_per_batch_val_loss(tmp_path):
 
 @requires_project
 @pytest.mark.slow
+def test_train_legacy_crop_augment_with_keypoint_only_global_augment(tmp_path):
+    """The legacy-matched position pipeline trains, both as image-only and fused."""
+    from barlow_track.scripts.train_barlow_clusterer import train_barlow_network
+    from barlow_track.utils.barlow import load_barlow_model
+    for fusion in ('visual_only', 'add'):
+        d = Path(tmp_path) / fusion
+        for sub in ('checkpoints', 'log'):
+            (d / sub).mkdir(parents=True, exist_ok=True)
+        args = _smoke_args(d, 'position')
+        args.fusion = fusion
+        args.crop_augment = 'legacy'
+        args.p_RandomAffine_base, args.p_RandomAffine, args.p_RandomElasticDeformation = 1.0, 1.0, 1.0
+        args.global_augment = dict(max_degrees_z=180.0, apply_to_volume=False, elastic_std=1.0)
+        args.position_augment = dict(jitter_std=1.0, dropout_p=0.2)
+        args.reaugment_each_epoch = True
+        test_losses = train_barlow_network(args)
+        assert np.isfinite(test_losses['test_loss'])
+        _, reloaded, _ = load_barlow_model(str(d / 'resnet50.pth'))
+        assert reloaded.fusion == fusion
+
+
+@requires_project
+@pytest.mark.slow
 def test_train_out_of_memory_is_a_failure_with_the_partial_model_aside(tmp_path, monkeypatch):
     """An OOM'd trial must not leave a resnet50.pth a sweep would score."""
     from barlow_track.scripts import train_barlow_clusterer as tbc

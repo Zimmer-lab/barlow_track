@@ -455,10 +455,11 @@ class BarlowWithPosition(BarlowTwins3d):
                 nn.Linear(embedding_dim, embedding_dim),
                 nn.LayerNorm(embedding_dim),
             )
-        elif self.fusion == 'position_only':
-            pass  # visual branch unused; see fused_descriptors
+        elif self.fusion in ('position_only', 'visual_only'):
+            pass  # one branch unused; see fused_descriptors
         elif self.fusion != 'add':
-            raise ValueError(f"Unknown fusion '{self.fusion}'; use 'add', 'concat' or 'position_only'")
+            raise ValueError(f"Unknown fusion '{self.fusion}'; use 'add', 'concat', "
+                             f"'position_only' or 'visual_only'")
 
     def encode_position(self, kpts, scores=None):
         """(N,3) normalized keypoints -> (N,D) position descriptors.
@@ -480,6 +481,11 @@ class BarlowWithPosition(BarlowTwins3d):
         return self.kenc(k, s).squeeze(0).transpose(0, 1)
 
     def fused_descriptors(self, y, kpts, scores=None):
+        if self.fusion == 'visual_only':
+            # Position branch unused (no gradient): the position pipeline's data
+            # path with image features alone, raw backbone output as in
+            # BarlowTwins3d (no norm_visual), so 'auto' equals the backbone stage.
+            return self.backbone(y)
         if kpts.shape[0] < 2:
             # Truly visual-only fallback: skip norm_pos entirely. LayerNorm
             # of a zero vector would otherwise inject the learned bias as a

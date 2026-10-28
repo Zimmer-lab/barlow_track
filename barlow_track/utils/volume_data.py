@@ -47,8 +47,14 @@ DEFAULT_GLOBAL_ARGS = dict(
     # fields (e.g. std 3 at length 15) fold.
     elastic_std=0.0,  # voxels, per-axis std of the field; float or (z, x, y). 0 = off
     elastic_length=40.0,  # voxels, distance at which the field's correlation is 1/e
+    # False moves only the keypoints (affine, elastic, jitter); crops come from
+    # the untransformed volume at the original centroids, so image views differ
+    # only by the per-crop transform (crop_augment). Decouples position
+    # augmentation from what the image branch sees.
+    apply_to_volume=True,
 )
 ELASTIC_KEYS = ('elastic_std', 'elastic_length')
+GLOBAL_FLAG_KEYS = ('apply_to_volume',)
 
 DEFAULT_CROP_PHOTOMETRIC_ARGS = dict(
     p_blur=0.0,
@@ -147,9 +153,14 @@ def apply_stack_affine(crops, R, t, order=1):
 
 
 def split_global_args(global_args):
-    """global_augment dict -> (affine kwargs for sample_global_affine, elastic kwargs)."""
+    """global_augment dict -> (affine kwargs for sample_global_affine, elastic kwargs).
+
+    Flags (GLOBAL_FLAG_KEYS) are dropped; callers read them from the dict.
+    """
     args = dict(global_args or {})
     elastic = {k: args.pop(k) for k in ELASTIC_KEYS if k in args}
+    for k in GLOBAL_FLAG_KEYS:
+        args.pop(k, None)
     return args, elastic
 
 
@@ -224,7 +235,7 @@ def apply_global_affine(volume, points_zxy, R, t, order=1, field=None):
     """
     center = (np.array(volume.shape) - 1) / 2.0
     R_inv = np.linalg.inv(R)
-    pts_aug = (points_zxy - center) @ R.T + center + t
+    pts_aug = transform_points(points_zxy, volume.shape, R, t)
     if field is None:
         offset = center - R_inv @ (center + t)
         vol_aug = ndimage.affine_transform(np.asarray(volume, dtype=np.float32),
@@ -240,6 +251,15 @@ def apply_global_affine(volume, points_zxy, R, t, order=1, field=None):
     if len(pts_aug):
         pts_aug = field.forward_points(pts_aug)
     return vol_aug, pts_aug
+
+
+def transform_points(points_zxy, vol_shape, R, t, field=None):
+    """The point half of apply_global_affine, without resampling a volume."""
+    center = (np.array(vol_shape) - 1) / 2.0
+    pts_aug = (np.asarray(points_zxy, dtype=float) - center) @ R.T + center + t
+    if field is not None and len(pts_aug):
+        pts_aug = field.forward_points(pts_aug)
+    return pts_aug
 
 
 def _parse_jitter_std(jitter_std):
@@ -397,7 +417,7 @@ class VolumeCoordsDataset(Dataset):
 
     def __init__(self, project_data, frame_indices, target_sz,
                  global_args=None, photometric_args=None, position_args=None, seed=0, epoch=0,
-                 round_bounds=False):
+                 round_bounds=False, crop_augment='photometric', legacy_transform_args=None):
         self.project_data = project_data
         # in_bounds_mask(rounded=...): off by default so earlier runs reproduce
         self.round_bounds = bool(round_bounds)
@@ -410,7 +430,23 @@ class VolumeCoordsDataset(Dataset):
         # Kept only as a fallback for anything reading self.rng outside
         # __getitem__; the per-item stream is set there.
         self.rng = np.random.RandomState(derive_seed(self.seed, self.epoch))
-        self.crop_transform = build_photometric_transform(photometric_args)
+        # Per-view crop transforms. 'photometric': the same blur/noise/normalize
+        # for both views. 'legacy': the preprint crop pipeline's two view
+        # transforms (barlow.Transform: view 1 rotation + blur, view 2 rotation,
+        # flip, elastic, noise; probabilities from legacy_transform_args, i.e.
+        # the training config's p_* keys), one torchio draw per crop stack.
+        if crop_augment == 'photometric':
+            self.crop_transform = build_photometric_transform(photometric_args)
+            self.view_transforms = (self.crop_transform, self.crop_transform)
+        elif crop_augment == 'legacy':
+            from barlow_track.utils.barlow import Transform  # barlow imports this module
+            legacy_args = {k: v for k, v in dict(legacy_transform_args or {}).items()
+                           if k != 'global_augment'}
+            legacy = Transform(legacy_args)
+            self.crop_transform = legacy.transform
+            self.view_transforms = (legacy.transform, legacy.transform_prime)
+        else:
+            raise ValueError(f"Unknown crop_augment '{crop_augment}'; use 'photometric' or 'legacy'")
         # Precompute (cheap) centroids; volumes stay on disk until __getitem__
         self._centroids, self._seg_ids = [], []
         for t in tqdm(self.frame_indices, desc="Loading centroids", leave=False):
@@ -449,23 +485,32 @@ class VolumeCoordsDataset(Dataset):
         # in sequence, but the pair is reproducible across workers and epochs.
         self.rng = np.random.RandomState(np_seed)
         with _seeded_torch_rng(torch_seed):
-            y1, k1, i1 = self._augmented_view(volume, points)
-            y2, k2, i2 = self._augmented_view(volume, points)
+            y1, k1, i1 = self._augmented_view(volume, points, view=0)
+            y2, k2, i2 = self._augmented_view(volume, points, view=1)
         return y1, y2, k1, k2, i1, i2
 
-    def _augmented_view(self, volume, points):
+    def _augmented_view(self, volume, points, view=0):
         affine_args, elastic_args = split_global_args(self.global_args)
+        to_volume = bool(self.global_args.get('apply_to_volume', True))
         R, t_vec = sample_global_affine(self.rng, **affine_args)
         field = sample_elastic_field(self.rng, volume.shape, **elastic_args)
-        vol_aug, pts_aug = apply_global_affine(volume, points, R, t_vec, field=field)
+        if to_volume:
+            vol_aug, pts_aug = apply_global_affine(volume, points, R, t_vec, field=field)
+        else:
+            vol_aug, pts_aug = volume, transform_points(points, volume.shape, R, t_vec, field=field)
         # Position-only jitter: shift crop centers AND keypoints together
+        # (keypoints only when the volume stays put)
         pts_aug = apply_position_jitter(pts_aug, self.rng,
                                         self.position_args.get('jitter_std', 0.0))
         # Drop objects rotated/translated completely out of frame: their
         # clipped crops would be edge duplicates with out-of-range keypoints.
         # Keep original indices so the loss can still align the intersection.
+        # With the volume untransformed every crop is valid, so keep them all.
         n_raw = len(pts_aug)
-        valid = in_bounds_mask(pts_aug, vol_aug.shape, rounded=self.round_bounds)
+        if to_volume:
+            valid = in_bounds_mask(pts_aug, vol_aug.shape, rounded=self.round_bounds)
+        else:
+            valid = np.ones(n_raw, dtype=bool)
         n_inbounds = int(np.asarray(valid).sum()) if n_raw else 0
         valid_orig_idx = np.where(valid)[0]
         pts_valid = pts_aug[valid] if len(pts_aug) else pts_aug
@@ -480,13 +525,14 @@ class VolumeCoordsDataset(Dataset):
             f"_augmented_view: raw={n_raw} in_bounds={n_inbounds} "
             f"dropped_bounds={n_raw - n_inbounds} kept_after_dropout={len(pts_kept)}"
         )
-        crops = extract_crops(vol_aug, pts_kept, self.target_sz)
+        crop_pts = pts_kept if to_volume else (points[keep_idx] if len(keep_idx) else points[:0])
+        crops = extract_crops(vol_aug, crop_pts, self.target_sz)
         # 4D (N,Z,X,Y) with N as the channel dim, exactly like the legacy
         # NeuronAugmentedImagePairDataset path (torchio Image convention)
         if len(crops) == 0:
             x = torch.from_numpy(crops)
         else:
-            x = self.crop_transform(torch.from_numpy(crops))
+            x = self.view_transforms[view](torch.from_numpy(crops))
         if not torch.is_tensor(x):
             x = torch.as_tensor(np.asarray(x))
         x = x.float().unsqueeze(1)  # (N,1,Z,X,Y)
@@ -560,9 +606,12 @@ class VolumeCoordsDataModule(LightningDataModule):
     def __init__(self, project_data=None, num_frames=100, batch_size=1,
                  train_fraction=0.8, val_fraction=0.1, target_sz=(8, 64, 64),
                  global_args=None, photometric_args=None, position_args=None, seed=0,
-                 num_workers=0, round_bounds=False):
+                 num_workers=0, round_bounds=False, crop_augment='photometric',
+                 legacy_transform_args=None):
         super().__init__()
         self.round_bounds = bool(round_bounds)
+        self.crop_augment = crop_augment
+        self.legacy_transform_args = legacy_transform_args
         self.project_data = project_data
         self.num_frames = num_frames
         self.batch_size = batch_size
@@ -607,7 +656,9 @@ class VolumeCoordsDataModule(LightningDataModule):
                                       global_args=self.global_args,
                                       photometric_args=self.photometric_args,
                                       position_args=self.position_args, seed=self.seed,
-                                      epoch=self._current_epoch(), round_bounds=self.round_bounds)
+                                      epoch=self._current_epoch(), round_bounds=self.round_bounds,
+                                      crop_augment=self.crop_augment,
+                                      legacy_transform_args=self.legacy_transform_args)
         n = len(alldata)
         if n == 0:
             raise ValueError("VolumeCoordsDataModule.setup: no valid frames found")

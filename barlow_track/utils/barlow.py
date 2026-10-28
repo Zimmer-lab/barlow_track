@@ -251,6 +251,9 @@ class Transform:
         """
         if not self.global_args:
             return x
+        if not self.global_args.get('apply_to_volume', True):
+            raise ValueError("global_augment apply_to_volume false moves keypoints only; "
+                             "the legacy crop path has none (use use_position true)")
         affine_args, elastic_args = split_global_args(self.global_args)
         if np.any(np.asarray(elastic_args.get('elastic_std', 0.0)) != 0):
             # Crop stacks carry no full volume to warp; the legacy path has its

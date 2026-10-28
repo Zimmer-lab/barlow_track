@@ -59,7 +59,10 @@ def train_barlow_network(args):
             photometric_args=getattr(args, 'crop_photometric', None),
             position_args=getattr(args, 'position_augment', None),
             seed=seed, num_workers=int(getattr(args, 'num_workers', 0) or 0),
-            round_bounds=bool(getattr(args, 'round_crop_bounds', False)))
+            round_bounds=bool(getattr(args, 'round_crop_bounds', False)),
+            # 'legacy': the preprint per-crop view transforms, from this config's p_* keys
+            crop_augment=getattr(args, 'crop_augment', 'photometric') or 'photometric',
+            legacy_transform_args=vars(args))
     else:
         data_module = NeuronCropImageDataModule(project_data=project_data1, num_frames=args.num_frames, batch_size=1,
                                                 train_fraction=args.train_fraction,

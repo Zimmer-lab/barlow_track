@@ -189,6 +189,69 @@ def test_dataset_round_bounds_leaves_no_placeholder_crops(monkeypatch):
         assert n_blank == (0 if round_bounds else 1)
 
 
+def _synthetic_dataset(monkeypatch, **kwargs):
+    import barlow_track.utils.volume_data as vd
+    vol = 1.0 + np.random.RandomState(0).rand(8, 40, 40).astype(np.float32)
+    pts = np.array([[4.0, 12.0, 12.0], [4.0, 20.0, 28.0], [3.0, 28.0, 15.0], [4.0, 30.0, 30.0]])
+    monkeypatch.setattr(vd, 'load_volume', lambda project_data, t: vol)
+    monkeypatch.setattr(vd, 'get_centroids_for_volume', lambda project_data, t: (pts, np.arange(1, 5)))
+    return vd, vol, pts, vd.VolumeCoordsDataset(None, [0], target_sz=(4, 16, 16), seed=0, **kwargs)
+
+
+def test_keypoint_only_global_augment_leaves_crops_at_the_original_centroids(monkeypatch):
+    rotate = dict(max_degrees_z=180.0, scale_jitter=0.1, max_translation=(1, 4, 4), apply_to_volume=False)
+    vd, vol, pts, ds = _synthetic_dataset(monkeypatch, global_args=rotate,
+                                          photometric_args=dict(p_noise=0.0),
+                                          position_args=dict(jitter_std=1.0))
+    y1, y2, k1, k2, i1, i2 = ds[0]
+    # every object kept, crops identical across views and equal to untransformed crops
+    assert i1.tolist() == i2.tolist() == [0, 1, 2, 3]
+    expected = ds.crop_transform(torch.from_numpy(vd.extract_crops(vol, pts, (4, 16, 16)))).float()
+    assert torch.allclose(y1[:, 0], expected) and torch.allclose(y2[:, 0], expected)
+    # keypoints still move, independently per view
+    k0 = vd.VolumeCoordsDataset._normalize(torch.from_numpy(pts.astype(np.float32)), vol.shape)
+    assert not torch.allclose(k1, k0, atol=1e-3) and not torch.allclose(k1, k2, atol=1e-3)
+
+
+def test_keypoint_only_global_augment_moves_points_like_the_volume_path():
+    import barlow_track.utils.volume_data as vd
+    vol = np.zeros((8, 40, 30), dtype=np.float32)
+    pts = np.array([[4.0, 12.0, 12.0], [3.0, 28.0, 15.0]])
+    R, t = vd.sample_global_affine(np.random.RandomState(3), max_degrees_z=90.0)
+    field = vd.sample_elastic_field(np.random.RandomState(4), vol.shape, elastic_std=1.0, elastic_length=10.0)
+    _, moved = vd.apply_global_affine(vol, pts, R, t, field=field)
+    assert np.allclose(vd.transform_points(pts, vol.shape, R, t, field=field), moved)
+    # the flag never reaches sample_global_affine
+    affine, _ = vd.split_global_args(dict(max_degrees_z=10.0, apply_to_volume=False))
+    assert affine == dict(max_degrees_z=10.0)
+
+
+def test_legacy_crop_augment_gives_the_two_legacy_views(monkeypatch):
+    legacy = dict(p_RandomAffine_base=0.0, p_RandomBlur_base=0.0, p_RandomAffine=0.0,
+                  p_RandomAffine_flip=0.0, p_RandomElasticDeformation=0.0, p_RandomNoise=1.0,
+                  std_RandomNoise=0.25, global_augment=dict(max_degrees_z=5.0))
+    vd, vol, pts, ds = _synthetic_dataset(monkeypatch, global_args=dict(p_global_affine=0.0),
+                                          crop_augment='legacy', legacy_transform_args=legacy)
+    y1, y2 = ds[0][:2]
+    # view 1 (legacy.transform) is only normalization with these probabilities;
+    # view 2 (legacy.transform_prime) always adds noise
+    from barlow_track.utils.barlow import Transform
+    plain = Transform().final_normalization(torch.from_numpy(vd.extract_crops(vol, pts, (4, 16, 16)))).float()
+    assert torch.allclose(y1[:, 0], plain)
+    assert not torch.allclose(y2[:, 0], plain)
+    # reproducible per (seed, epoch, index)
+    assert torch.equal(ds[0][1], y2)
+    with pytest.raises(ValueError, match="crop_augment"):
+        _synthetic_dataset(monkeypatch, crop_augment='bogus')
+
+
+def test_legacy_crop_path_rejects_keypoint_only_global_augment():
+    from barlow_track.utils.barlow import Transform
+    tr = Transform(dict(global_augment=dict(apply_to_volume=False)))
+    with pytest.raises(ValueError, match="apply_to_volume"):
+        tr(torch.rand(3, 4, 16, 16))
+
+
 def test_legacy_crop_path_rejects_elastic():
     from barlow_track.utils.barlow import Transform
     tr = Transform(dict(global_augment=dict(elastic_std=2.0)))

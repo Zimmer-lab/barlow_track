@@ -792,3 +792,7 @@ For cluster runs (user offered to launch today): new flags, default off, barlow_
 Cluster round_flavell_paper_ablation status (read from /lisc): position cells 4-7, 12-15 and legacy 0, 1, 3 finished. Legacy trials 2, 8, 9 hit the 41 h walltime at epochs 38, 40, 48 (legacy crop transforms take 37-41 h for 50 epochs there) and saved no model; at the timeout signal submitit's handler crashed on our string slurm_time (TypeError). Legacy 10, 11 were cancelled at the same minute (SIGTERM at epochs 23, 25, the fail-fast pattern). So the legacy training-seed spread on the cluster still has only the seed-43 cells 0, 1, 3. Fixed in barlow_track@5ca086f (integer --time, train_hours template key); round_flavell_legacy_crop_aug sets train_hours 60.
 
 - [ ] Rerun round_flavell_paper_ablation legacy cells 2 and 8-11 with train_hours 60 for the legacy seed spread
+
+## 2026-10-28 09:45 — run
+
+r261028-3899580: legacy-matched run at epoch 12 scores 0.938 (truncated) / 0.950 (rounded centres) on Flavell NWB GT, against 0.819 for the image-only position run and 0.956 legacy. The position data path recovers preprint accuracy once its views are made the legacy way. Recorded in [[EVD - Legacy-style crop views in the position data path recover preprint Flavell accuracy]] (open until the 50-epoch eval); [[CLM - The position pipeline's augmentation, not position fusion, holds the revision networks below the preprint]] revised.

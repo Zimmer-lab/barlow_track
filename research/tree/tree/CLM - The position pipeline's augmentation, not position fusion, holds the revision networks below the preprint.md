@@ -4,7 +4,7 @@ nodeInstanceId: 01a1776f-cb63-73ca-b611-fc8617478ee9
 status: open
 priority: normal
 dateCreated: 2026-10-26T09:59:37+01:00
-dateModified: 2026-10-27T10:31:26+01:00
+dateModified: 2026-10-28T09:44:55+01:00
 confidence: medium
 projects:
   - "[[barlowtrack]]"
@@ -12,12 +12,12 @@ projects:
 
 ## Claim
 
-The revision networks lose Flavell accuracy in their image features, through the position pipeline's data path (global augmentation before cropping, with only blur and noise per crop), not through position fusion.
+The revision networks lose Flavell accuracy in their image features, through how the position pipeline makes its training views (global augmentation before cropping, crop-centre jitter and dropout, with only blur and noise per crop), not through position fusion and not through the rest of its data path.
 
 ## Rationale
 
-Switching only use_position on the preprint config drops Flavell from 0.957 to 0.77-0.85 across three training seeds (NWB GT). Training the same cell with the position branch removed gives 0.819 ([[EVD - Image features alone in the position pipeline]]), inside that range, so fusion is not where the points go. In every position-pipeline run, image-only included, validation loss rises over training while the legacy pipeline's falls, so the image features learned under the global data path generalize poorly from training frames to held-out ones.
+Switching only use_position on the preprint config drops Flavell from 0.957 to 0.77-0.85 across three training seeds (NWB GT). Training the same cell with the position branch removed gives 0.819 ([[EVD - Image features alone in the position pipeline]]), inside that range, so fusion is not where the points go. Keeping the position pipeline's data path but making its views legacy-style (preprint per-crop transforms, no global volume affine, no jitter or dropout, re-drawn views) recovers 0.938 truncated / 0.950 rounded crop centres after 12 of 50 epochs ([[EVD - Legacy-style crop views in the position data path recover preprint Flavell accuracy]]), within a point of the legacy pipeline; its validation loss falls like the legacy pipeline's, where every position run's rose.
 
 ## Scope
 
-Flavell only; the image-only arm has one training seed. In the position pipeline the training seed alone moves Flavell accuracy by up to 12 points ([[EVD - Position-pipeline Flavell accuracy spans 12 points across training seeds]]), so a single-seed arm can only be read against that range, and the spread may itself be a symptom of the data path if the legacy pipeline turns out to be tighter (its seed spread is still being measured). Which part of the data path costs the accuracy is open, and it is not missing geometric augmentation: adding the preprint's per-crop rotation and elastic deformation (fused 0.657, backbone 0.487, [[EVD - Preprint per-crop augmentation in the position pipeline]]) or a global elastic field matched to real motion (fused 0.718, backbone 0.598, [[EVD - Flavell-matched global elastic deformation in the position pipeline]]) both made the image features worse than without them (backbone 0.756), while the legacy pipeline trains on per-crop elastic deformation and reaches 0.957. Remaining candidates: global resampling of the volume, and other differences between VolumeCoordsDataModule and the legacy NeuronCropImageDataModule (crop source and normalization, frame sampling, batch composition). On Zimmer, the training set of most sweeps, the same pipeline reaches 0.94-0.97, so the cost is Flavell-specific or training-set-specific.
+Flavell only, single training seeds per arm; position-pipeline Flavell accuracy spans up to 12 points across seeds ([[EVD - Position-pipeline Flavell accuracy spans 12 points across training seeds]]), but 0.95 lies above all 16 position runs. Which part of the view generation costs the accuracy is open: the legacy-matched arm changes the global affine, jitter, dropout, per-crop transforms and re-drawing at once. Adding geometric augmentation on top of the revision views made things worse (per-crop rotation and elastic 0.657, [[EVD - Preprint per-crop augmentation in the position pipeline]]; global elastic 0.718, [[EVD - Flavell-matched global elastic deformation in the position pipeline]]; re-drawn views 0.652 at epoch 32), which points at geometry reaching the crops. round_flavell_legacy_crop_aug (fusion x global augmentation on keypoints only or on the volume too, 3 seeds) separates these and tests fusion on legacy-style views. On Zimmer, the training set of most sweeps, the revision pipeline reaches 0.94-0.97, so the cost is Flavell-specific or training-set-specific.

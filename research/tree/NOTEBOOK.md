@@ -877,3 +877,7 @@ dropped r261028-2952895
 ## 2026-10-28 12:06 — run
 
 User launched round_posonly_{zimmer,flavell,samuel} on the cluster (2026-10-28, behind the round_flavell_legacy_crop_aug jobs in the queue), for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]. The README's launch loop ran the dispatchers one after another (each stays in the foreground until its sweep ends); fixed in 629b0a5 to background each.
+
+## 2026-10-28 12:48 — decision
+
+round_flavell_legacy_crop_aug early read (2026-10-28 ~12:15, epochs 3-6 of 50, jobs 7747886-95 = trials 0-9; trials 10-11, add x seed 3, not yet submitted). Frame-pair proxy (30 held-out frames): apply_to_volume false 0.52-0.56 and rising (trials 0, 2, 4, 6), true 0.38-0.43 and flat (1, 3, 5, 7); seed 3 (8, 9) low in both (0.30-0.38), still climbing. Val loss false 0.003 (legacy-like), true 0.02-0.05 (as every earlier position run). add vs visual_only: auto equals backbone to 3 decimals with keypoints only, a few points above with the volume transformed; consistent with the distance-blind ViSNet (i261028-2) adding nothing. The add cells now test a known-broken encoder; the visual_only cells stay the image-side test. Proxy is noisy (missed a 14-point drop before); wait for the eval.

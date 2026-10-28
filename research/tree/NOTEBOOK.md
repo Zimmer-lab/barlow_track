@@ -873,3 +873,7 @@ r261028-2979125 (smoke, 7641f83): the round_posonly cell with rbf_rescale, cutof
 Crashed at epoch 0 writing log/stats.json: run.sh did not create log/ (sweep trials create it). Superseded by the smoke test r261028-2979125 and round_posonly.
 
 dropped r261028-2952895
+
+## 2026-10-28 12:06 — run
+
+User launched round_posonly_{zimmer,flavell,samuel} on the cluster (2026-10-28, behind the round_flavell_legacy_crop_aug jobs in the queue), for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]. The README's launch loop ran the dispatchers one after another (each stays in the foreground until its sweep ends); fixed in 629b0a5 to background each.

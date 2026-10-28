@@ -56,3 +56,12 @@ def test_pre_gating_checkpoint_is_marked_or_refused(tmp_path, monkeypatch):
     monkeypatch.setenv('BARLOW_STRICT_LOAD', '1')
     with pytest.raises(RuntimeError, match='Could not load weights'):
         load_barlow_model(wpath)
+
+
+def test_unread_config_keys_are_named(caplog):
+    import logging
+    from barlow_track.scripts.train_barlow_clusterer import _warn_unread_config_keys
+    with caplog.at_level(logging.WARNING):
+        _warn_unread_config_keys(SimpleNamespace(training_fraction=0.5, batch_size=4, epochs=3))
+    text = caplog.text
+    assert 'training_fraction' in text and 'batch_size' in text and 'epochs' not in text

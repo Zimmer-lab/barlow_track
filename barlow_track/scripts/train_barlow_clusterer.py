@@ -37,7 +37,23 @@ def _keypoints_only(args):
     return True
 
 
+# Keys that configs carry but training never reads, with what decides instead
+UNREAD_CONFIG_KEYS = {
+    'training_fraction': "the data modules' train_fraction default (0.8)",
+    'p_RandomNoise_base': 'p_RandomNoise (legacy crops) or photometric p_noise (position pipeline)',
+}
+
+
+def _warn_unread_config_keys(args):
+    for key, instead in UNREAD_CONFIG_KEYS.items():
+        if hasattr(args, key):
+            logging.warning(f"Config key {key}={getattr(args, key)!r} is never read; {instead} decides")
+    if getattr(args, 'batch_size', 1) != 1:
+        logging.warning(f"Config key batch_size={args.batch_size!r} is ignored: a batch is one volume")
+
+
 def train_barlow_network(args):
+    _warn_unread_config_keys(args)
 
     # One seed for the whole run. seed_all is the entry-point fallback for code
     # that still reads global streams (the legacy crop pipeline uses random /

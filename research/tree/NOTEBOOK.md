@@ -1032,3 +1032,13 @@ r261028-3190461 (batch1) ended. Proxy (frame-pair matching, 30 held-out Zimmer f
 posonly_fast batch1b: rerun batch1's proxy-less cells (rbf_off reference, cutoff_nn 0 and 3 x elastic 0/1) with the fixed proxy (barlow_track@cdd5761:barlow_track/scripts/scratch/posonly_fast/batch1b.sh)
 
 run r261028-3236040 · pids 3236040 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch1b.log
+
+## 2026-10-28 18:23 — result
+
+r261028-3236040 (batch1b) partial, proxy after 15 epochs: rbf_off (unfixed encoder) 0.242; cutoff_nn 0 / elastic 0: 0.381; 0/1: 0.400 (best cell so far). With nn0, elastic does not cost proxy, unlike nn6 (0.380 -> 0.342) and nn12 (0.343 -> 0.292). The RBF fix is worth ~+14-16 pt on the proxy. nn3 cells running.
+
+## 2026-10-28 18:32 — result
+
+Samuel double-check (subagent; barlow_track@32fb862:barlow_track/scripts/scratch/samuel_check/). On 153 with NWB GT objects and labelprop-25: round_bayes_samuel trial 0 0.951, paper-era harvard_153_flip trial_8 0.949. The same paper-era sweeps' stored tracks (old WormTsneTracker, HDBSCAN windows, Aug 2025, before label propagation entered in 82f4425) score best 0.805 / median 0.647 (flip, 28 trials), 0.777 (embed), 0.428 (plain); ~90% of their errors are misses (HDBSCAN noise and small clusters unassigned, ~88 tracks for 98 neurons). So the paper-era 75-80% on Samuel was the tracker, not the network or an easy recording. Per the subagent, Samuel's NWB masks and projects/153 segmentation contain only GT neurons, so every Samuel score (nwb gt, nwb all, project) is an oracle-detection score, not comparable to Zimmer's real-segmentation benchmark. Unanswered: whether 137 and 184-004 are harder (queue still running: global clustering, nwb all, project source, 137, image baseline, 184-004; outputs ~/.cache/barlow_scratch/runs/samuel_check/).
+
+- [ ] Read the rest of the samuel_check queue (global clustering, nwb all, project, 137, image baseline, 184-004) and judge whether 153 is easier

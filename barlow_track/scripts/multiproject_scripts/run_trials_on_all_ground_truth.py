@@ -108,6 +108,10 @@ def parse_args():
                              "(re-scores existing checkpoints for mean pollution)")
     parser.add_argument("--l2_per_volume", action="store_true",
                         help="Row-wise L2-normalize descriptors before tracking")
+    parser.add_argument("--svd", choices=["scaled", "whiten"], default="scaled",
+                        help="eval_accuracy --svd (default scaled, every recorded score)")
+    parser.add_argument("--gt_matching", choices=["nandist", "gt_valid"], default="nandist",
+                        help="eval_accuracy --gt_matching (default nandist, every recorded score)")
     parser.add_argument("--debug", action="store_true",
                         help="Print commands without running them, and verify the torch --device actually loads")
     parser.add_argument("--jobs", type=int, default=None,
@@ -161,7 +165,8 @@ def requested_settings(lab, args):
                 descriptor_stage=args.descriptor_stage if args.mode == "trained" else None,
                 cluster=args.cluster, num_seeds=args.num_seeds, seed=0,
                 center_per_volume=bool(args.center_per_volume), l2_per_volume=bool(args.l2_per_volume),
-                nwb_objects="gt" if nwb else None, max_frames=args.max_frames)
+                nwb_objects="gt" if nwb else None, max_frames=args.max_frames,
+                svd=getattr(args, "svd", "scaled"), gt_matching=getattr(args, "gt_matching", "nandist"))
 
 
 def check_device(device_str):
@@ -343,6 +348,10 @@ def build_eval_cmd(lab, tag, weights, args, results_jsonl, emb_dir):
         cmd += ["--center_per_volume"]
     if args.l2_per_volume:
         cmd += ["--l2_per_volume"]
+    if getattr(args, "svd", "scaled") != "scaled":
+        cmd += ["--svd", args.svd]
+    if getattr(args, "gt_matching", "nandist") != "nandist":
+        cmd += ["--gt_matching", args.gt_matching]
     return cmd
 
 

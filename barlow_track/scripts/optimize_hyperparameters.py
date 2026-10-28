@@ -223,6 +223,8 @@ def resolve_objective(hyperparameter_args):
         max_frames=hyperparameter_args.get('objective_max_frames'),
         center_per_volume=bool(hyperparameter_args.get('objective_center_per_volume', False)),
         l2_per_volume=bool(hyperparameter_args.get('objective_l2_per_volume', False)),
+        svd=hyperparameter_args.get('objective_svd', 'scaled'),
+        gt_matching=hyperparameter_args.get('objective_gt_matching', 'nandist'),
         # Embedding runs on the job's GPU; label propagation runs on the CPU.
         # Full-video graphs (100k-200k nodes) allocate dense (N x classes)
         # matrices per propagation step, which OOMs a 12 GB GPU next to the
@@ -247,7 +249,8 @@ def objective_record_settings(eval_kwargs, baseline_params):
                 num_seeds=eval_kwargs['num_seeds'], seed=eval_kwargs['seed'],
                 center_per_volume=eval_kwargs['center_per_volume'],
                 l2_per_volume=eval_kwargs['l2_per_volume'], max_frames=eval_kwargs['max_frames'],
-                nwb_objects='gt' if eval_kwargs['source'] == 'nwb' else None)
+                nwb_objects='gt' if eval_kwargs['source'] == 'nwb' else None,
+                svd=eval_kwargs.get('svd', 'scaled'), gt_matching=eval_kwargs.get('gt_matching', 'nandist'))
 
 
 def measure_tracking_accuracy(args, test_losses, parent_folder, dataset_label, objective,

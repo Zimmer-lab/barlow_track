@@ -16,7 +16,8 @@ def _rec(**kw):
 
 def _bench_args(**kw):
     a = dict(mode='trained', descriptor_stage='auto', cluster='labelprop', num_seeds=25,
-             center_per_volume=False, l2_per_volume=False, max_frames=None)
+             center_per_volume=False, l2_per_volume=False, max_frames=None,
+             svd='scaled', gt_matching='nandist')
     a.update(kw)
     return SimpleNamespace(**a)
 
@@ -61,3 +62,16 @@ def test_legacy_defaults_and_paths_normalize():
                                        gt='/anything.nwb'))
     assert not settings_match(legacy, dict(nwb_objects='all'))
     assert settings_match(dict(gt='/p/proj/project_config.yaml'), dict(gt='/p/proj/'))
+
+
+def test_svd_and_gt_matching_separate_cells_and_legacy_records_are_the_defaults(tmp_path):
+    import barlow_track.scripts.multiproject_scripts.run_trials_on_all_ground_truth as bench
+    path = str(tmp_path / 'r.jsonl')
+    want = bench.requested_settings('flavell', _bench_args())
+    append_record(path, _rec(gt=want['gt']))  # written before svd / gt_matching were recorded
+    assert bench.recorded_tags(path, want) == {'round_x_trial0_flavell'}
+    assert bench.recorded_tags(path, bench.requested_settings('flavell', _bench_args(svd='whiten'))) == set()
+    append_record(path, _rec(gt=want['gt'], gt_matching='gt_valid', accuracy=0.95))
+    assert read_results_by_tag(path, dict(want, gt_matching='gt_valid'))[
+        'round_x_trial0_flavell']['accuracy'] == 0.95
+    assert read_results_by_tag(path, want)['round_x_trial0_flavell']['accuracy'] == 0.9

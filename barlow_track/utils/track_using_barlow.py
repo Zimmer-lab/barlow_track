@@ -136,7 +136,8 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
                 project_data.logger.info(
                     f"Reducing resumed embedding with SVD to {svd_components} components "
                     f"(raw shape: {X.shape}) to match fresh path")
-                X = _robust_svd(X, svd_components)
+                X = _robust_svd(X, svd_components,
+                                whiten=project_config.get_tracking_config().config.get('svd_whiten', None))
 
             opt = dict(time_index_to_linear_feature_indices=time_index_to_linear_feature_indices,
                        svd_components=svd_components,
@@ -196,7 +197,8 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
         if do_svd:
             project_config.logger.info(f"Truncating feature space using {svd_components} PCA components "
                                     f"(original matrix size: {X.shape})")
-            X_svd = _robust_svd(X, svd_components, random_state=tracker_opt['seed'])
+            X_svd = _robust_svd(X, svd_components, random_state=tracker_opt['seed'],
+                                whiten=tracker_cfg.config.get('svd_whiten', None))
             project_config.logger.info(f"Finished truncation")
 
             tracker = WormClusterTracker(X_svd, **opt)
@@ -211,20 +213,30 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
                                   subfolder=results_subfolder_full)
 
 
-def _robust_svd(X, svd_components, random_state=None):
+def _robust_svd(X, svd_components, random_state=None, whiten=None):
+    """X reduced to svd_components SVD components.
 
+    whiten None (default, every past run): U above 10000 rows (dask, i.e. every real video),
+    U*S below (TruncatedSVD). True keeps U, False keeps U*S at any size; eval_accuracy's
+    --svd 'whiten' / 'scaled' (default) are the same two spaces. Set svd_whiten in the
+    tracking config to choose.
+    """
     # Use dask to do the SVD, because it may be very very tall
     if X.shape[0] > 10000:
         chunks = (10000, X.shape[1])
         X_dask = da.from_array(X, chunks=chunks)
         u, s, v = da.linalg.svd(X_dask)
         X_svd = np.array(u[:, :svd_components].compute())
+        if whiten is False:
+            X_svd = X_svd * np.array(s[:svd_components].compute())
     else:
         # The randomized solver starts from a random projection: without
         # random_state the descriptor space (and hence every track) moves
         # slightly between runs on identical input.
         alg = TruncatedSVD(n_components=svd_components, random_state=random_state)
         X_svd = alg.fit_transform(X)
+        if whiten:
+            X_svd = X_svd / alg.singular_values_
     return X_svd
 
 
@@ -261,7 +273,8 @@ def cluster_embeddings_from_config(project_config: ModularProjectConfig,
         if tracker.X_svd.shape[1] > svd_components:
             project_config.logger.info(f"Truncating feature space using {svd_components} PCA components "
                                     f"(original matrix size: {tracker.X_svd.shape})")
-            tracker.X_svd = _robust_svd(tracker.X_svd, svd_components)
+            tracker.X_svd = _robust_svd(tracker.X_svd, svd_components,
+                                        whiten=project_config.get_tracking_config().config.get('svd_whiten', None))
             project_config.logger.info(f"Finished truncation")
         df_combined = tracker.track_using_global_clusterer()
     elif tracking_mode == 'overlapping_windows':
@@ -398,7 +411,8 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
                 project_data.logger.info(
                     f"Reducing resumed embedding with SVD to {svd_components} components "
                     f"(raw shape: {X.shape}) to match fresh path")
-                X = _robust_svd(X, svd_components)
+                X = _robust_svd(X, svd_components,
+                                whiten=project_config.get_tracking_config().config.get('svd_whiten', None))
 
             opt = dict(time_index_to_linear_feature_indices=time_index_to_linear_feature_indices,
                        svd_components=svd_components,
@@ -444,15 +458,8 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
         # X = np.vstack([np.vstack(list(emb.values())) for emb in all_embeddings.values()])
         project_config.logger.info(f"Truncating feature space using {svd_components} PCA components "
                                    f"(original matrix size: {X.shape})")
-        # Use dask to do the SVD, because it may be very very tall
-        if X.shape[0] > 10000:
-            chunks = (10000, X.shape[1])
-            X_dask = da.from_array(X, chunks=chunks)
-            u, s, v = da.linalg.svd(X_dask)
-            X_svd = np.array(u[:, :svd_components].compute())
-        else:
-            alg = TruncatedSVD(n_components=svd_components, random_state=tracker_opt['seed'])
-            X_svd = alg.fit_transform(X)
+        X_svd = _robust_svd(X, svd_components, random_state=tracker_opt['seed'],
+                            whiten=tracker_cfg.config.get('svd_whiten', None))
         project_config.logger.info(f"Finished truncation")
 
         # Save embeddings and trackers

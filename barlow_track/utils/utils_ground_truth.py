@@ -227,18 +227,21 @@ def record_tag(trial_parent_dir, trial_num, dataset_label):
 # --max_frames smoke run and the full run, or two descriptor stages. Readers that
 # decide "already done" or "latest wins" compare these as well as the tag.
 RECORD_SETTINGS = ('source', 'gt', 'descriptor_stage', 'cluster', 'num_seeds', 'seed',
-                   'center_per_volume', 'l2_per_volume', 'nwb_objects', 'max_frames')
+                   'center_per_volume', 'l2_per_volume', 'nwb_objects', 'max_frames',
+                   'svd', 'gt_matching')
+# What records written before a setting existed were measured with
+_LEGACY_SETTINGS = dict(svd='scaled', gt_matching='nandist')
 
 
 def _setting_value(rec, key):
     """A record's (or a request's) value for one RECORD_SETTINGS key, normalized.
 
     Records written before a field existed get the value the code then implied:
-    max_frames None (full video), nwb_objects 'gt' on the NWB source.
+    max_frames None (full video), nwb_objects 'gt' on the NWB source, and _LEGACY_SETTINGS.
     """
     if key == 'nwb_objects' and rec.get('nwb_objects') is None:
         return 'gt' if rec.get('source') == 'nwb' else None
-    v = rec.get(key)
+    v = rec.get(key, _LEGACY_SETTINGS.get(key))
     if key == 'gt' and isinstance(v, str):
         v = os.path.normpath(v)
         if os.path.basename(v) == 'project_config.yaml':
@@ -277,6 +280,38 @@ def _iter_records(results_jsonl):
                 continue
             if isinstance(rec, dict):
                 yield rec
+
+
+def match_columns_to_gt(df_gt, df_pred, column, gt_matching='nandist'):
+    """Rename df_pred's columns to the GT neurons they track, as rename_columns_using_matching does.
+
+    gt_matching 'nandist' (default, every recorded score): wbfm's cost, which also counts a
+    prediction where the GT is NaN as a disagreement. 'gt_valid': maximize agreement on the
+    frames where the GT is valid, the frames calculate_accuracy scores, so a track that
+    follows its neuron through frames the GT dropped is not pushed to another column.
+    Returns the renamed df_pred.
+    """
+    if gt_matching == 'nandist':
+        return rename_columns_using_matching(df_gt, df_pred, column=column, try_to_fix_inf=True)[0]
+    if gt_matching != 'gt_valid':
+        raise ValueError(f"Unknown gt_matching '{gt_matching}'; use 'nandist' or 'gt_valid'")
+    from scipy.optimize import linear_sum_assignment
+    from wbfm.utils.general.high_performance_pandas import get_names_from_df
+    names_gt, names_pr = get_names_from_df(df_gt), get_names_from_df(df_pred)
+    gt = np.column_stack([df_gt[(n, column)].to_numpy(dtype=float) for n in names_gt])
+    pr = np.column_stack([df_pred[(n, column)].to_numpy(dtype=float) for n in names_pr])
+    # agree[i, j]: frames where prediction i carries GT neuron j's (valid) id; NaN never equals
+    agree = np.zeros((len(names_pr), len(names_gt)))
+    for t in range(gt.shape[0]):
+        agree += pr[t][:, None] == gt[t][None, :]
+    rows, cols = linear_sum_assignment(-agree)
+    name_mapping = {n: 'unmatched_neuron' for n in names_pr}
+    for i, j in zip(rows, cols):
+        name_mapping[names_pr[i]] = names_gt[j]
+    out = df_pred.rename(columns=name_mapping, inplace=False)
+    if len(names_pr) > len(names_gt):
+        out = out.drop(columns='unmatched_neuron')
+    return out
 
 
 def read_results_by_tag(results_jsonl, settings=None):

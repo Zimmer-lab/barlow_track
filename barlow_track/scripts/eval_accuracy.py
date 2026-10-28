@@ -507,6 +507,14 @@ def _parse_args(argv=None):
                     help='subtract the per-frame descriptor mean before saving embeddings')
     ap.add_argument('--l2_per_volume', action='store_true',
                     help='row-wise L2-normalize descriptors before saving embeddings')
+    ap.add_argument('--svd', choices=['scaled', 'whiten'], default='scaled',
+                    help="50-component SVD before tracking: 'scaled' (default, every recorded "
+                         "score) keeps U*S; 'whiten' keeps U, as production tracking "
+                         "(track_using_barlow._robust_svd) does on real videos")
+    ap.add_argument('--gt_matching', choices=['nandist', 'gt_valid'], default='nandist',
+                    help="track-to-GT column matching: 'nandist' (default, every recorded score) "
+                         "also counts a prediction where the GT is NaN as a disagreement; "
+                         "'gt_valid' maximizes agreement on the frames that are scored")
     ap.add_argument('--device', default='cpu',
                     help="torch device for embedding (use 'cuda' on a GPU node)")
     ap.add_argument('--crop_window', choices=['pad', 'slide'], default='pad',
@@ -743,8 +751,10 @@ def run_eval(args):
                     f"checkpoint (weights: {args.weights})")
 
         from sklearn.decomposition import TruncatedSVD
-        Xs = TruncatedSVD(n_components=min(50, X.shape[1] - 1),
-                          random_state=args.seed).fit_transform(X)
+        svd = TruncatedSVD(n_components=min(50, X.shape[1] - 1), random_state=args.seed)
+        Xs = svd.fit_transform(X)
+        if getattr(args, 'svd', 'scaled') == 'whiten':
+            Xs = Xs / svd.singular_values_  # U, as production tracking on real videos
         tracker = WormClusterTracker(Xs, dict(time_to_lin), linear_ind_to_t_and_seg_id=lin_to_t_seg,
                                      seed=args.seed)
         t2 = time.time()
@@ -790,7 +800,8 @@ def run_eval(args):
             print(f"[{args.lab}/project] GT: {len(df_gt.columns.get_level_values(0).unique())} neurons, "
                   f"{len(df_gt)} frames; pred: {len(df_pred)} frames", flush=True)
             match_col = 'raw_segmentation_id'
-        from barlow_track.utils.utils_ground_truth import pad_with_nan_rows, align_gt_pred_time_index
+        from barlow_track.utils.utils_ground_truth import (pad_with_nan_rows, align_gt_pred_time_index,
+                                                           match_columns_to_gt)
         # Restrict GT to the actually-evaluated time range (e.g. --max_frames):
         # without this, every unevaluated GT frame counts as a miss and
         # accuracy scales as ~(n_frames / total_frames) * true_accuracy.
@@ -798,8 +809,8 @@ def run_eval(args):
         max_len = max(len(df_gt), len(df_pred))
         df_pred = pad_with_nan_rows(df_pred, max_len)
         df_gt = pad_with_nan_rows(df_gt, max_len)
-        df_pred_r, _, _, _ = rename_columns_using_matching(
-            df_gt, df_pred, column=match_col, try_to_fix_inf=True)
+        df_pred_r = match_columns_to_gt(df_gt, df_pred, match_col,
+                                        gt_matching=getattr(args, 'gt_matching', 'nandist'))
         if 'unmatched_neuron' in df_pred_r.columns.get_level_values(0):
             # Defensive: wbfm drops these when pred has more columns than GT,
             # but a residual duplicate label would crash reindex below.
@@ -834,6 +845,8 @@ def run_eval(args):
                    descriptor_stage=args.descriptor_stage if mode == 'trained' else None,
                    center_per_volume=bool(args.center_per_volume),
                    l2_per_volume=bool(args.l2_per_volume),
+                   svd=getattr(args, 'svd', 'scaled'),
+                   gt_matching=getattr(args, 'gt_matching', 'nandist'),
                    crop_window=(getattr(args, 'crop_window', 'pad') if device.type == 'cuda' else 'cpu'),
                    crop_center='trunc' if args.source != 'nwb' and not _round_centers else 'round',
                    nwb_objects=(getattr(args, 'nwb_objects', 'gt') if args.source == 'nwb' else None),
@@ -971,7 +984,8 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
                                 descriptor_stage='auto', max_frames=None,
                                 center_per_volume=False, l2_per_volume=False,
                                 track_device='cpu', skip_embed=True, extra_record=None,
-                                crop_window='pad', round_crop_centers=False, nwb_objects='gt'):
+                                crop_window='pad', round_crop_centers=False, nwb_objects='gt',
+                                svd='scaled', gt_matching='nandist'):
     """Track one trained checkpoint on `project` and return its accuracy record.
 
     Programmatic entry point used by the hyperparameter sweep's in-job
@@ -995,7 +1009,8 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
         descriptor_stage=descriptor_stage, center_per_volume=center_per_volume,
         l2_per_volume=l2_per_volume, device=device, track_device=track_device,
         results_jsonl=results_jsonl, emb_dir=emb_dir, tag=tag, extra_record=extra_record,
-        crop_window=crop_window, round_crop_centers=round_crop_centers, nwb_objects=nwb_objects)
+        crop_window=crop_window, round_crop_centers=round_crop_centers, nwb_objects=nwb_objects,
+        svd=svd, gt_matching=gt_matching)
     _check_args(args)
     return run_eval(args)[-1]
 

@@ -1041,7 +1041,7 @@ r261028-3236040 (batch1b) partial, proxy after 15 epochs: rbf_off (unfixed encod
 
 Samuel double-check (subagent; barlow_track@32fb862:barlow_track/scripts/scratch/samuel_check/). On 153 with NWB GT objects and labelprop-25: round_bayes_samuel trial 0 0.951, paper-era harvard_153_flip trial_8 0.949. The same paper-era sweeps' stored tracks (old WormTsneTracker, HDBSCAN windows, Aug 2025, before label propagation entered in 82f4425) score best 0.805 / median 0.647 (flip, 28 trials), 0.777 (embed), 0.428 (plain); ~90% of their errors are misses (HDBSCAN noise and small clusters unassigned, ~88 tracks for 98 neurons). So the paper-era 75-80% on Samuel was the tracker, not the network or an easy recording. Per the subagent, Samuel's NWB masks and projects/153 segmentation contain only GT neurons, so every Samuel score (nwb gt, nwb all, project) is an oracle-detection score, not comparable to Zimmer's real-segmentation benchmark. Unanswered: whether 137 and 184-004 are harder (queue still running: global clustering, nwb all, project source, 137, image baseline, 184-004; outputs ~/.cache/barlow_scratch/runs/samuel_check/).
 
-- [ ] Read the rest of the samuel_check queue (global clustering, nwb all, project, 137, image baseline, 184-004) and judge whether 153 is easier
+- [x] Read the rest of the samuel_check queue (global clustering, nwb all, project, 137, image baseline, 184-004) and judge whether 153 is easier
 
 ## 2026-10-28 18:36 — result
 
@@ -1116,3 +1116,31 @@ r261028-3310541 training done: proxy 0.401 at ep 14 (reproduces batch 1's 0.400)
 ## 2026-10-28 22:10 — run
 
 Samuel per recording complete (labelprop-25, oracle detections). bayes0 / paper-era trial 8 / image: 153 0.951/0.949/0.821, 137 0.848/0.807/0.641, 184-004 0.913/0.899/0.801. r261028-3286550 done.
+
+## 2026-10-28 22:12 — done
+
+153 is the easiest of three; 137 hardest ([[EVD - Samuel recordings differ by up to 10 points in tracking accuracy under one network]])
+
+Done: Read the rest of the samuel_check queue (global clustering, nwb all, project, 137, image baseline, 184-004) and judge whether 153 is easier
+
+## 2026-10-28 23:09 — run
+
+r261028-3359025 done (batch 3, Zimmer position-only, 15 ep, proxy at ep 14; baseline nn0 el1 0.400, 60-ep plateau 0.50): num_frames 300 0.521 (4500 steps, beats 6000 steps on 100 frames); visnet_hidden 128 0.451; lr 3e-4 0.436; reaugment_each_epoch 0.403 (no effect, so i261027-1's repeated view pairs are not what limits position-only); visnet_cutoff 0.25 0.310; visnet_layers 5 non-finite loss at epoch 0 step 0 (no checkpoint). Training data is the strongest lever.
+
+## 2026-10-28 23:09 — run
+
+Batch 4: num_frames 300 + visnet_hidden 128 (+ lr 3e-4), num_frames 600 and 1000, 15 epochs each, from batch 1's best. Code 668e517.
+
+run r261028-3386058 · pids 3386058 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch4.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-28 23:15 — decision
+
+Surprise: with visnet_rbf_rescale (the RBF fix, every posonly run since batch 1) ViSNet's per-layer outputs explode on real Zimmer frames: max |dx| 77 -> 2.8e4 -> 2.9e10 over 3 layers (seed 43; 80 -> 1.7e3 -> 4e8 seed 0), NaN at 5 layers (b3_layers5 crash, reproduced with seeds 43 and 44). Without the rescale they stay O(5) (the RBFs see nothing, issue i261028-2). Cause: unnormalized vector features in dense frames (~120 neighbours within 0.35, capped at 32). The output LayerNorm hides it, so batch 1-4 trained on 1e10-scale internals. pyg's vecnorm_type max_min holds every layer at O(80), also at 5 layers. Added as opt-in visnet_vecnorm (6a.. see git log), default off.
+
+## 2026-10-28 23:15
+
+visnet_vecnorm is commit dfa4a92 (the previous entry's commit reference was left unfilled).
+
+## 2026-10-28 23:15 — run
+
+r261028-3310541 done: position-only ViSNet (RBF fix, cutoff 0.35 abs, elastic 1.0, 100 frames, 60 epochs, keypoints only, no image) tracks zimmer_1128 full video at 0.843 (labelprop-25, auto stage; misses 11112, mismatches 21286 of 206701). Same encoder unfixed on the cluster (round_posonly_zimmer trial 1, elastic on, 50 ep): 0.449; trial 0 (elastic off) 0.583. Untrained image encoder on Zimmer 0.62; image-only position pipeline 0.79-0.89. Proxy 0.50 <-> accuracy 0.84 on this one point. Trained with exploding internals (no vecnorm).

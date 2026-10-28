@@ -569,3 +569,21 @@ def test_grid_job_that_sweeps_the_seed_matches_on_the_swept_seed():
     plan = [{'seed': 1, 'lr': 1e-4}, {'seed': 2, 'lr': 1e-4}]
     priors = [{'seed': 2, 'lr': 0.0001}]
     assert oh.completed_grid_jobs(plan, [43, 43], priors, 43) == {1}
+
+
+def test_dotted_sweep_names_set_nested_config_without_touching_the_baseline():
+    baseline = {'global_augment': {'max_degrees_z': 180.0, 'p_flip': 0.25}, 'fusion': 'add'}
+    params = oh.expand_dotted_params({**baseline, 'global_augment.apply_to_volume': False,
+                                      'fusion': 'visual_only'})
+    assert params == {'global_augment': {'max_degrees_z': 180.0, 'p_flip': 0.25, 'apply_to_volume': False},
+                      'fusion': 'visual_only'}
+    assert baseline['global_augment'] == {'max_degrees_z': 180.0, 'p_flip': 0.25}
+    assert oh.expand_dotted_params({'a.b.c': 1}) == {'a': {'b': {'c': 1}}}
+
+
+def test_resumed_grid_matches_dotted_names_against_nested_configs():
+    plan = [{'global_augment.apply_to_volume': v, 'fusion': f} for v in (False, True) for f in ('visual_only', 'add')]
+    seeds = [43] * 4
+    priors = [{'global_augment': {'apply_to_volume': True, 'max_degrees_z': 180.0}, 'fusion': 'add', 'seed': 43},
+              {'global_augment': {'max_degrees_z': 180.0}, 'fusion': 'add', 'seed': 43}]  # flag absent: no match
+    assert oh.completed_grid_jobs(plan, seeds, priors, 43) == {3}

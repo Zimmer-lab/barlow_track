@@ -293,8 +293,15 @@ def _to_yaml_safe(obj):
 
 
 def _ax_params(ax_client, full_params):
-    # keep only parameters Ax knows about
-    return {k: v for k, v in full_params.items() if k in ax_client.experiment.search_space.parameters}
+    # keep only parameters Ax knows about; a dotted name reads the nested
+    # config a trial's train_config.yaml holds (see expand_dotted_params)
+    out = {}
+    for name in ax_client.experiment.search_space.parameters:
+        try:
+            out[name] = _lookup_dotted(full_params, name)
+        except KeyError:
+            pass
+    return out
 
 
 def _attach_trial(ax_client, full_params):
@@ -340,6 +347,13 @@ def attach_prior_trial_to_ax_client(ax_client, full_params, result):
 
 
 
+def _has_same(config, key, value):
+    try:
+        return _same_value(_lookup_dotted(config, key), value)
+    except KeyError:
+        return False
+
+
 def _same_value(a, b):
     """yaml round trips turn tuples into lists and may turn 1.0 into 1."""
     if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
@@ -347,6 +361,38 @@ def _same_value(a, b):
     if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
         return float(a) == float(b)
     return a == b
+
+
+def expand_dotted_params(params):
+    """A swept 'a.b' sets key b of the nested dict a (copied, not mutated).
+
+    Lets a grid or Ax sweep reach nested config such as
+    global_augment.apply_to_volume; the trial's train_config.yaml then holds
+    the nested form only.
+    """
+    out = dict(params)
+    for key in [k for k in out if isinstance(k, str) and '.' in k]:
+        value = out.pop(key)
+        *parents, leaf = key.split('.')
+        node = out
+        for name in parents:
+            child = node.get(name)
+            node[name] = dict(child) if isinstance(child, dict) else {}
+            node = node[name]
+        node[leaf] = value
+    return out
+
+
+def _lookup_dotted(config, key):
+    """config[key], walking 'a.b' into nested dicts; KeyError when absent."""
+    if key in config:
+        return config[key]
+    node = config
+    for name in key.split('.'):
+        if not isinstance(node, dict) or name not in node:
+            raise KeyError(key)
+        node = node[name]
+    return node
 
 
 def completed_grid_jobs(planned, planned_seeds, prior_configs, base_seed):
@@ -365,7 +411,7 @@ def completed_grid_jobs(planned, planned_seeds, prior_configs, base_seed):
         for j, prior in enumerate(unused):
             have = dict(prior)
             have.setdefault('seed', base_seed)
-            if all(k in have and _same_value(have[k], v) for k, v in want.items()):
+            if all(_has_same(have, k, v) for k, v in want.items()):
                 covered.add(i)
                 del unused[j]
                 break
@@ -788,7 +834,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 # train_barlow_clusterer.py -p <trial>/train_config.yaml. A sweep
                 # that samples `seed` itself wins over the policy.
                 sampled = parameters
-                parameters = {**baseline_params, **sampled}
+                parameters = expand_dotted_params({**baseline_params, **sampled})
                 if 'seed' not in sampled:
                     parameters['seed'] = trial_seeds.get(trial_index, base_seed)
                 YAML().dump(parameters, open(os.path.join(this_folder, 'train_config.yaml'), 'w'))

@@ -776,3 +776,9 @@ r261027-808962: comparator paper_flavell_use_position auto embedded at rounded c
 ## 2026-10-28 02:52 — run
 
 r261028-838680 epochs 0-2: val loss 0.0043, 0.0030, 0.0022 (falling, as legacy's does; every position run's rose after a few epochs), proxy 0.482, 0.496, 0.504.
+
+## 2026-10-28 02:54 — run
+
+Early eval of r261028-838680 (barlow_track@2683e5c eval_partial.sh 12): waits for the epoch-12 checkpoint (~07:30), then scores its backbone at truncated and rounded crop centres on Flavell NWB GT. Against the image-only position run's 0.819 (truncated) and legacy's 0.956.
+
+run r261028-3899580 · pids 3899580 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_position_pipeline_legacy_matched/eval_partial.log

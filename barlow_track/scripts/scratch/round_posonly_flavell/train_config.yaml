@@ -1,0 +1,77 @@
+# round_posonly_flavell baseline: a position-only network (fusion position_only: the descriptor is the
+# ViSNet position branch alone, no image features) on flavell. The global augmentation moves
+# the keypoints only (apply_to_volume false; crops are extracted but unused). The grid
+# toggles the ViSNet RBF fix (visnet_rbf_rescale), the radius in nearest-neighbour units
+# (visnet_cutoff_nn) and an elastic keypoint deformation matched to real motion
+# (global_augment.elastic_scale). See round_posonly_flavell/README.md.
+project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper/flavell_data/projects/2025_07_01/project_config.yaml
+pretrained_model_path:
+wandb_name: barlow_track_round_posonly_flavell
+wandb_username: charlesfieseler
+projector: 2048-2048
+projector_final: 512
+embedding_dim: 512
+projector_norm: layernorm
+backbone_kwargs:
+  num_levels: 2
+  f_maps: 4
+target_sz_z: 16
+target_sz_xy: 64
+lambd: 0.0051
+batch_size: 1
+weight_decay: 1.0e-6
+epochs: 50
+lr: 1.0e-4
+num_frames: 300
+train_fraction: 0.8
+val_fraction: 0.1
+lambd_obj: 0.67
+print_freq: 100
+rank: 0
+dryrun: false
+DEBUG: false
+training_fraction: 0.8
+seed: 43
+project_dir:
+# num_workers > 0 crashes on zip-stored zarr (forked workers share the ZipStore handle)
+num_workers: 0
+# Per-epoch frame-pair matching proxy on 30 never-sampled frames (position features here)
+val_match_frames: 30
+
+use_position: true
+use_attention: false
+position_encoder: visnet
+fusion: position_only
+fusion_norm: layernorm
+center_per_volume: true
+self_layers: 0
+keypoint_encoder_layers:
+- 32
+- 64
+visnet_cutoff: 0.35
+visnet_neighbors: 32
+visnet_rbf_rescale: false
+visnet_cutoff_nn: 0
+crop_photometric:
+  p_blur: 0.0
+  p_noise: 0.1
+  std_noise: 0.25
+position_augment:
+  dropout_p: 0.2
+  jitter_std: 1.0
+  min_keep: 2
+global_augment:
+  p_global_affine: 1.0
+  max_degrees_z: 180.0
+  scale_jitter: 0.1
+  max_translation:
+  - 2
+  - 8
+  - 8
+  p_flip: 0.25
+  apply_to_volume: false
+  elastic_std: [1.1, 4.1, 4.1]
+  elastic_scale: 0.0
+  # Used only when elastic_scale > 0: elastic_std and elastic_length are the best match to real lag-100 motion on flavell
+  # ([[EVD - The position augmentation deforms mid-range neighbour distances less than real motion does]])
+  elastic_length: 41.0

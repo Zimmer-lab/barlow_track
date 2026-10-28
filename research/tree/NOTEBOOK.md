@@ -823,3 +823,47 @@ Cross-dataset check of the user's model (2026-10-28), from the cluster exp_resul
 
 - [ ] Rescore the best Zimmer, Leifer and Samuel position networks at descriptor_stage backbone (cluster) to check whether global augmentation costs image features off Flavell
 - [ ] Find why the ViSNet position branch learns about 2 effective dimensions (cutoff 0.35 vs a narrow worm, lmax 1, add fusion scale)
+
+## 2026-10-28 11:16 — issue
+
+Hungarian matching broke ties in index order, so near-constant descriptors scored as matches whenever both sets share an order (self-matching, augmented views). Fixed in a2ae044 (shuffle one side). Rerunning the four-checkpoint measurement. Also: randomly initialized ViSNet gives near-constant outputs (rank 1.0-1.2 at cutoff 0.07 and 0.35), so an untrained probe cannot rank encoder settings; that needs training.
+
+- [x] issue i261028-1 · affects [[EVD - Trained position branches carry no more neuron identity than an untrained one on Flavell]]
+
+## 2026-10-28 11:16 — run
+
+Rerun of position-branch matching with shuffled assignment (a2ae044)
+
+run r261028-2951846 · pids 2951846 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/position_branch_matching/run_shuffled.log · for [[EVD - Trained position branches carry no more neuron identity than an untrained one on Flavell]]
+
+## 2026-10-28 11:17 — run
+
+Position-only pilot on Flavell (c431d7c, scratch/flavell_position_only_pilot): the comparator config with fusion position_only, keypoint-only global augmentation, 10 epochs, val_match_frames 30; then position-branch matching and a tracking eval. Checks that a position-only network can learn neuron identity before a cluster sweep over the encoder settings.
+
+run r261028-2952895 · pids 2952895 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/flavell_position_only_pilot/run.log · for [[QUE - Do the two training views differ in neuron positions as much as real frames do]]
+
+## 2026-10-28 11:28
+
+i261028-1: [[EVD - Trained position branches carry no more neuron identity than an untrained one on Flavell]] rerun with shuffled assignment (r261028-2951846, a2ae044): every number identical to 3 decimals; the trained descriptors were not degenerate enough for ties to matter. The note stands.
+
+## 2026-10-28 11:28 — resolved
+
+Rerun with the fixed metric reproduced every number; no note changes.
+
+resolved i261028-1
+
+## 2026-10-28 11:39 — issue
+
+ViSNet position encoder is blind to neighbour distances in every run so far. pyg's ExpNormalSmearing places its RBF means on [exp(-cutoff), 1] but evaluates exp(-(5/cutoff) d); these agree only at cutoff 5 (its Angstrom default). At our cutoff 0.35 every distance above ~0.05 (0.14 x cutoff; Flavell NN distance ~0.034 normalized, Zimmer ~0.015) gets RBF features of ~0, so the distance channel is nearly empty and an untrained encoder gives identical outputs for every node (synthetic test: spread 3e-8). Real Flavell frame, untrained: effective rank 4.0 default vs 14.7 with the fix. The encoder kept only direction information (spherical harmonics through the vector channel), which fits the ~2 effective dimensions of trained branches. Opt-in fix visnet_rbf_rescale (barlow_track@480b76c, default off) builds ViSNet at cutoff 5 and rescales keypoints; also visnet_cutoff_nn (radius in median NN distances, scale-invariant).
+
+- [ ] issue i261028-2 · affects [[EVD - ViSNet position encoder beats a keypoint MLP on every dataset]], [[EVD - Attention and fusion sweep with the ViSNet encoder]], [[EVD - Trained position branches carry no more neuron identity than an untrained one on Flavell]]
+
+## 2026-10-28 11:43 — run
+
+Local smoke test of one round_posonly_flavell cell (rbf_rescale, cutoff_nn 12, elastic on): 1 epoch on 10 frames, then the tracking eval on 50 frames; proves the new flags train and score before the cluster rounds.
+
+run r261028-2979125 · pids 2979125 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_smoke/run.log
+
+## 2026-10-28 11:57
+
+r261028-2979125 (smoke, 7641f83): the round_posonly cell with rbf_rescale, cutoff_nn 12 and elastic on trains, logs the proxy and scores end to end. After 1 epoch on 8 training frames: frame-pair proxy 0.318 at the position stage (6 far-apart pairs) and tracking accuracy 0.527 on the first 50 frames, against 0.12 for an untrained position-only network (full video) and 2-3% position-only matching for the fused networks' branches (a different metric). Tiny and not comparable as a result; it only says the fixed branch learns something at once.

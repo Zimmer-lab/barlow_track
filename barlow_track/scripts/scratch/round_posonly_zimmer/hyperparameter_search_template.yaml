@@ -1,0 +1,29 @@
+# round_posonly_zimmer: can a position-only ViSNet network learn neuron identity on zimmer, and what stops it?
+# 2 x 4 x 2 grid, one training seed (--repetitions 1), 16 jobs:
+#   visnet_rbf_rescale         false (as every earlier run: pyg's RBFs cover only distances
+#                                below ~0.14 x cutoff, so neighbour distances are invisible)
+#                              | true (ViSNet built at cutoff 5, keypoints rescaled; 480b76c)
+#   visnet_cutoff_nn           0 (off: absolute radius 0.35 = 23 NN on zimmer, capped at the 32
+#                                nearest) | 3 | 6 | 12 median nearest-neighbour distances
+#                                (keypoints rescaled per frame: scale-invariant)
+#   global_augment.elastic_scale 0 | 1: off, or the elastic field matched to real ([0.2, 2.9, 2.9] voxels)
+#                                motion; keypoints only, crops untouched
+# Run with: python optimize_hyperparameters.py -p <this file> --direct_parameter_sweep --repetitions 1
+baseline_params_path: null
+
+objective: accuracy
+objective_dataset: zimmer_1128
+objective_minutes: 240
+# Position-only training skips the backbone but still loads volumes and crops; give it room.
+train_hours: 48
+
+hyperparameters:
+  - name: visnet_rbf_rescale
+    type: choice
+    values: [false, true]
+  - name: visnet_cutoff_nn
+    type: choice
+    values: [0, 3, 6, 12]
+  - name: global_augment.elastic_scale
+    type: choice
+    values: [0.0, 1.0]

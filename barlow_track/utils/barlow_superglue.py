@@ -374,16 +374,35 @@ class ViSNetPositionEncoder(nn.Module):
     intended GNN inductive bias. Self-loops (pyg default) keep isolated
     nodes safe.
     """
+    RBF_NATIVE_CUTOFF = 5.0  # the only cutoff at which pyg's RBF means span [0, cutoff]
+
     def __init__(self, output_dim, hidden_channels=64, num_layers=3, cutoff=0.35,
-                 max_num_neighbors=32):
+                 max_num_neighbors=32, cutoff_nn=None, rbf_rescale=False):
         super().__init__()
         # Radius-graph fallback is installed at module import (see
         # _USING_RADIUS_FALLBACK below); nothing to do here.
         from torch_geometric.nn.models import ViSNet
+        # pyg's ExpNormalSmearing places its RBF means on [exp(-cutoff), 1] but
+        # evaluates exp(-(5 / cutoff) * d), which only agree for cutoff 5 (its
+        # Angstrom default). At cutoff 0.35 every distance above ~0.14 x cutoff
+        # gets RBF features of ~0, so the encoder is blind to neighbour
+        # distances and starts with identical outputs for every node.
+        # rbf_rescale builds ViSNet at cutoff 5 and scales the keypoints by
+        # 5 / cutoff instead: same neighbourhoods, RBFs spanning them.
+        # Off by default so existing checkpoints load and behave unchanged.
+        self.rbf_rescale = bool(rbf_rescale)
+        internal_cutoff = self.RBF_NATIVE_CUTOFF if self.rbf_rescale else cutoff
         self.repr = ViSNet(lmax=1, num_heads=4, num_layers=num_layers,
-                           hidden_channels=hidden_channels, cutoff=cutoff,
+                           hidden_channels=hidden_channels, cutoff=internal_cutoff,
                            max_num_neighbors=max_num_neighbors).representation_model
         self.head = nn.Linear(hidden_channels, output_dim)
+        # Optional: cutoff in units of the frame's median nearest-neighbour
+        # distance. The keypoints are rescaled per frame so that cutoff_nn NN
+        # distances map onto `cutoff`, which makes the encoder scale-invariant
+        # and fills ViSNet's distance expansion (spanning [0, cutoff]) with the
+        # actual neighbourhood on every dataset. None keeps absolute units.
+        self.cutoff = float(cutoff)
+        self.cutoff_nn = None if cutoff_nn is None else float(cutoff_nn)
 
     def forward(self, kpts):
         # kpts: (N, 3) float; returns (N, output_dim)
@@ -406,6 +425,14 @@ class ViSNetPositionEncoder(nn.Module):
                              * 1e-6)
                     x = x + shift.unsqueeze(1) * torch.tensor(
                         [1.0, 0.0, 0.0], device=dev)
+        if self.cutoff_nn is not None and x.shape[0] > 1:
+            with torch.no_grad():
+                d = torch.cdist(x, x)
+                d.fill_diagonal_(float('inf'))
+                nn_dist = d.min(dim=1).values.median().clamp_min(1e-6)
+            x = x * (self.cutoff / (self.cutoff_nn * nn_dist))
+        if self.rbf_rescale:
+            x = x * (self.RBF_NATIVE_CUTOFF / self.cutoff)
         z = torch.zeros(x.shape[0], dtype=torch.long, device=dev)
         batch = torch.zeros(x.shape[0], dtype=torch.long, device=dev)
         x, _ = self.repr(z, x, batch)
@@ -437,7 +464,9 @@ class BarlowWithPosition(BarlowTwins3d):
                 hidden_channels=int(getattr(args, 'visnet_hidden', 64)),
                 num_layers=int(getattr(args, 'visnet_layers', 3)),
                 cutoff=float(getattr(args, 'visnet_cutoff', 0.35)),
-                max_num_neighbors=int(getattr(args, 'visnet_neighbors', 32)))
+                max_num_neighbors=int(getattr(args, 'visnet_neighbors', 32)),
+                cutoff_nn=getattr(args, 'visnet_cutoff_nn', None),
+                rbf_rescale=bool(getattr(args, 'visnet_rbf_rescale', False)))
         elif self.pos_encoder != 'keypoint_mlp':
             raise ValueError(f"Unknown position_encoder '{self.pos_encoder}'; use 'keypoint_mlp' or 'visnet'")
         self.norm_visual = _make_norm(self.fusion_norm, embedding_dim)

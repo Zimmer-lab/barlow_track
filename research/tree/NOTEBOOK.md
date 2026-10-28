@@ -1064,3 +1064,11 @@ run r261028-3286550 · pids 3286550 · host charles-Precision-7820-Tower · logs
 ## 2026-10-28 19:47 — run
 
 r261028-3231600 partial (Samuel 153, backbone embeddings): gt_valid matching equals nandist on both networks (0.9508, 0.9484), as expected with GT-only segmentation. Whitened SVD (production's path) costs bayes0 1.4 pt (0.9508 -> 0.9365); trial 27 whiten cell still running.
+
+## 2026-10-28 20:37 — run
+
+r261028-3231600 done: whitened SVD (production's path) costs both networks on Samuel 153: bayes0 0.9508 -> 0.9365, trial 27 0.9484 -> 0.9311 (1.4, 1.7 pt). gt_valid matching = nandist on both. Production tracking should use svd_whiten: false (opt-in key exists since 482dcfb).
+
+## 2026-10-28 20:37 — run
+
+Samuel per recording (labelprop-25, oracle detections): bayes0 153 0.951 / 137 0.848 / 184-004 0.913; paper-era trial 8 153 0.949 / 137 0.807 (184-004 running); image baseline 153 0.821 / 137 0.641. 137 is the hard recording for every embedding; bayes0 beats paper-era there by 4 pt and image by 21 pt. r261028-3286550 partial.

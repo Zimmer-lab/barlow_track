@@ -897,3 +897,7 @@ round_posonly_samuel did not launch: the accuracy objective's preflight found no
 ## 2026-10-28 16:31 — decision
 
 Correction to the 16:28 decision: the samuel project does have GT. Its tracks live only in its NWB (nwb/nwb_config.yaml: nwb_filename nwb/153.nwb, read by hybrid loading), and nwb/153.nwb is missing from 2025_07_30_gt_traces, so final_tracks loads as None. samuel_data/153.nwb is the same recording: 98 neurons x 1331 frames, and at frame 100 all 87 tracked centroids fall on project masks. Fix is to link it in (project/nwb/153.nwb -> ../../../153.nwb); template reverted to objective: accuracy. Earlier samuel rounds were unaffected (objective: loss for training, NWB for scoring).
+
+## 2026-10-28 16:34 — dead-end
+
+Why the Flavell project GT differs from the NWB GT (the ~3.4-4 pt gap): in flavell_data/projects/2025_07_01, 3-tracking/tracking_config.yaml (modified 2025-10-07) sets final_3d_tracks_df to 3-tracking/barlow_tracker/df_barlow_tracks.h5, a Barlow tracker output from 2025-07-18 (next to its embedding.zarr and worm_tracker_barlow_full.pickle). Hybrid loading fills final_tracks from the NWB only when it is None, so _load_project_gt scores against those tracker tracks, filtered to the finished neurons, not against the NWB GT. Fits the 89.7% seg-id agreement. Not checked whether df_barlow_tracks.h5 was manually corrected. Flavell project's NWB is copied in (nwb/flavell_data.nwb, relative path in nwb_config); samuel's config has the same relative form but the copy is missing.

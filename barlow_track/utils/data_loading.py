@@ -133,6 +133,11 @@ def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 
                         this_name = f"{base}_dup{suffix:02d}"
                         suffix += 1
         zxy = [row['z'], row['x'], row['y']]
+        if not np.all(np.isfinite(np.asarray(zxy, dtype=float))):
+            # Empty masks have NaN centroids (96 objects in 93 frames of the Samuel 153 project);
+            # they cannot be cropped, and int(NaN) used to raise below
+            logging.warning(f"t={t}: skipping {this_name} (seg {this_seg_label}), non-finite centroid {zxy}")
+            continue
         specs.append((this_name, zxy))
 
     if skip_crops:

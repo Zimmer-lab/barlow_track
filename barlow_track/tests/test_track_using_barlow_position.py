@@ -66,6 +66,23 @@ def test_position_checkpoint_embeds_whole_frames_with_aligned_keypoints(monkeypa
         np.argsort(kpts[:, 1].numpy()).tolist() == np.argsort(crops.flatten(1).mean(1).numpy()).tolist()
 
 
+def test_nonfinite_centroid_object_is_skipped_by_the_bbox_loader():
+    # An empty mask's metadata centroid is NaN (Samuel 153 project); int(NaN) used to raise
+    import pandas as pd
+    rows = dict(raw_segmentation_id=[3, 7, 9], z=[2., 5., np.nan], x=[10., 30., np.nan],
+                y=[20., 8., np.nan], raw_neuron_ind_in_list=[0, 1, 2])
+    seg_meta = SimpleNamespace(
+        get_all_neuron_metadata_for_single_time=lambda t, as_dataframe: (list(rows.values()), list(rows)),
+        mask_index_to_i_in_array=lambda t, seg: [3, 7, 9].index(seg))
+    tracks = pd.DataFrame({('neuron_001', 'raw_segmentation_id'): [3.]})
+    project = SimpleNamespace(red_data=np.random.default_rng(0).random((1,) + SHAPE), final_tracks=tracks,
+                              finished_neuron_names=lambda: ['neuron_001'], segmentation_metadata=seg_meta)
+    for skip_crops in (False, True):
+        dat, _, _ = data_loading.get_bbox_data_for_volume_with_label(
+            project, 0, target_sz=TARGET, include_untracked=True, skip_crops=skip_crops)
+        assert sorted(dat) == ['neuron_001', 'untracked_time_0_0001_0007']
+
+
 def test_unset_stage_keeps_the_legacy_backbone_path(monkeypatch):
     seen = {}
     monkeypatch.setattr(tub, 'embed_frames_at_stage', lambda *a, **k: seen.setdefault('called', True))

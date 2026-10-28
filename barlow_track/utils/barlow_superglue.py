@@ -388,7 +388,7 @@ class ViSNetPositionEncoder(nn.Module):
     RBF_NATIVE_CUTOFF = 5.0  # the only cutoff at which pyg's RBF means span [0, cutoff]
 
     def __init__(self, output_dim, hidden_channels=64, num_layers=3, cutoff=0.35,
-                 max_num_neighbors=32, cutoff_nn=None, rbf_rescale=False):
+                 max_num_neighbors=32, cutoff_nn=None, rbf_rescale=False, vecnorm=None):
         super().__init__()
         # Radius-graph fallback is installed at module import (see
         # _USING_RADIUS_FALLBACK below); nothing to do here.
@@ -403,9 +403,17 @@ class ViSNetPositionEncoder(nn.Module):
         # Off by default so existing checkpoints load and behave unchanged.
         self.rbf_rescale = bool(rbf_rescale)
         internal_cutoff = self.RBF_NATIVE_CUTOFF if self.rbf_rescale else cutoff
+        # Once the RBFs see distances (rbf_rescale), the unnormalized vector
+        # features grow ~100x per layer on dense neuron clouds (a Zimmer frame:
+        # ~120 neighbours within the cutoff, capped at 32): layer outputs reach
+        # ~1e10 at 3 layers, hidden by the output LayerNorm, and overflow to NaN
+        # at 5. vecnorm 'max_min' (pyg's VecLayerNorm) holds them at O(100).
+        # None (pyg's default) keeps existing checkpoints unchanged.
+        self.vecnorm = vecnorm or None
         self.repr = ViSNet(lmax=1, num_heads=4, num_layers=num_layers,
                            hidden_channels=hidden_channels, cutoff=internal_cutoff,
-                           max_num_neighbors=max_num_neighbors).representation_model
+                           max_num_neighbors=max_num_neighbors,
+                           vecnorm_type=self.vecnorm).representation_model
         self.head = nn.Linear(hidden_channels, output_dim)
         # Optional: cutoff in units of the frame's median nearest-neighbour
         # distance. The keypoints are rescaled per frame so that cutoff_nn NN
@@ -478,7 +486,8 @@ class BarlowWithPosition(BarlowTwins3d):
                 cutoff=float(getattr(args, 'visnet_cutoff', 0.35)),
                 max_num_neighbors=int(getattr(args, 'visnet_neighbors', 32)),
                 cutoff_nn=getattr(args, 'visnet_cutoff_nn', None),
-                rbf_rescale=bool(getattr(args, 'visnet_rbf_rescale', False)))
+                rbf_rescale=bool(getattr(args, 'visnet_rbf_rescale', False)),
+                vecnorm=getattr(args, 'visnet_vecnorm', None))
         elif self.pos_encoder != 'keypoint_mlp':
             raise ValueError(f"Unknown position_encoder '{self.pos_encoder}'; use 'keypoint_mlp' or 'visnet'")
         self.norm_visual = _make_norm(self.fusion_norm, embedding_dim)

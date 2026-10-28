@@ -539,7 +539,8 @@ def compare_model_architecture(expected_args, pretrained_args):
                 return None if v is None else cast(v)
             for field, default, cast in (('visnet_hidden', 64, int), ('visnet_layers', 3, int),
                                          ('visnet_cutoff', 0.35, float), ('visnet_neighbors', 32, int),
-                                         ('visnet_cutoff_nn', None, float), ('visnet_rbf_rescale', False, bool)):
+                                         ('visnet_cutoff_nn', None, float), ('visnet_rbf_rescale', False, bool),
+                                         ('visnet_vecnorm', None, str)):
                 curr = _visnet_arg(expected_args, field, default, cast)
                 pre = _visnet_arg(pretrained_args, field, default, cast)
                 if curr != pre:

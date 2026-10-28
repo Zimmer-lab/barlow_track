@@ -81,6 +81,52 @@ def test_cutoff_nn_default_off_and_wired_from_args():
     assert model.visnet_enc.cutoff_nn == 3.0 and model.visnet_enc.rbf_rescale
 
 
+def _dense_frame(n=140, seed=0):
+    # Thin in z and as dense as a centred Zimmer frame, whose neurons cluster in
+    # the ganglia (~120 neighbours within 0.35; half its span when uniform)
+    g = torch.Generator().manual_seed(seed)
+    return (torch.rand(n, 3, generator=g) - 0.5) * torch.tensor([0.015, 0.35, 0.225])
+
+
+def _layer_dx_max(enc, x):
+    seen = []
+    hooks = [layer.register_forward_hook(lambda m, i, o: seen.append(float(o[0].abs().max())))
+             for layer in enc.repr.vis_mp_layers]
+    with torch.no_grad():
+        out = enc(x)
+    for h in hooks:
+        h.remove()
+    return out, seen
+
+
+def test_rbf_rescale_without_vecnorm_blows_up_on_dense_frames():
+    # Documents what vecnorm fixes: vector features grow ~100x per layer
+    torch.manual_seed(0)
+    enc = ViSNetPositionEncoder(16, num_layers=3, cutoff=0.35, rbf_rescale=True).eval()
+    _, dx = _layer_dx_max(enc, _dense_frame())
+    assert dx[-1] > 1e3 * dx[0]
+
+
+def test_vecnorm_max_min_keeps_layers_bounded_and_invariant():
+    torch.manual_seed(0)
+    enc = ViSNetPositionEncoder(16, num_layers=5, cutoff=0.35, rbf_rescale=True, vecnorm='max_min').eval()
+    x = _dense_frame()
+    out, dx = _layer_dx_max(enc, x)
+    assert torch.isfinite(out).all() and max(dx) < 10 * dx[0]
+    with torch.no_grad():
+        assert torch.allclose(out, enc(_rotate_z(x, 73.0) + 0.1), atol=1e-4)
+
+
+def test_vecnorm_default_off_and_wired_from_args():
+    base = dict(embedding_dim=16, projector='32', projector_final=16, lambd=0.0051,
+                position_encoder='visnet', fusion='position_only', visnet_hidden=16, visnet_layers=2)
+    from barlow_track.utils.siamese import ResidualEncoder3D
+    kw = dict(backbone=ResidualEncoder3D, in_channels=1, num_levels=2, f_maps=4, crop_sz=(8, 16, 16))
+    assert BarlowWithPosition(SimpleNamespace(**base), **kw).visnet_enc.vecnorm is None
+    model = BarlowWithPosition(SimpleNamespace(**base, visnet_vecnorm='max_min'), **kw)
+    assert model.visnet_enc.vecnorm == 'max_min'
+
+
 def test_radius_graph_keeps_the_nearest_neighbours_like_the_cluster():
     # The cluster has no torch-cluster and uses the pure-torch fallback (nearest
     # max_num_neighbors within r); where the compiled package exists it must be

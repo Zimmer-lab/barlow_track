@@ -255,7 +255,8 @@ class Transform:
             raise ValueError("global_augment apply_to_volume false moves keypoints only; "
                              "the legacy crop path has none (use use_position true)")
         affine_args, elastic_args = split_global_args(self.global_args)
-        if np.any(np.asarray(elastic_args.get('elastic_std', 0.0)) != 0):
+        if np.any(np.asarray(elastic_args.get('elastic_std', 0.0))
+                  * float(elastic_args.get('elastic_scale', 1.0)) != 0):
             # Crop stacks carry no full volume to warp; the legacy path has its
             # own per-crop RandomElasticDeformation (p_RandomElasticDeformation).
             raise ValueError("global_augment elastic_std needs the full-volume pipeline "

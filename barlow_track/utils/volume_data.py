@@ -47,13 +47,16 @@ DEFAULT_GLOBAL_ARGS = dict(
     # fields (e.g. std 3 at length 15) fold.
     elastic_std=0.0,  # voxels, per-axis std of the field; float or (z, x, y). 0 = off
     elastic_length=40.0,  # voxels, distance at which the field's correlation is 1/e
+    # Multiplies elastic_std: a scalar knob for sweeps (Ax choices must be
+    # scalars, elastic_std is per axis). 0 = off.
+    elastic_scale=1.0,
     # False moves only the keypoints (affine, elastic, jitter); crops come from
     # the untransformed volume at the original centroids, so image views differ
     # only by the per-crop transform (crop_augment). Decouples position
     # augmentation from what the image branch sees.
     apply_to_volume=True,
 )
-ELASTIC_KEYS = ('elastic_std', 'elastic_length')
+ELASTIC_KEYS = ('elastic_std', 'elastic_length', 'elastic_scale')
 GLOBAL_FLAG_KEYS = ('apply_to_volume',)
 
 DEFAULT_CROP_PHOTOMETRIC_ARGS = dict(
@@ -196,7 +199,7 @@ class ElasticField:
         return y.T
 
 
-def sample_elastic_field(rng, shape, elastic_std=0.0, elastic_length=15.0):
+def sample_elastic_field(rng, shape, elastic_std=0.0, elastic_length=15.0, elastic_scale=1.0):
     """Smooth random ElasticField over a (D, H, W) volume, or None when off.
 
     Gaussian-filtered white noise: with filter sigma = elastic_length / 2 the
@@ -205,7 +208,7 @@ def sample_elastic_field(rng, shape, elastic_std=0.0, elastic_length=15.0):
     Draws nothing from rng when off, so disabled configs keep their streams.
     The grid spacing is ~sigma/2 voxels, fine enough for a field this smooth.
     """
-    std = _parse_jitter_std(elastic_std)
+    std = _parse_jitter_std(elastic_std) * float(elastic_scale)
     if bool((std == 0).all()):
         return None
     length = _parse_jitter_std(elastic_length)

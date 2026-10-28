@@ -74,6 +74,17 @@ def test_elastic_off_draws_nothing():
     assert np.array_equal(rng.get_state()[1], state)
 
 
+def test_elastic_scale_zero_is_off_and_scales_the_field():
+    rng = np.random.RandomState(0)
+    state = rng.get_state()[1].copy()
+    assert sample_elastic_field(rng, (8, 20, 20), elastic_std=(1, 4, 4), elastic_scale=0.0) is None
+    assert np.array_equal(rng.get_state()[1], state)
+    full = sample_elastic_field(np.random.RandomState(1), (8, 20, 20), elastic_std=(1, 4, 4), elastic_length=10)
+    half = sample_elastic_field(np.random.RandomState(1), (8, 20, 20), elastic_std=(1, 4, 4), elastic_length=10,
+                                elastic_scale=0.5)
+    assert np.allclose(half.coarse, 0.5 * full.coarse, rtol=1e-4, atol=1e-6)
+
+
 def test_elastic_field_std_and_correlation_length():
     rng = np.random.RandomState(0)
     std, length = (1.0, 3.0, 5.0), 10.0

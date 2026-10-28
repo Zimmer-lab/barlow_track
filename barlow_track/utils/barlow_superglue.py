@@ -400,9 +400,10 @@ class ViSNetPositionEncoder(nn.Module):
         # distance. The keypoints are rescaled per frame so that cutoff_nn NN
         # distances map onto `cutoff`, which makes the encoder scale-invariant
         # and fills ViSNet's distance expansion (spanning [0, cutoff]) with the
-        # actual neighbourhood on every dataset. None keeps absolute units.
+        # actual neighbourhood on every dataset. None or 0 keeps absolute units
+        # (0 so a sweep can name the off value: Ax rejects None choices).
         self.cutoff = float(cutoff)
-        self.cutoff_nn = None if cutoff_nn is None else float(cutoff_nn)
+        self.cutoff_nn = float(cutoff_nn) if cutoff_nn else None
 
     def forward(self, kpts):
         # kpts: (N, 3) float; returns (N, output_dim)

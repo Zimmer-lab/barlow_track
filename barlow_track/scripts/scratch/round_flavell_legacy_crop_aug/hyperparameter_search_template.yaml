@@ -1,0 +1,25 @@
+# round_flavell_legacy_crop_aug: does the position pipeline reach the preprint's Flavell
+# accuracy once its image views come from the preprint per-crop transforms, and does
+# position fusion add to it? 2 x 2 grid, 3 training seeds each (--repetitions 3):
+#   fusion                          visual_only (image features only) | add (ViSNet position)
+#   global_augment.apply_to_volume  false: affine, jitter and dropout move the keypoints only,
+#                                     crops come from the untransformed volume
+#                                   true:  the volume is transformed before cropping (the
+#                                     revision pipeline), so the crops see it too
+# (visual_only, false) replicates the local legacy-matched run (r261028-838680).
+# Run with: python optimize_hyperparameters.py -p <this file> --direct_parameter_sweep --repetitions 3
+# Objective: accuracy on 2025_07_01 against the PROJECT GT (reads ~3.4 pt low); rescore
+# against the NWB GT afterwards (README.md).
+baseline_params_path: null
+
+objective: accuracy
+objective_dataset: flavell
+objective_minutes: 240
+
+hyperparameters:
+  - name: fusion
+    type: choice
+    values: [visual_only, add]
+  - name: global_augment.apply_to_volume
+    type: choice
+    values: [false, true]

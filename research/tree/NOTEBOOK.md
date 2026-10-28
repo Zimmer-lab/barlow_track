@@ -804,3 +804,22 @@ Stopped at epoch 18 of 50 by decision: the epoch-12 result (0.950 rounded) alrea
 Stopped PID 838680.
 
 dropped r261028-838680
+
+## 2026-10-28 10:48 — decision
+
+Neither pipeline has a real mirror flip. Legacy view 2's tio.RandomFlip(axes=(1,2)) is commented out; p_RandomAffine_flip is a fixed 180° in-plane rotation ('like a flip'), and the position pipeline's p_flip copies that (adds 180° to the angle, redundant with the ±180° range). The preprint trained without a mirror flip. Pointed out by the user, who expected a real flip.
+
+- [ ] Rename p_flip / p_RandomAffine_flip to say rotation, and add a real mirror-flip option (default off)
+
+## 2026-10-28 10:58 — run
+
+Position-branch matching (a3bab89): Hungarian matching on per-frame-standardized position descriptors alone, augmented views vs real frames at lags 1-1000, 4 fused Flavell checkpoints plus re-initialized branches. Smoke test on the comparator: ~10% between views, ~3% at lag 1, effective rank ~2.4 (reinit 2.3) — the position branch encodes coarse location, not a per-neuron fingerprint.
+
+run r261028-2940337 · pids 2940337 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/position_branch_matching/run.log · for [[EVD - Position change between augmented training views against real frame-to-frame change on Flavell]]
+
+## 2026-10-28 11:10 — decision
+
+Cross-dataset check of the user's model (2026-10-28), from the cluster exp_results.jsonl of every round, latest record per tag. (1) Global augmentation weakens image features only on Flavell: consistent but not checked directly. Best fused ViSNet position networks reach the preprint on Zimmer (0.970, round_visnet_full trial27, vs 0.973) and Leifer (0.972 vs 0.974); the only image-only position-pipeline records are round_2x2 (keypoint-MLP era, trained on Zimmer: Zimmer 0.79-0.89, Leifer 0.92-0.95, Samuel 0.89-0.92). On Flavell the tuned round_flavell_more_epochs trial27 reaches 0.915 backbone / 0.927 fused against 0.952, so the local preprint-config runs (0.79-0.82) are the extreme case. (2) Position helps on Samuel: not shown matched. Best Samuel: ViSNet fused 0.950 (round_bayes_samuel, trained on Samuel), keypoint-MLP 0.942 (round_bayes_zimmer trial27, trained on Zimmer), image-only 0.921 (round_2x2). Within round_2x2 (same era and training data) position on 0.894-0.925 vs off 0.888-0.921. Flavell rows before the NWB fix are capped by i261026-1 and were ignored.
+
+- [ ] Rescore the best Zimmer, Leifer and Samuel position networks at descriptor_stage backbone (cluster) to check whether global augmentation costs image features off Flavell
+- [ ] Find why the ViSNet position branch learns about 2 effective dimensions (cutoff 0.35 vs a narrow worm, lmax 1, add fusion scale)

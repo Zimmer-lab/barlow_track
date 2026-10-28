@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastModified": 1793180535222,
+  "lastModified": 1793182243575,
   "relations": {
     "01a1659f-a4ba-700e-91b0-c603dda7da35": {
       "id": "01a1659f-a4ba-700e-91b0-c603dda7da35",
@@ -2010,6 +2010,62 @@
       "source": "01a181ae-d863-786f-abc2-1f6ced0badbf",
       "destination": "01a1776f-cb63-73ca-b611-fc8617478ee9",
       "created": 1793177082085
+    },
+    "01a181e8-d506-7f6f-8a52-fa4b8e288191": {
+      "id": "01a181e8-d506-7f6f-8a52-fa4b8e288191",
+      "type": "relation_ygg_follows-from",
+      "source": "01a181e8-d505-75ef-a418-ff7bde19ca29",
+      "destination": "01a17930-f1ba-777d-be30-6f219f30985c",
+      "created": 1793180882182
+    },
+    "01a181e8-d584-7ed0-9b2f-82d5546600ec": {
+      "id": "01a181e8-d584-7ed0-9b2f-82d5546600ec",
+      "type": "relation_ygg_informs",
+      "source": "01a181e8-d582-7d71-8f4a-049a186f8bfe",
+      "destination": "01a181e8-d505-75ef-a418-ff7bde19ca29",
+      "created": 1793180882308
+    },
+    "01a181fd-0c35-79c7-adb1-13858be6577d": {
+      "id": "01a181fd-0c35-79c7-adb1-13858be6577d",
+      "type": "relation_ygg_derived-from",
+      "source": "01a181fd-0c35-7b54-8dd8-bbeef8224b97",
+      "destination": "01a1659e-d17b-7b62-b826-8ca81a1db951",
+      "created": 1793182207029
+    },
+    "01a181fd-4d0a-78e6-80ed-862a7fac4833": {
+      "id": "01a181fd-4d0a-78e6-80ed-862a7fac4833",
+      "type": "relation_ygg_derived-from",
+      "source": "01a181fd-4d08-7d24-809c-c0dcab1c2d52",
+      "destination": "01a181fd-0c35-7b54-8dd8-bbeef8224b97",
+      "created": 1793182223626
+    },
+    "01a181fd-4d0a-7b7f-b9e0-78b0847adf6b": {
+      "id": "01a181fd-4d0a-7b7f-b9e0-78b0847adf6b",
+      "type": "relation_ygg_informs",
+      "source": "01a181fd-4d08-7d24-809c-c0dcab1c2d52",
+      "destination": "01a181e8-d505-75ef-a418-ff7bde19ca29",
+      "created": 1793182223626
+    },
+    "01a181fd-4d0b-7b65-801e-0559330ba97f": {
+      "id": "01a181fd-4d0b-7b65-801e-0559330ba97f",
+      "type": "relation_ygg_supersedes",
+      "source": "01a181fd-4d08-7d24-809c-c0dcab1c2d52",
+      "destination": "01a181e8-d582-7d71-8f4a-049a186f8bfe",
+      "created": 1793182223627
+    },
+    "01a181fd-4d0b-7310-bbd2-9eb7069fb619": {
+      "id": "01a181fd-4d0b-7310-bbd2-9eb7069fb619",
+      "type": "relation_ygg_opposes",
+      "source": "01a181fd-4d08-7d24-809c-c0dcab1c2d52",
+      "destination": "01a17931-af25-7caf-81e1-2a27bf1eebb9",
+      "created": 1793182223627
+    },
+    "01a181fd-9a77-7d1b-90ab-e465d5a35f16": {
+      "id": "01a181fd-9a77-7d1b-90ab-e465d5a35f16",
+      "type": "relation_ygg_informs",
+      "source": "01a17932-2f5c-7d96-a9c6-6e09ce4c4296",
+      "destination": "01a181e8-d505-75ef-a418-ff7bde19ca29",
+      "created": 1793182243447
     }
   }
 }

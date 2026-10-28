@@ -1042,3 +1042,7 @@ r261028-3236040 (batch1b) partial, proxy after 15 epochs: rbf_off (unfixed encod
 Samuel double-check (subagent; barlow_track@32fb862:barlow_track/scripts/scratch/samuel_check/). On 153 with NWB GT objects and labelprop-25: round_bayes_samuel trial 0 0.951, paper-era harvard_153_flip trial_8 0.949. The same paper-era sweeps' stored tracks (old WormTsneTracker, HDBSCAN windows, Aug 2025, before label propagation entered in 82f4425) score best 0.805 / median 0.647 (flip, 28 trials), 0.777 (embed), 0.428 (plain); ~90% of their errors are misses (HDBSCAN noise and small clusters unassigned, ~88 tracks for 98 neurons). So the paper-era 75-80% on Samuel was the tracker, not the network or an easy recording. Per the subagent, Samuel's NWB masks and projects/153 segmentation contain only GT neurons, so every Samuel score (nwb gt, nwb all, project) is an oracle-detection score, not comparable to Zimmer's real-segmentation benchmark. Unanswered: whether 137 and 184-004 are harder (queue still running: global clustering, nwb all, project source, 137, image baseline, 184-004; outputs ~/.cache/barlow_scratch/runs/samuel_check/).
 
 - [ ] Read the rest of the samuel_check queue (global clustering, nwb all, project, 137, image baseline, 184-004) and judge whether 153 is easier
+
+## 2026-10-28 18:36 — result
+
+Samuel check, tracker swap: round_bayes_samuel trial 0's cached 153 embeddings (NWB GT objects) tracked with --cluster global score 0.705 vs 0.951 with labelprop-25. Network and detections fixed, so the paper-era 70-80% on Samuel is the tracker.

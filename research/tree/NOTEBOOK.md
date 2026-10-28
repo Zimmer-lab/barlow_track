@@ -867,3 +867,9 @@ run r261028-2979125 · pids 2979125 · host charles-Precision-7820-Tower · logs
 ## 2026-10-28 11:57
 
 r261028-2979125 (smoke, 7641f83): the round_posonly cell with rbf_rescale, cutoff_nn 12 and elastic on trains, logs the proxy and scores end to end. After 1 epoch on 8 training frames: frame-pair proxy 0.318 at the position stage (6 far-apart pairs) and tracking accuracy 0.527 on the first 50 frames, against 0.12 for an untrained position-only network (full video) and 2-3% position-only matching for the fused networks' branches (a different metric). Tiny and not comparable as a result; it only says the fixed branch learns something at once.
+
+## 2026-10-28 11:57 — dropped
+
+Crashed at epoch 0 writing log/stats.json: run.sh did not create log/ (sweep trials create it). Superseded by the smoke test r261028-2979125 and round_posonly.
+
+dropped r261028-2952895

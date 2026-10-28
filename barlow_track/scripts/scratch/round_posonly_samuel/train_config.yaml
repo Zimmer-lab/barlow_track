@@ -4,7 +4,9 @@
 # toggles the ViSNet RBF fix (visnet_rbf_rescale), the radius in nearest-neighbour units
 # (visnet_cutoff_nn) and an elastic keypoint deformation matched to real motion
 # (global_augment.elastic_scale). See round_posonly_flavell/README.md.
-project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper/samuel_data/projects/2025_07_30_gt_traces/project_config.yaml
+# projects/153, not 2025_07_30_gt_traces: same recording, but only 153 has its GT NWB copied in
+# (nwb/153.nwb, identical to samuel_data/153.nwb, the benchmark's GT: 98 neurons, 1331 frames).
+project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper/samuel_data/projects/153/project_config.yaml
 pretrained_model_path:
 wandb_name: barlow_track_round_posonly_samuel
 wandb_username: charlesfieseler

@@ -905,3 +905,9 @@ Why the Flavell project GT differs from the NWB GT (the ~3.4-4 pt gap): in flave
 ## 2026-10-28 16:43 — decision
 
 Samuel projects: switched round_posonly_samuel to samuel_data/projects/153 (user's call). It passes the sweep preflight: 98 neurons x 1331 frames, metadata for all frames, nwb/153.nwb byte-identical to samuel_data/153.nwb, project GT identical to the NWB GT. 2025_07_30_gt_traces lacks its NWB copy (no GT); projects/137 (= 137.nwb, 92 neurons x 1326 frames) has GT but no 1-segmentation/metadata.pickle, so it cannot train as is. Earlier rounds (round_bayes_samuel, initial_position_embedding_samuel) trained on 2025_07_30_gt_traces: same recording, its own segmentation metadata (14.30 MB vs 14.37 MB in projects/153), not checked for equality.
+
+## 2026-10-28 16:46 — issue
+
+Flavell project 2025_07_01's 'project GT' is a Barlow tracker output, not GT. tracking_config.yaml (modified 2025-10-07) sets final_3d_tracks_df to 3-tracking/barlow_tracker/df_barlow_tracks.h5 (written 2025-07-18 next to that run's embedding.zarr); manual_annotation.xlsx marks no neuron finished, so _load_project_gt returns that whole table (160 neurons). By position (barlow_track@c087fa5:barlow_track/scripts/scratch/flavell_gt_identity.py) it is the same recording as images_for_charlie/flavell_data.nwb (151 of 160 neurons pair at median 0.12 voxels) but agrees on only 91.9% of paired entries (89.1% of all), i.e. a ~90%-accurate tracking. Every --source project / in-job objective: accuracy Flavell score is accuracy against that tracker, not GT; the preprint's 96.7% is against the NWB GT. The four forCharlie_2 projects and 2025_08_01 have final_3d_tracks_df null (GT from their NWBs).
+
+- [ ] issue i261028-3 · affects [[@BarlowTrack revision benchmark sweeps]], [[@BarlowTrack Flavell ground-truth version comparison]]

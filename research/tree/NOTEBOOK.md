@@ -1144,3 +1144,13 @@ visnet_vecnorm is commit dfa4a92 (the previous entry's commit reference was left
 ## 2026-10-28 23:15 — run
 
 r261028-3310541 done: position-only ViSNet (RBF fix, cutoff 0.35 abs, elastic 1.0, 100 frames, 60 epochs, keypoints only, no image) tracks zimmer_1128 full video at 0.843 (labelprop-25, auto stage; misses 11112, mismatches 21286 of 206701). Same encoder unfixed on the cluster (round_posonly_zimmer trial 1, elastic on, 50 ep): 0.449; trial 0 (elastic off) 0.583. Untrained image encoder on Zimmer 0.62; image-only position pipeline 0.79-0.89. Proxy 0.50 <-> accuracy 0.84 on this one point. Trained with exploding internals (no vecnorm).
+
+## 2026-10-28 23:15 — run
+
+Zimmer backbone vs auto rescore of round_visnet_full trial 27 with CPU tracking (the zimmer_1128 cells of r261028-3159902 OOM'd); runs beside batch 4's keypoint-only training. Code 89531d7.
+
+run r261028-3398874 · pids 3398874 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/runs/backbone_rescore_off_flavell/zimmer_cpu_track.log
+
+## 2026-10-29 00:14 — run
+
+r261028-3386058 partial, proxy at epoch 14 (batch 1 baseline 0.400, b3 frames300 0.521, b3 h128 0.451): frames300+h128 0.548, frames300+h128+lr3e-4 0.518, frames600 0.552 (27 min per cell). More frames is the main lever and stacks a little with width; lr 3e-4 no longer helps once frames are up. frames1000 still training.

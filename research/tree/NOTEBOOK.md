@@ -901,3 +901,7 @@ Correction to the 16:28 decision: the samuel project does have GT. Its tracks li
 ## 2026-10-28 16:34 — dead-end
 
 Why the Flavell project GT differs from the NWB GT (the ~3.4-4 pt gap): in flavell_data/projects/2025_07_01, 3-tracking/tracking_config.yaml (modified 2025-10-07) sets final_3d_tracks_df to 3-tracking/barlow_tracker/df_barlow_tracks.h5, a Barlow tracker output from 2025-07-18 (next to its embedding.zarr and worm_tracker_barlow_full.pickle). Hybrid loading fills final_tracks from the NWB only when it is None, so _load_project_gt scores against those tracker tracks, filtered to the finished neurons, not against the NWB GT. Fits the 89.7% seg-id agreement. Not checked whether df_barlow_tracks.h5 was manually corrected. Flavell project's NWB is copied in (nwb/flavell_data.nwb, relative path in nwb_config); samuel's config has the same relative form but the copy is missing.
+
+## 2026-10-28 16:43 — decision
+
+Samuel projects: switched round_posonly_samuel to samuel_data/projects/153 (user's call). It passes the sweep preflight: 98 neurons x 1331 frames, metadata for all frames, nwb/153.nwb byte-identical to samuel_data/153.nwb, project GT identical to the NWB GT. 2025_07_30_gt_traces lacks its NWB copy (no GT); projects/137 (= 137.nwb, 92 neurons x 1326 frames) has GT but no 1-segmentation/metadata.pickle, so it cannot train as is. Earlier rounds (round_bayes_samuel, initial_position_embedding_samuel) trained on 2025_07_30_gt_traces: same recording, its own segmentation metadata (14.30 MB vs 14.37 MB in projects/153), not checked for equality.

@@ -66,8 +66,8 @@ LABS = {
 
 
 def log_result(rec, results_path=None):
-    with open(results_path or RESULTS, 'a') as f:
-        f.write(json.dumps(rec) + '\n')
+    from barlow_track.utils.utils_ground_truth import append_record
+    append_record(results_path or RESULTS, rec)  # locked: a benchmark may be deduplicating
     print(json.dumps(rec, indent=1))
 
 
@@ -821,6 +821,7 @@ def run_eval(args):
                 with open(cfg_path) as f:
                     train_config = yaml.safe_load(f)
         rec = dict(lab=args.lab, mode=mode, seed=args.seed, n_frames=n_frames,
+                   max_frames=getattr(args, 'max_frames', None),
                    source=args.source,
                    project=project_path if args.source == 'project' else None,
                    gt=gt_path,

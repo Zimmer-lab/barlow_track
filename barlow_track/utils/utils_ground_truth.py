@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -220,19 +221,51 @@ def record_tag(trial_parent_dir, trial_num, dataset_label):
     return f"{parent}_trial{trial_num}_{dataset_label}"
 
 
-def read_results_by_tag(results_jsonl):
-    """tag -> latest record, from a shared results jsonl ({} if there is none).
+# Record fields that change the number a cell reports. A tag names (round, trial,
+# dataset) only, so two records under one tag can be different measurements: the
+# in-sweep objective (source project, project GT) and the benchmark (NWB GT), a
+# --max_frames smoke run and the full run, or two descriptor stages. Readers that
+# decide "already done" or "latest wins" compare these as well as the tag.
+RECORD_SETTINGS = ('source', 'gt', 'descriptor_stage', 'cluster', 'num_seeds', 'seed',
+                   'center_per_volume', 'l2_per_volume', 'nwb_objects', 'max_frames')
 
-    The single reader for the files whose tags record_tag defines; both writers
-    (see record_tag) resume from it, so they cannot disagree on which cells are
-    done. Latest wins: a rerun overwrites a tag rather than accumulating
-    duplicates. Junk lines (a kill mid-write) are skipped instead of failing the
-    whole resume -- the safe direction, since a dropped cell is re-run, never
-    misread.
+
+def _setting_value(rec, key):
+    """A record's (or a request's) value for one RECORD_SETTINGS key, normalized.
+
+    Records written before a field existed get the value the code then implied:
+    max_frames None (full video), nwb_objects 'gt' on the NWB source.
     """
-    latest = {}
+    if key == 'nwb_objects' and rec.get('nwb_objects') is None:
+        return 'gt' if rec.get('source') == 'nwb' else None
+    v = rec.get(key)
+    if key == 'gt' and isinstance(v, str):
+        v = os.path.normpath(v)
+        if os.path.basename(v) == 'project_config.yaml':
+            v = os.path.dirname(v)
+    if isinstance(v, bool):
+        return bool(v)
+    return v
+
+
+def record_settings(rec):
+    """Hashable tuple of a record's RECORD_SETTINGS values (see _setting_value)."""
+    return tuple(_setting_value(rec, k) for k in RECORD_SETTINGS)
+
+
+def settings_match(rec, settings):
+    """True when rec agrees with every key given in settings (a dict of RECORD_SETTINGS).
+
+    Records from before gt was recorded match any gt: their source still separates
+    the in-sweep project-GT cells from the benchmark's NWB cells.
+    """
+    return all(_setting_value(rec, k) == _setting_value(settings, k) for k in settings
+               if not (k == 'gt' and rec.get('gt') is None))
+
+
+def _iter_records(results_jsonl):
     if not os.path.isfile(results_jsonl):
-        return latest
+        return
     with open(results_jsonl) as f:
         for line in f:
             line = line.strip()
@@ -242,10 +275,74 @@ def read_results_by_tag(results_jsonl):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            tag = rec.get('tag') if isinstance(rec, dict) else None
-            if tag is not None:
-                latest[tag] = rec
+            if isinstance(rec, dict):
+                yield rec
+
+
+def read_results_by_tag(results_jsonl, settings=None):
+    """tag -> latest record, from a shared results jsonl ({} if there is none).
+
+    The single reader for the files whose tags record_tag defines; both writers
+    (see record_tag) resume from it, so they cannot disagree on which cells are
+    done. Latest wins: a rerun overwrites a tag rather than accumulating
+    duplicates. With settings (a dict of RECORD_SETTINGS keys), only records
+    measured that way count, so a cell scored differently is not "done". Junk
+    lines (a kill mid-write) are skipped instead of failing the whole resume --
+    the safe direction, since a dropped cell is re-run, never misread.
+    """
+    latest = {}
+    for rec in _iter_records(results_jsonl):
+        tag = rec.get('tag')
+        if tag is not None and (settings is None or settings_match(rec, settings)):
+            latest[tag] = rec
     return latest
+
+
+@contextlib.contextmanager
+def locked_results(results_jsonl):
+    """Exclusive lock on a results jsonl (a sidecar .lock file) for append or rewrite.
+
+    In-sweep jobs append while a benchmark may rewrite the file to deduplicate it;
+    without the lock a line appended between the rewrite's read and write is lost.
+    """
+    import fcntl
+    os.makedirs(os.path.dirname(os.path.abspath(results_jsonl)), exist_ok=True)
+    with open(f"{results_jsonl}.lock", 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def append_record(results_jsonl, rec):
+    with locked_results(results_jsonl):
+        with open(results_jsonl, 'a') as f:
+            f.write(json.dumps(rec) + '\n')
+
+
+def deduplicate_results(results_jsonl):
+    """Collapse to the latest record per (tag, settings), in place; returns (before, after).
+
+    Tagless lines are malformed and kept untouched. Records of one tag measured
+    differently (record_settings) are different cells and are all kept.
+    """
+    with locked_results(results_jsonl):
+        records = list(_iter_records(results_jsonl))
+        latest, untagged = {}, []
+        for rec in records:
+            if rec.get('tag') is None:
+                untagged.append(rec)
+            else:
+                latest[(rec['tag'], record_settings(rec))] = rec
+        merged = list(latest.values()) + untagged
+        if len(merged) != len(records):
+            tmp = f"{results_jsonl}.tmp"
+            with open(tmp, 'w') as f:
+                for rec in merged:
+                    f.write(json.dumps(rec) + '\n')
+            os.replace(tmp, results_jsonl)
+    return len(records), len(merged)
 
 
 def extract_val_from_json(trial_path, key='val_loss'):

@@ -33,7 +33,7 @@ import sys
 # Tag scheme shared with the in-sweep objective (scripts/optimize_hyperparameters.py):
 # both write into one results jsonl that both deduplicate by tag, so the two must
 # agree exactly or a finished cell gets evaluated twice.
-from barlow_track.utils.utils_ground_truth import read_results_by_tag, record_tag
+from barlow_track.utils.utils_ground_truth import deduplicate_results, read_results_by_tag, record_tag, settings_match
 
 EVAL_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "eval_accuracy.py")
@@ -138,13 +138,30 @@ def parse_args():
     return parser.parse_args()
 
 
-def recorded_tags(path):
+def recorded_tags(path, settings=None):
     """Tags already present in a results file (empty if there is none).
 
     The skip/resume decision for a whole (trial, dataset) cell. Reads through
     the same reader as the sweep's resume, so the two agree on what is done.
+    With settings, only records measured that way count (see requested_settings).
     """
-    return set(read_results_by_tag(path))
+    return set(read_results_by_tag(path, settings=settings))
+
+
+def requested_settings(lab, args):
+    """RECORD_SETTINGS of the cell this run would write for dataset lab.
+
+    A record under the same tag but measured differently (the in-sweep objective's
+    project GT, a --max_frames smoke run, another descriptor stage) is not this cell.
+    """
+    spec = DATASETS[lab]
+    nwb = spec["source"] == "nwb"
+    return dict(source=spec["source"],
+                gt=spec["nwb"] if nwb else os.path.join(spec["gt"], "project_config.yaml"),
+                descriptor_stage=args.descriptor_stage if args.mode == "trained" else None,
+                cluster=args.cluster, num_seeds=args.num_seeds, seed=0,
+                center_per_volume=bool(args.center_per_volume), l2_per_volume=bool(args.l2_per_volume),
+                nwb_objects="gt" if nwb else None, max_frames=args.max_frames)
 
 
 def check_device(device_str):
@@ -361,9 +378,9 @@ def main():
         # Untrained reference baselines: one run per dataset, no checkpoint.
         trial_jobs = [(lab, None, f"untrained_{args.mode}_{lab}", None) for lab in labs]
     if not args.rerun_completed:
-        done = recorded_tags(results_jsonl)
+        done = {lab: recorded_tags(results_jsonl, requested_settings(lab, args)) for lab in labs}
         before = len(trial_jobs)
-        trial_jobs = [t for t in trial_jobs if t[2] not in done]
+        trial_jobs = [t for t in trial_jobs if t[2] not in done[t[0]]]
         skipped = before - len(trial_jobs)
         if skipped:
             print(f"Skipping {skipped}/{before} evaluations already recorded "
@@ -425,25 +442,16 @@ def main():
         records = []
     if records:
         # Overwrite, don't accumulate: reruns append duplicates (workers share
-        # one file), so collapse to the latest record per tag in place.
-        # Tagless lines are malformed; keep them untouched, never merged.
-        latest = {}
-        untagged = []
-        for rec in records:
-            if rec.get("tag") is None:
-                untagged.append(rec)
-            else:
-                latest[rec["tag"]] = rec
-        merged = list(latest.values()) + untagged
-        if len(merged) != len(records):
-            with open(results_jsonl, "w") as f:
-                for rec in merged:
-                    f.write(json.dumps(rec) + "\n")
-            print(f"Deduplicated {results_jsonl}: {len(records)} -> {len(merged)} records")
-            records = merged
+        # one file), so collapse to the latest record per (tag, settings) in place.
+        before, after = deduplicate_results(results_jsonl)
+        if after != before:
+            print(f"Deduplicated {results_jsonl}: {before} -> {after} records")
+            with open(results_jsonl) as f:
+                records = [json.loads(line) for line in f if line.strip()]
     run_records = []
     for lab, trial_num, tag in tags:
-        matches = [r for r in records if r.get("tag") == tag]
+        matches = [r for r in records if r.get("tag") == tag
+                   and settings_match(r, requested_settings(lab, args))]
         rec = matches[-1] if matches else None
         if rec is None:
             print(f"{lab:<14}{trial_num:<8}{'MISSING':<10}")

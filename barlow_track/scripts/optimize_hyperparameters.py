@@ -237,6 +237,19 @@ def resolve_objective(hyperparameter_args):
     return objective, dataset_label, eval_kwargs
 
 
+def objective_record_settings(eval_kwargs, baseline_params):
+    """RECORD_SETTINGS of the records this sweep's objective writes (see utils_ground_truth).
+
+    measure_tracking_accuracy scores against the trial's own project, so gt is project_path.
+    """
+    return dict(source=eval_kwargs['source'], gt=baseline_params.get('project_path'),
+                descriptor_stage=eval_kwargs['descriptor_stage'], cluster=eval_kwargs['cluster'],
+                num_seeds=eval_kwargs['num_seeds'], seed=eval_kwargs['seed'],
+                center_per_volume=eval_kwargs['center_per_volume'],
+                l2_per_volume=eval_kwargs['l2_per_volume'], max_frames=eval_kwargs['max_frames'],
+                nwb_objects='gt' if eval_kwargs['source'] == 'nwb' else None)
+
+
 def measure_tracking_accuracy(args, test_losses, parent_folder, dataset_label, objective,
                               results_jsonl, emb_dir, eval_kwargs):
     """Full-video tracking accuracy of one trial's checkpoint, on its own project.
@@ -560,7 +573,11 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     finished_prior_configs = []
     if len(prior_trials) > 0:
         logging.info(f"Discovered {len(prior_trials)} prior trials, loading...")
-        accuracy_by_tag = read_results_by_tag(results_jsonl) if accuracy_objective else {}
+        # Only records measured as this sweep measures (its project GT, settings, full
+        # video) resume a trial; a benchmark record under the same tag is another cell.
+        accuracy_by_tag = read_results_by_tag(
+            results_jsonl, settings=objective_record_settings(objective_kwargs, baseline_params)
+        ) if accuracy_objective else {}
         for trial_num in prior_trials:
             trial_name = f"trial_{trial_num}"
             trial_path = os.path.join(experiment_parent_folder, trial_name)

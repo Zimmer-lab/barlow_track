@@ -1046,3 +1046,7 @@ Samuel double-check (subagent; barlow_track@32fb862:barlow_track/scripts/scratch
 ## 2026-10-28 18:36 — result
 
 Samuel check, tracker swap: round_bayes_samuel trial 0's cached 153 embeddings (NWB GT objects) tracked with --cluster global score 0.705 vs 0.951 with labelprop-25. Network and detections fixed, so the paper-era 70-80% on Samuel is the tracker.
+
+## 2026-10-28 18:40 — result
+
+Samuel check: the paper-era harvard_153_flip trial_8, re-tracked from cached 153 embeddings with --cluster global, scores 0.804, reproducing its stored paper-era tracks (0.805). With labelprop-25 it scores 0.949. round_bayes_samuel trial 0: 0.951 labelprop, 0.705 global. Today's eval reproduces the paper-era Samuel number once the old tracker is used; label propagation lifts both networks to ~0.95 (oracle GT-only detections throughout).

@@ -752,3 +752,27 @@ i261027-1 judged from r261027-665732: frozen view pairs are not what holds the p
 Two runs from one script (barlow_track@61894ab round_centers_check.sh): (1) comparator paper_flavell_use_position auto re-embedded with --round_crop_centers (training crops at rounded centroids, the eval truncates; legacy truncates in both), tracked on CPU, vs 0.795 truncated. (2) Once the reaug backbone eval frees the GPU, the legacy-matched bisection (barlow_track@b3f816b): position data path with image features only, preprint per-crop transforms, no global volume affine, no crop-centre jitter or dropout, re-drawn views; backbone eval vs NWB GT. Near 0.95 puts the gap in the position pipeline's geometric augmentation (global affine, jitter); near 0.80 in the rest of its data path. About 23 h.
 
 run r261027-808962 · pids 808962 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/round_centers_check/run.log, /home/charles/.cache/barlow_scratch/train/paper_flavell_position_pipeline_legacy_matched/run.log · for [[QUE - Which part of the position pipeline costs Flavell accuracy, its augmentation or its position fusion]]
+
+## 2026-10-28 01:53 — run
+
+r261027-665732 backbone: re-augmenting use_position cell at epoch 32 scores 0.481 backbone (frozen comparator 0.756). Both stages fall with re-augmentation (fused -14, backbone -28 points).
+
+## 2026-10-28 01:53 — run
+
+Legacy-matched training started by r261027-808962 at 01:04 (bash run.sh pid 838680; trains then evals backbone). Epoch 0 proxy 0.482 (auto = backbone here), above every earlier position run's epoch 0 (0.39-0.43); legacy final checkpoint scores 0.600.
+
+run r261028-838680 · pids 838680 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_position_pipeline_legacy_matched/run.log · for [[QUE - Which part of the position pipeline costs Flavell accuracy, its augmentation or its position fusion]]
+
+## 2026-10-28 01:54 — surprise
+
+r261028-838680 epoch 0: val loss 0.0043, the legacy pipeline's starting level (0.0044) and a tenth of every position run's (0.036-0.045), so the position runs' 'hard' views come from what this run removes (global volume affine, crop-centre jitter, dropout), not from the crop path itself. 7 s/step: about 25 h for 50 epochs.
+
+## 2026-10-28 02:52 — run
+
+r261027-808962: comparator paper_flavell_use_position auto embedded at rounded crop centres (as it trained) scores 0.814 on Flavell NWB GT, against 0.795 at the truncated centres the project-path eval uses by default (+1.9 points, same checkpoint, 25 seeds). A real eval-side mismatch for position networks, but a small part of the ~15-point gap. Legacy networks train and eval at truncated centres, so the default suits them; a legacy control with --round_crop_centers is not run (it needs the GPU the legacy-matched training holds).
+
+- [ ] Rescore position-pipeline Flavell cells with --round_crop_centers, and run the legacy control, before quoting position-vs-legacy gaps
+
+## 2026-10-28 02:52 — run
+
+r261028-838680 epochs 0-2: val loss 0.0043, 0.0030, 0.0022 (falling, as legacy's does; every position run's rose after a few epochs), proxy 0.482, 0.496, 0.504.

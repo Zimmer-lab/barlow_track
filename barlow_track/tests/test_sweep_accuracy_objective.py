@@ -599,3 +599,28 @@ def test_slurm_walltime_reaches_submitit_as_integer_minutes():
     src = inspect.getsource(oh.optimize_hyperparameters)
     assert 'slurm_time=' not in src  # submitit multiplies its timeout by 60: a string breaks it
     assert 'timeout_min=job_minutes' in src
+
+
+def test_embedding_cache_of_another_project_under_the_same_label_is_re_embedded(tmp_path):
+    """One lab label can name two projects (samuel: 2025_07_30_gt_traces, then 153);
+    caches keyed before the data path was stored still hit."""
+    import json
+    from types import SimpleNamespace
+    w = tmp_path / 'resnet50.pth'
+    w.write_bytes(b'checkpoint')
+    key = lambda project: ea._embedding_cache_key(
+        SimpleNamespace(source='project', weights=str(w), project=project))
+    emb = str(tmp_path / 'emb.npz')
+    ea._save_embeddings(emb, X=np.zeros((4, 3), dtype=np.float32),
+                        time_to_lin={0: [0, 1], 1: [2, 3]}, lin_to_t_seg={}, n_frames=2,
+                        cache_key=key('/data/samuel/2025_07_30_gt_traces/project_config.yaml'))
+    assert key('/data/samuel/153/project_config.yaml') == key('/data/samuel/153/')
+    assert ea._load_cached_embeddings(emb, 2, key('/data/samuel/2025_07_30_gt_traces/')) is not None
+    assert ea._load_cached_embeddings(emb, 2, key('/data/samuel/153/project_config.yaml')) is None
+    # A key from before data/version were stored: same checkpoint and source still hits
+    legacy = json.loads(key('/x'))
+    legacy.pop('data'), legacy.pop('version')
+    ea._save_embeddings(emb, X=np.zeros((4, 3), dtype=np.float32),
+                        time_to_lin={0: [0, 1], 1: [2, 3]}, lin_to_t_seg={}, n_frames=2,
+                        cache_key=json.dumps(legacy, sort_keys=True))
+    assert ea._load_cached_embeddings(emb, 2, key('/data/samuel/153/project_config.yaml')) is not None

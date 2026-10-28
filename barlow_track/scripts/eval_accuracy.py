@@ -845,6 +845,7 @@ def run_eval(args):
                    descriptor_stage=args.descriptor_stage if mode == 'trained' else None,
                    center_per_volume=bool(args.center_per_volume),
                    l2_per_volume=bool(args.l2_per_volume),
+                   partial_load=getattr(tmodel, 'partial_load', None) if mode == 'trained' else None,
                    svd=getattr(args, 'svd', 'scaled'),
                    gt_matching=getattr(args, 'gt_matching', 'nandist'),
                    crop_window=(getattr(args, 'crop_window', 'pad') if device.type == 'cuda' else 'cpu'),
@@ -869,13 +870,23 @@ def run_eval(args):
     return records
 
 
+# Bump when a code change alters the embeddings of an unchanged checkpoint and data;
+# caches stored without the field count as version 1.
+EMBEDDING_CACHE_VERSION = 1
+
+
 def _embedding_cache_key(args):
     """What a cache must have been embedded from to be reused: the checkpoint's
-    content (sha1, so a copied checkpoint still hits) and the data source.
-    The file name only carries lab, mode and tag, which a retrain into the
-    same trial folder keeps."""
+    content (sha1, so a copied checkpoint still hits), the data source and the
+    data it read (one lab label can name two projects), and the code version.
+    The file name only carries lab, mode, tag and the embedding settings, which a
+    retrain into the same trial folder keeps."""
     import hashlib
-    key = dict(source=args.source)
+    key = dict(source=args.source, version=EMBEDDING_CACHE_VERSION)
+    data = getattr(args, 'nwb', None) if args.source == 'nwb' else getattr(args, 'project', None)
+    if data:
+        data = os.path.normpath(os.path.abspath(data))
+        key['data'] = os.path.dirname(data) if os.path.basename(data) == 'project_config.yaml' else data
     weights = getattr(args, 'weights', None)
     if weights and os.path.isfile(weights):
         h = hashlib.sha1()
@@ -884,6 +895,17 @@ def _embedding_cache_key(args):
                 h.update(chunk)
         key['weights_sha1'] = h.hexdigest()
     return json.dumps(key, sort_keys=True)
+
+
+def _cache_keys_agree(stored, expected):
+    """Keys agree when every field both carry is equal; a field the stored key lacks
+    (written before it was keyed) is not compared, except version (missing = 1)."""
+    try:
+        stored_d, expected_d = json.loads(stored), json.loads(expected)
+    except (TypeError, ValueError):
+        return stored == expected
+    stored_d.setdefault('version', 1)
+    return all(stored_d[k] == v for k, v in expected_d.items() if k in stored_d)
 
 
 def _load_cached_embeddings(emb_path, expected_n_frames=None, expected_key=None):
@@ -916,7 +938,7 @@ def _load_cached_embeddings(emb_path, expected_n_frames=None, expected_key=None)
         print(f"ignoring embedding cache {emb_path}: covers {n_frames} frames, "
               f"this run evaluates {expected_n_frames}; re-embedding", flush=True)
         return None
-    if expected_key is not None and cache_key is not None and cache_key != expected_key:
+    if expected_key is not None and cache_key is not None and not _cache_keys_agree(cache_key, expected_key):
         print(f"ignoring embedding cache {emb_path}: embedded from {cache_key}, this run "
               f"needs {expected_key}; re-embedding", flush=True)
         return None

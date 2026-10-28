@@ -3,6 +3,7 @@ import concurrent.futures
 import gc
 from operator import is_
 from pathlib import Path
+import os
 import re
 import numpy as np
 import torch
@@ -528,6 +529,21 @@ def compare_model_architecture(expected_args, pretrained_args):
             _get_arg(pretrained_args, 'position_encoder', 'keypoint_mlp')
         if curr_pe != pre_pe:
             mismatches.append(f"position_encoder: config={curr_pe!r} vs checkpoint={pre_pe!r}")
+        if 'visnet' in (curr_pe, pre_pe):
+            # The encoder is built from the checkpoint's args; the config's would be saved with
+            # the fine-tuned weights and rebuild a different encoder at the next load.
+            # Defaults as in BarlowWithPosition.
+            def _visnet_arg(args, field, default, cast):
+                v = _get_arg(args, field, None)
+                v = default if v is None else v
+                return None if v is None else cast(v)
+            for field, default, cast in (('visnet_hidden', 64, int), ('visnet_layers', 3, int),
+                                         ('visnet_cutoff', 0.35, float), ('visnet_neighbors', 32, int),
+                                         ('visnet_cutoff_nn', None, float), ('visnet_rbf_rescale', False, bool)):
+                curr = _visnet_arg(expected_args, field, default, cast)
+                pre = _visnet_arg(pretrained_args, field, default, cast)
+                if curr != pre:
+                    mismatches.append(f"{field}: config={curr!r} vs checkpoint={pre!r}")
     if exp_type == 'attention' or pre_type == 'attention':
         curr_s, pre_s = int(_get_arg(expected_args, 'self_layers', 2)), \
             int(_get_arg(pretrained_args, 'self_layers', 2))
@@ -620,10 +636,13 @@ def load_barlow_model(model_fname, expected_args=None):
         model.load_state_dict(state_dict)
     except RuntimeError as e:
         # Backward compat: checkpoints predating gated attention (attn_gate,
-        # norm_context) and the LayerNorm-terminated fusion MLP have missing
-        # keys only. Load what matches and keep fresh inits for the rest
-        # (gate starts near-identity by design, so old weights behave like
-        # the old model on load). Checkpoints predating the projector
+        # norm_context; 34eee07) and the LayerNorm-terminated fusion MLP have missing
+        # keys only. Load what matches and keep fresh inits for the rest. The model is
+        # then NOT the trained one: the old attention returned its output directly,
+        # while a fresh gate (sigmoid(-4) ~= 0.02) keeps ~2% of it, so contextual
+        # descriptors are close to the fused ones. model.partial_load lists the keys
+        # left at init (eval_accuracy records it); BARLOW_STRICT_LOAD=1 refuses
+        # such checkpoints instead. Checkpoints predating the projector
         # BatchNorm->LayerNorm switch additionally carry stale BN buffers
         # (running_mean/var); those are ignored with a warning. BN affine
         # weight/bias share key names and shapes with the new LayerNorm and
@@ -640,7 +659,8 @@ def load_barlow_model(model_fname, expected_args=None):
             stale_bn = [u for u in unexpected
                         if u.startswith('projector.') and u.endswith(allowed_stale_suffixes)]
             unexpected = [u for u in unexpected if u not in stale_bn]
-            if unexpected or any(not m.startswith(allowed_prefixes) for m in missing):
+            strict_env = os.environ.get('BARLOW_STRICT_LOAD') == '1'
+            if unexpected or (missing and strict_env) or any(not m.startswith(allowed_prefixes) for m in missing):
                 raise RuntimeError(
                     f"Could not load weights from {model_fname} into a '{model_type}' model "
                     f"(embedding_dim={getattr(args, 'embedding_dim', '?')}). "
@@ -648,9 +668,11 @@ def load_barlow_model(model_fname, expected_args=None):
                     f"or train from scratch with pretrained_model_path set to null. "
                     f"Original error: {e}"
                 ) from e
-            logging.warning(f"Checkpoint {model_fname} predates gated attention / "
-                            f"LayerNorm fusion MLP; {len(missing)} new params "
-                            f"kept at init: {sorted(missing)}")
+            model.partial_load = sorted(missing) or None
+            if missing:
+                logging.warning(f"Checkpoint {model_fname} predates gated attention / "
+                                f"LayerNorm fusion MLP; {len(missing)} new params kept at init, so "
+                                f"the loaded model differs from the trained one: {sorted(missing)}")
             if stale_bn:
                 logging.warning(f"Checkpoint {model_fname} predates the projector "
                                 f"BatchNorm->LayerNorm switch; {len(stale_bn)} stale "

@@ -33,9 +33,11 @@ come from the untransformed volume at the original centroids, so the image views
 by the per-crop transforms. With `fusion: visual_only`, the descriptor is the backbone output
 (the position branch is built but unused), so the `auto` stage equals `backbone`.
 
-Code: barlow_track@8ae7898 (flags, default off) and d02573b (dotted sweep names). Training
-should take about 25 h per job; the legacy per-crop elastic transform on CPU dominates
-(7 s/step locally). That is inside the 36 h training budget.
+Code: barlow_track@8ae7898 (flags, default off), d02573b (dotted sweep names) and the commit
+adding `train_hours`. The legacy per-crop transforms (CPU, elastic) dominate the run time: about
+25 h locally and 37-41 h on the cluster for 50 epochs. In round_flavell_paper_ablation, legacy
+trials 2, 8 and 9 hit the 41 h walltime at epochs 38-48 and saved nothing. So this round sets
+`train_hours: 60`, a 65 h job with the eval.
 
 ## Launch (cluster)
 

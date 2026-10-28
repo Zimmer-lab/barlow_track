@@ -99,17 +99,23 @@ class ConsecutiveFailureGuard:
         return 0 < self.max_failures <= self.streak
 
 
-def job_budget_minutes(epochs, objective_minutes=0):
+def job_budget_minutes(epochs, objective_minutes=0, train_hours=None):
     """Walltime of one trial's job: training, plus the objective eval if any.
 
     Training gets the same budget under both objectives (about 100 epochs per
     day, plus half a day of headroom), so an accuracy trial is never cut short
     in training where a loss trial would have finished. The eval budget is
     added on top, with an hour of headroom; objective_minutes=0 means the loss
-    objective, which has no eval.
+    objective, which has no eval. train_hours (template key) replaces the
+    training budget for rounds slower than ~100 epochs a day: the legacy
+    per-crop transforms run ~45 min an epoch on the cluster, so 50 epochs hit
+    the default 36 h (round_flavell_paper_ablation trials 2, 8, 9).
     """
-    num_days = int(epochs / 100) + 1
-    train_minutes = num_days * 24 * 60 + 12 * 60
+    if train_hours:
+        train_minutes = int(round(float(train_hours) * 60))
+    else:
+        num_days = int(epochs / 100) + 1
+        train_minutes = num_days * 24 * 60 + 12 * 60
     eval_minutes = objective_minutes + 60 if objective_minutes else 0
     return train_minutes + eval_minutes
 
@@ -624,10 +630,15 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         logging.warning("objective_minutes not set in the template; assuming 240 min for the "
                         "full-video tracking eval. Measure one trial and set it explicitly "
                         "(leifer-scale videos need hours, not minutes).")
-    job_minutes = job_budget_minutes(baseline_params['epochs'], objective_minutes)
+    job_minutes = job_budget_minutes(baseline_params['epochs'], objective_minutes,
+                                     train_hours=hyperparameter_args.get('train_hours'))
+    print(f"Each job's walltime: {slurm_duration(job_minutes)}")
+    # timeout_min (an int) is also what slurm's --time comes from. A string
+    # slurm_time, as passed before, reached submitit's timeout handler, which
+    # crashed multiplying it ("can't multiply sequence by non-int of type
+    # 'float'") instead of exiting cleanly at the walltime.
     executor.update_parameters(timeout_min=job_minutes)
     if not run_locally:
-        executor.update_parameters(slurm_time=slurm_duration(job_minutes))
         executor.update_parameters(cpus_per_task=8)
         executor.update_parameters(slurm_mem="128G")
         executor.update_parameters(slurm_job_name=job_name if job_name is not None else "barlow_hyperparameter_search")

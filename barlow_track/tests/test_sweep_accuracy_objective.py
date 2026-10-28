@@ -587,3 +587,15 @@ def test_resumed_grid_matches_dotted_names_against_nested_configs():
     priors = [{'global_augment': {'apply_to_volume': True, 'max_degrees_z': 180.0}, 'fusion': 'add', 'seed': 43},
               {'global_augment': {'max_degrees_z': 180.0}, 'fusion': 'add', 'seed': 43}]  # flag absent: no match
     assert oh.completed_grid_jobs(plan, seeds, priors, 43) == {3}
+
+
+def test_train_hours_replaces_the_training_budget():
+    assert oh.job_budget_minutes(50, objective_minutes=240, train_hours=60) == 60 * 60 + 240 + 60
+    assert oh.job_budget_minutes(50, objective_minutes=240, train_hours=None) == oh.job_budget_minutes(50, 240)
+
+
+def test_slurm_walltime_reaches_submitit_as_integer_minutes():
+    import inspect
+    src = inspect.getsource(oh.optimize_hyperparameters)
+    assert 'slurm_time=' not in src  # submitit multiplies its timeout by 60: a string breaks it
+    assert 'timeout_min=job_minutes' in src

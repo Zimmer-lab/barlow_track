@@ -961,9 +961,9 @@ Code review findings on the evaluation: (a) GT-to-prediction column matching (wb
 
 Other code-review findings, not yet affecting recorded results: production tracking (track_using_barlow embed_using_barlow) runs model.backbone only, so fused/ViSNet checkpoints track image-only through wbfm; track_using_barlow overwrites a project's final_3d_tracks_df with tracker output (root cause of i261028-3); production dask SVD whitens (u[:, :50]) while eval uses TruncatedSVD U*S; pretrained_model_path copies config args over the checkpoint's (visnet_* not compared); load_barlow_model strict=False leaves fuse_mlp/attn_gate at init for old checkpoints; embedding cache key lacks data path and code version. Unread config keys in the current rounds: training_fraction (code reads train_fraction), p_RandomNoise_base; batch_size is fixed to 1.
 
-- [ ] Production tracking: embed fused/ViSNet checkpoints with the eval's stage selection, not backbone only
-- [ ] Stop track_using_barlow overwriting final_3d_tracks_df on GT projects
-- [ ] Put source, stage, max_frames and crop flags into record tags (or check them before skipping)
+- [x] Production tracking: embed fused/ViSNet checkpoints with the eval's stage selection, not backbone only
+- [x] Stop track_using_barlow overwriting final_3d_tracks_df on GT projects
+- [x] Put source, stage, max_frames and crop flags into record tags (or check them before skipping)
 - [ ] GT-valid-frames-only column matching in the eval; measure its effect on zimmer project cells
 - [ ] Consider --nwb_objects all for flavell/samuel benchmark cells of position networks
 
@@ -974,3 +974,61 @@ Fast local position-only loop (barlow_track@86eedc1, 9943f40): keypoints_only (d
 ## 2026-10-28 17:36
 
 r261028-3159902 first cell: round_bayes_samuel trial 0 on samuel (153.nwb, nwb_objects gt) scores 0.9508 at descriptor_stage backbone vs 0.9503 recorded fused: its (distance-blind) position branch adds nothing on Samuel. User recalls 75-80% on Samuel in the preprint era; a subagent is checking recordings and detection sets (oracle GT-only candidates vs all detections).
+
+## 2026-10-28 17:36 — run
+
+Local fast batch 1 (barlow_track@eee490f): posonly_fast batch1.sh, Zimmer position-only, 15 epochs keypoints_only: unfixed encoder reference + rbf_rescale x cutoff_nn {0,3,6,12} x elastic {0,1}; proxy per epoch. Direction finding ahead of round_posonly on the cluster.
+
+run r261028-3190461 · pids 3190461 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch1.log
+
+## 2026-10-28 17:49 — surprise
+
+posonly_fast batch1 (r261028-3190461): the frame-pair proxy failed in every cell so far: the keypoints_only proxy also requested the 'backbone' stage, which cannot run on placeholder crops, and training's except swallowed it. Fixed in f4be66f (keypoints_only scores 'auto' only; val_matching refuses 'backbone' loudly). Cells from b1_nn3_el1.0 onward started before or after the fix; the first four (rbf_off, nn0 x2, nn3_el0) have val loss only and need rerunning for the proxy.
+
+- [ ] Rerun posonly_fast batch1 cells b1_rbf_off, b1_nn0_el0.0, b1_nn0_el1.0, b1_nn3_el0.0 (and nn3_el1.0 if it started before f4be66f) for the proxy
+
+## 2026-10-28 17:49 — decision
+
+Review finding #1 fixed in 3cb571a: production tracking (track_using_barlow) embeds position checkpoints as eval --mode trained does when the tracking config sets descriptor_stage (unset keeps the legacy backbone path, with a warning). final_3d_tracks_df is no longer lost: the replaced path goes to final_3d_tracks_df_history, and protect_final_3d_tracks_df: true leaves it unchanged. Defaults keep current behaviour.
+
+## 2026-10-28 18:02 — run
+
+eval --gt_matching gt_valid and --svd whiten vs the defaults on cached Samuel 153 backbone embeddings (round_bayes_samuel trial 0, round_visnet_full trial 27), CPU tracking; measures how much review findings #2 and #4 move a score (barlow_track@230c297:barlow_track/scripts/scratch/svd_gt_matching_check/run.sh)
+
+run r261028-3231600 · pids 3231600 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/runs/svd_gt_matching_check/run.log
+
+## 2026-10-28 18:02 — result
+
+r261028-3159902 partial: Samuel 153 (nwb, gt objects), backbone vs auto. round_bayes_samuel trial 0: backbone 0.9508, auto (add fusion) 0.9425 (cluster record 0.9503 at auto; local vs cluster differ by 0.8 pt, not chased). round_visnet_full trial 27 (trained on Zimmer, concat + 2 self layers): backbone 0.9489, auto (contextual) 0.8371, so the position and attention head costs 11 pt when transferred to Samuel while its image backbone transfers fine. Zimmer_1128 cells OOM'd in GPU label propagation next to batch1 training (both stages); rerun with --track_device cpu. Leifer still running.
+
+## 2026-10-28 18:02 — done
+
+3cb571a: tracking config descriptor_stage (opt-in; unset warns for position checkpoints)
+
+Done: Production tracking: embed fused/ViSNet checkpoints with the eval's stage selection, not backbone only
+
+## 2026-10-28 18:02 — done
+
+3cb571a: replaced path kept in final_3d_tracks_df_history; protect_final_3d_tracks_df opt-in
+
+Done: Stop track_using_barlow overwriting final_3d_tracks_df on GT projects
+
+## 2026-10-28 18:02 — done
+
+b98330d: resume/skip/dedup by tag and RECORD_SETTINGS; 482dcfb adds svd and gt_matching; crop_window/round_crop_centers are still only in the file name and record, not the settings
+
+Done: Put source, stage, max_frames and crop flags into record tags (or check them before skipping)
+
+## 2026-10-28 18:02 — decision
+
+Review findings #7-#9 and unread config keys fixed: 4290d19 (visnet args compared as architecture; pre-gating attention checkpoints load with ~2% of their attention, now recorded as partial_load in eval records, BARLOW_STRICT_LOAD=1 refuses; embedding cache key gains the data path and a version, compared field by field so existing caches still hit) and 1ceded4 (training warns about training_fraction, p_RandomNoise_base, batch_size != 1). #2/#4 as opt-in eval options in 482dcfb (--svd whiten, --gt_matching gt_valid; production svd_whiten), measured by r261028-3231600. Left alone: #6 (--nwb_objects all exists, opt-in), #10 (legacy bbox-midpoint crop centres, num_frames+1).
+
+## 2026-10-28 18:07 — result
+
+r261028-3190461 (batch1) ended. Proxy (frame-pair matching, 30 held-out Zimmer frames, position-only ViSNet, RBF fix, 15 epochs keypoints_only): cutoff_nn 6 / elastic 0: 0.380; 6/1: 0.342; 12/0: 0.343; 12/1: 0.292. Still rising at epoch 14 in every cell (not converged). Elastic costs 4-5 pt on the proxy; nn6 > nn12. The rbf_off, nn0 and nn3 cells lost their proxy (f4be66f) and are rerun in batch1b.
+
+## 2026-10-28 18:07 — run
+
+posonly_fast batch1b: rerun batch1's proxy-less cells (rbf_off reference, cutoff_nn 0 and 3 x elastic 0/1) with the fixed proxy (barlow_track@cdd5761:barlow_track/scripts/scratch/posonly_fast/batch1b.sh)
+
+run r261028-3236040 · pids 3236040 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch1b.log

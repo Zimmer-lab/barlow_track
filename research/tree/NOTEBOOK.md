@@ -782,3 +782,7 @@ r261028-838680 epochs 0-2: val loss 0.0043, 0.0030, 0.0022 (falling, as legacy's
 Early eval of r261028-838680 (barlow_track@2683e5c eval_partial.sh 12): waits for the epoch-12 checkpoint (~07:30), then scores its backbone at truncated and rounded crop centres on Flavell NWB GT. Against the image-only position run's 0.819 (truncated) and legacy's 0.956.
 
 run r261028-3899580 · pids 3899580 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/paper_flavell_position_pipeline_legacy_matched/eval_partial.log
+
+## 2026-10-28 05:48 — decision
+
+For cluster runs (user offered to launch today): new flags, default off, barlow_track@8ae7898: crop_augment legacy (preprint per-crop view transforms in the position pipeline), global_augment.apply_to_volume false (affine, elastic, jitter, dropout move only the keypoints; crops from the untransformed volume; answers the user's point that per-crop transforms never move positions, which is why global augmentation was introduced), fusion visual_only (replaces the scratch monkeypatch). d02573b lets sweeps name nested keys (global_augment.apply_to_volume). Staged round_flavell_legacy_crop_aug (barlow_track/scripts/scratch/round_flavell_legacy_crop_aug): fusion {visual_only, add} x apply_to_volume {false, true}, 3 seeds, 12 jobs, objective accuracy on flavell; README has launch and NWB-GT rescore (truncated and rounded centres).

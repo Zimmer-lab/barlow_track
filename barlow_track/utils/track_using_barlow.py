@@ -166,7 +166,9 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
         model.eval()
 
         # Embed using the model
-        all_embeddings = embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space, DEBUG=DEBUG)
+        descriptor_stage = project_config.get_tracking_config().config.get('descriptor_stage', None)
+        all_embeddings = embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space, DEBUG=DEBUG,
+                                            descriptor_stage=descriptor_stage)
 
         linear_ind_to_gt_ind, linear_ind_to_t_and_seg_id, time_index_to_linear_feature_indices, X = build_embedding_metadata(
             all_embeddings, project_data)
@@ -286,8 +288,7 @@ def cluster_embeddings_from_config(project_config: ModularProjectConfig,
         # Also update the project config file to point to this new h5 file
         fname_local = project_config.unresolve_absolute_path(fname)
         tracking_config = project_config.get_tracking_config()
-        tracking_config.config['final_3d_tracks_df'] = fname_local
-        tracking_config.update_self_on_disk()
+        _point_final_tracks_at(tracking_config, fname_local, project_config.logger)
 
     if to_plot_relative_accuracy or DEBUG:
         plot_relative_accuracy(df_combined, project_data, results_subfolder_full)
@@ -424,7 +425,9 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
         model.eval()
 
         # Embed using the model
-        all_embeddings = embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space, DEBUG=DEBUG)
+        descriptor_stage = project_config.get_tracking_config().config.get('descriptor_stage', None)
+        all_embeddings = embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space, DEBUG=DEBUG,
+                                            descriptor_stage=descriptor_stage)
 
         linear_ind_to_gt_ind, linear_ind_to_t_and_seg_id, time_index_to_linear_feature_indices, X = build_embedding_metadata(
             all_embeddings, project_data)
@@ -496,27 +499,64 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
         # Also update the project config file to point to this new h5 file
         fname_local = project_config.unresolve_absolute_path(fname)
         tracking_config = project_config.get_tracking_config()
-        tracking_config.config['final_3d_tracks_df'] = fname_local
-        tracking_config.update_self_on_disk()
+        _point_final_tracks_at(tracking_config, fname_local, project_config.logger)
 
     if to_plot_relative_accuracy or DEBUG:
         plot_relative_accuracy(df_combined, project_data, results_subfolder_full)
 
 
-def embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space, DEBUG=False):
+def _point_final_tracks_at(tracking_config, fname_local, logger):
+    """Point final_3d_tracks_df at the new tracker output, keeping every path it replaces.
+
+    The replaced path is appended to final_3d_tracks_df_history, so a project whose
+    final_3d_tracks_df named its ground truth can be restored (Flavell 2025_07_01 lost it this way).
+    protect_final_3d_tracks_df: true in the tracking config leaves final_3d_tracks_df unchanged.
+    """
+    cfg = tracking_config.config
+    old = cfg.get('final_3d_tracks_df', None)
+    if old == fname_local:
+        return
+    if cfg.get('protect_final_3d_tracks_df', False):
+        logger.warning(f"protect_final_3d_tracks_df is set: final_3d_tracks_df stays {old}; "
+                       f"new tracks are in {fname_local}")
+        return
+    if old:
+        history = list(cfg.get('final_3d_tracks_df_history', None) or [])
+        if old not in history:
+            history.append(old)
+        cfg['final_3d_tracks_df_history'] = history
+        logger.warning(f"final_3d_tracks_df changes from {old} to {fname_local}; "
+                       f"the old path is kept in final_3d_tracks_df_history")
+    cfg['final_3d_tracks_df'] = fname_local
+    tracking_config.update_self_on_disk()
+
+
+def embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space, DEBUG=False,
+                       descriptor_stage=None):
     """
     Use a trained model to project a dataset into the latent space
 
     use_projection_space - if True, uses the post-projection head space; most SSL approaches discard the projector (i.e. set this to False)
+    descriptor_stage - None (default, legacy): per-crop backbone (or projector) only, which ignores a
+        position branch. Otherwise a stage of eval_accuracy's --descriptor_stage ('auto', 'backbone',
+        'fused', 'contextual', 'projected'): whole frames with keypoints, as eval_accuracy --mode trained
+        embeds them; 'auto' is what the recorded accuracies use. use_projection_space is then ignored.
     """
-    from barlow_track.utils.barlow import NeuronImageWithGTDataset
-    # NeuronImageWithGTDataset takes a frame COUNT (__len__ returns num_frames,
-    # __getitem__ allows 0..num_frames-1), so pass the full count to cover the
-    # last frame (index num_frames-1).
     num_frames = project_data.num_frames
     if DEBUG:
         num_frames = min(10, num_frames)
         logging.info(f"DEBUG mode: only embedding {num_frames} frames")
+    if descriptor_stage is not None:
+        return embed_frames_at_stage(gpu, model, project_data, target_sz, range(num_frames), descriptor_stage)
+    if hasattr(model, 'fused_descriptors'):
+        project_data.project_config.logger.warning(
+            f"{type(model).__name__} has a position branch, but descriptor_stage is unset, so only the "
+            f"image backbone is used; set descriptor_stage: auto in the tracking config to embed as "
+            f"eval_accuracy --mode trained does")
+    from barlow_track.utils.barlow import NeuronImageWithGTDataset
+    # NeuronImageWithGTDataset takes a frame COUNT (__len__ returns num_frames,
+    # __getitem__ allows 0..num_frames-1), so pass the full count to cover the
+    # last frame (index num_frames-1).
     dataset = NeuronImageWithGTDataset(project_data, num_frames, target_sz, include_untracked=True)
     logging.info(f"Using dataset: {dataset}")
     # names = dataset.which_neurons
@@ -550,6 +590,44 @@ def embed_using_barlow(gpu, model, project_data, target_sz, use_projection_space
 
     logging.info(f"Finished embedding {len(all_embeddings)} neurons")
 
+    return all_embeddings
+
+
+def embed_frames_at_stage(gpu, model, project_data, target_sz, frame_indices, descriptor_stage='auto'):
+    """Per-frame descriptors keyed like embed_using_barlow ({name: {t: (1, D)}}), computed as
+    eval_accuracy --mode trained does on a project: crops and keypoints of every object in the frame
+    (eval's CPU path: bbox crops, (5, 99.5) rescale, metadata centroids) in one forward through
+    _trained_stage_emb. Frames with fewer than 2 objects are skipped, as in eval."""
+    import torchio as tio
+    from barlow_track.scripts.eval_accuracy import _trained_stage_emb
+    from barlow_track.utils.data_loading import get_bbox_data_for_volume_with_label
+    from barlow_track.utils.volume_data import VolumeCoordsDataset
+
+    normalizer = tio.RescaleIntensity(percentiles=(5, 99.5))  # in sync with training and eval
+    vol_shape = tuple(project_data.red_data.shape[1:])
+    model.eval()
+    all_embeddings = defaultdict(dict)
+    project_data.project_config.logger.info(f"Embedding frames at descriptor stage '{descriptor_stage}'")
+    for t in tqdm(frame_indices):
+        t = int(t)
+        dat_d, _, _ = get_bbox_data_for_volume_with_label(project_data, t, target_sz=target_sz,
+                                                           include_untracked=True)
+        names = sorted(dat_d)
+        if len(names) < 2:
+            logging.warning(f"Skipping frame {t}: {len(names)} detections; leaving gap in embeddings")
+            continue
+        centroids, _, _ = get_bbox_data_for_volume_with_label(project_data, t, target_sz=target_sz,
+                                                              include_untracked=True, skip_crops=True)
+        # get_bbox_data_for_volume_with_label renames duplicate names '<name>_dupNN'
+        zxy = np.array([centroids.get(n, centroids.get(n.split('_dup')[0])) for n in names], dtype=np.float32)
+        crops = torch.from_numpy(np.stack([dat_d[n] for n in names]).astype(np.float32))
+        crops = normalizer(crops).unsqueeze(1).float()
+        kpts = VolumeCoordsDataset._normalize(torch.from_numpy(zxy), vol_shape)
+        with torch.no_grad():
+            emb = _trained_stage_emb(model, crops, kpts, descriptor_stage, gpu)
+        for n, e in zip(names, emb):
+            all_embeddings[n][t] = e[None]
+    logging.info(f"Finished embedding {len(all_embeddings)} neurons")
     return all_embeddings
 
 

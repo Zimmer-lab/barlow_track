@@ -68,6 +68,9 @@ def frame_pair_matching_accuracy(model, project_data, frames, target_sz, device,
     """
     import torchio as tio
     from barlow_track.scripts.eval_accuracy import _iter_project_frames, _trained_stage_emb
+    if keypoints_only and 'backbone' in stages:
+        # Placeholder crops have no image to embed; every stage would be lost with it
+        raise TypeError("keypoints_only frames carry no crops: drop the 'backbone' stage")
     normalizer = tio.RescaleIntensity(percentiles=(5, 99.5))  # in sync with training and eval
     was_training = model.training
     model.eval()

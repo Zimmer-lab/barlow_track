@@ -171,7 +171,8 @@ def train_barlow_network(args):
         from barlow_track.utils.val_matching import held_out_frames
         if use_position:
             used = data_module.alldata.frame_indices
-            match_stages = ('auto', 'backbone')
+            # keypoints_only has placeholder crops, so there is no image stage to score
+            match_stages = ('auto',) if _keypoints_only(args) else ('auto', 'backbone')
         else:
             used = data_module.selected_frames
             match_stages = ('backbone',)

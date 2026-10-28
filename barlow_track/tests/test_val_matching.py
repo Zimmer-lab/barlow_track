@@ -31,3 +31,13 @@ def test_keypoint_proxy_embeds_metadata_centroids_without_volumes(monkeypatch):
     want = vd.VolumeCoordsDataset._normalize(torch.from_numpy(pts[0].astype(np.float32)), (8, 40, 40))
     assert torch.equal(f['kpts'], want) and f['crops'].shape == (2, 1, 1, 1, 1)
     assert [seg for _, seg in f['meta']] == [7, 8]
+
+
+def test_keypoint_proxy_refuses_the_image_stage():
+    # batch1 of posonly_fast lost its whole proxy to a 'backbone' stage on placeholder crops,
+    # swallowed by training's except; refuse it before embedding anything
+    import pytest
+    from barlow_track.utils.val_matching import frame_pair_matching_accuracy
+    with pytest.raises(TypeError, match='backbone'):
+        frame_pair_matching_accuracy(None, None, [0, 1], (2, 4, 4), 'cpu', stages=('auto', 'backbone'),
+                                     keypoints_only=True)

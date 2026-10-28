@@ -108,6 +108,9 @@ def parse_args():
                              "(re-scores existing checkpoints for mean pollution)")
     parser.add_argument("--l2_per_volume", action="store_true",
                         help="Row-wise L2-normalize descriptors before tracking")
+    parser.add_argument("--track_device", choices=["embed_device", "cpu", "cuda"], default=None,
+                        help="eval_accuracy --track_device (default: not passed, i.e. the embed device); "
+                             "cpu avoids OOM in full-video label propagation on a shared GPU")
     parser.add_argument("--svd", choices=["scaled", "whiten"], default="scaled",
                         help="eval_accuracy --svd (default scaled, every recorded score)")
     parser.add_argument("--gt_matching", choices=["nandist", "gt_valid"], default="nandist",
@@ -348,6 +351,8 @@ def build_eval_cmd(lab, tag, weights, args, results_jsonl, emb_dir):
         cmd += ["--center_per_volume"]
     if args.l2_per_volume:
         cmd += ["--l2_per_volume"]
+    if getattr(args, "track_device", None):
+        cmd += ["--track_device", args.track_device]
     if getattr(args, "svd", "scaled") != "scaled":
         cmd += ["--svd", args.svd]
     if getattr(args, "gt_matching", "nandist") != "nandist":

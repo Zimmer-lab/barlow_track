@@ -985,7 +985,7 @@ run r261028-3190461 · pids 3190461 · host charles-Precision-7820-Tower · logs
 
 posonly_fast batch1 (r261028-3190461): the frame-pair proxy failed in every cell so far: the keypoints_only proxy also requested the 'backbone' stage, which cannot run on placeholder crops, and training's except swallowed it. Fixed in f4be66f (keypoints_only scores 'auto' only; val_matching refuses 'backbone' loudly). Cells from b1_nn3_el1.0 onward started before or after the fix; the first four (rbf_off, nn0 x2, nn3_el0) have val loss only and need rerunning for the proxy.
 
-- [ ] Rerun posonly_fast batch1 cells b1_rbf_off, b1_nn0_el0.0, b1_nn0_el1.0, b1_nn3_el0.0 (and nn3_el1.0 if it started before f4be66f) for the proxy
+- [x] Rerun posonly_fast batch1 cells b1_rbf_off, b1_nn0_el0.0, b1_nn0_el1.0, b1_nn3_el0.0 (and nn3_el1.0 if it started before f4be66f) for the proxy
 
 ## 2026-10-28 17:49 — decision
 
@@ -1072,3 +1072,23 @@ r261028-3231600 done: whitened SVD (production's path) costs both networks on Sa
 ## 2026-10-28 20:37 — run
 
 Samuel per recording (labelprop-25, oracle detections): bayes0 153 0.951 / 137 0.848 / 184-004 0.913; paper-era trial 8 153 0.949 / 137 0.807 (184-004 running); image baseline 153 0.821 / 137 0.641. 137 is the hard recording for every embedding; bayes0 beats paper-era there by 4 pt and image by 21 pt. r261028-3286550 partial.
+
+## 2026-10-28 20:40 — run
+
+r261028-3236040 done (batch 1b, Zimmer position-only, 15 ep, final proxy): rbf_off 0.242 and nn0 0.381/0.400 reproduce batch 1; cutoff_nn 3 is worst, el0 0.200 / el1 0.203 (cutoff = 3 NN spacings leaves too few neighbours). Ranking: nn0 (fixed cutoff 0.35) >= nn6 > nn12 > nn3. Every cell still rising at epoch 14.
+
+## 2026-10-28 20:40 — done
+
+batch 1b rerun gave proxies for every cell; nn0 el1 best (0.400)
+
+Done: Rerun posonly_fast batch1 cells b1_rbf_off, b1_nn0_el0.0, b1_nn0_el1.0, b1_nn3_el0.0 (and nn3_el1.0 if it started before f4be66f) for the proxy
+
+## 2026-10-28 20:40 — run
+
+r261028-3159902 Leifer done: trial 27 backbone 0.958, auto 0.972. Auto (fused) helps on Leifer by 1.4 pt but costs 11 pt on Samuel (0.949 -> 0.837); bayes0 on Samuel backbone 0.951 / auto 0.943. Zimmer cells OOM'd; CPU-tracking rerun staged.
+
+## 2026-10-28 20:40 — run
+
+Batch 2: best position-only cell (cutoff_nn 0, elastic 1.0, RBF fix on) at 60 epochs with full-video zimmer_1128 eval (--eval), queued behind the Samuel follow-up queue (r261028-3286550). Asks whether the proxy keeps rising past epoch 14 and what accuracy a 0.40-proxy network tracks at. Code 095e9e2.
+
+run r261028-3310541 · pids 3310541 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/b2_nn0_el1.0_ep60.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]

@@ -37,7 +37,7 @@ Code: barlow_track@8ae7898 (flags, default off), d02573b (dotted sweep names) an
 adding `train_hours`. The legacy per-crop transforms (CPU, elastic) dominate the run time: about
 25 h locally and 37-41 h on the cluster for 50 epochs. In round_flavell_paper_ablation, legacy
 trials 2, 8 and 9 hit the 41 h walltime at epochs 38-48 and saved nothing. So this round sets
-`train_hours: 60`, a 65 h job with the eval.
+`train_hours: 96`, a 101 h job with the eval (weeklong jobs are fine on this cluster).
 
 ## Launch (cluster)
 

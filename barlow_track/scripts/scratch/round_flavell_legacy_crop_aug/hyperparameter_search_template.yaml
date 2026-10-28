@@ -17,8 +17,8 @@ objective_dataset: flavell
 objective_minutes: 240
 # The legacy per-crop transforms run ~45 min an epoch on the cluster: 50 epochs took 37-41 h
 # in round_flavell_paper_ablation, and trials 2, 8, 9 hit its 41 h walltime at epochs 38-48.
-# 60 h of training + 5 h of eval = a 65 h job.
-train_hours: 60
+# 96 h of training + 5 h of eval: weeklong jobs are fine on this cluster, so leave headroom for slow nodes.
+train_hours: 96
 
 hyperparameters:
   - name: fusion

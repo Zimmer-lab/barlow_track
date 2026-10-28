@@ -42,11 +42,7 @@ def proxy_curve(run_dir):
     stats = run_dir / 'log' / 'stats.json'
     if not stats.exists():
         return rows
-    for line in stats.read_text().splitlines():
-        try:
-            d = json.loads(line)
-        except ValueError:
-            continue
+    for d in json.loads(stats.read_text()):  # one JSON list of records
         if 'val_loss' in d and 'val_val_match_accuracy_auto' in d:
             rows.append((d['epoch'], d['val_val_match_accuracy_auto'], d.get('val_val_fused_eff_rank'),
                          d['val_loss'], d.get('time')))

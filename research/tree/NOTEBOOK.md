@@ -889,3 +889,7 @@ round_flavell_legacy_crop_aug: user cancelled the four add cells (jobs 7747888/8
 ## 2026-10-28 16:09 — run
 
 round_posonly_zimmer early read (16:10): position-only trains fast, 50 epochs in 0.5-0.7 h. First three cells, all rbf_rescale false: trial 0 (cutoff_nn 0, elastic off) proxy 0.30 at epoch 49, effective rank 32; trial 1 (cutoff_nn 0, elastic on) 0.23, rank 36; trial 2 (cutoff_nn 3, elastic off) 0.09, rank 2-3, stuck from epoch 0 (the expected blind control, and the same ~2 dims as the fused Flavell position branches). So the unfixed encoder at absolute radius 0.35 still learns something on Zimmer. 13 Zimmer and 10 Flavell jobs submitted; round_posonly_samuel has no trials or submissions yet. Accuracy evals still to come.
+
+## 2026-10-28 16:28 — decision
+
+round_posonly_samuel did not launch: the accuracy objective's preflight found no GT in samuel_data/projects/2025_07_30_gt_traces (samuel GT is only in 153.nwb; earlier samuel rounds used objective: loss). Switched the template to objective: loss; trials are scored afterwards with run_trials_on_all_ground_truth.py --labs samuel (NWB), as every earlier samuel number was.

@@ -821,7 +821,7 @@ run r261028-2940337 · pids 2940337 · host charles-Precision-7820-Tower · logs
 
 Cross-dataset check of the user's model (2026-10-28), from the cluster exp_results.jsonl of every round, latest record per tag. (1) Global augmentation weakens image features only on Flavell: consistent but not checked directly. Best fused ViSNet position networks reach the preprint on Zimmer (0.970, round_visnet_full trial27, vs 0.973) and Leifer (0.972 vs 0.974); the only image-only position-pipeline records are round_2x2 (keypoint-MLP era, trained on Zimmer: Zimmer 0.79-0.89, Leifer 0.92-0.95, Samuel 0.89-0.92). On Flavell the tuned round_flavell_more_epochs trial27 reaches 0.915 backbone / 0.927 fused against 0.952, so the local preprint-config runs (0.79-0.82) are the extreme case. (2) Position helps on Samuel: not shown matched. Best Samuel: ViSNet fused 0.950 (round_bayes_samuel, trained on Samuel), keypoint-MLP 0.942 (round_bayes_zimmer trial27, trained on Zimmer), image-only 0.921 (round_2x2). Within round_2x2 (same era and training data) position on 0.894-0.925 vs off 0.888-0.921. Flavell rows before the NWB fix are capped by i261026-1 and were ignored.
 
-- [ ] Rescore the best Zimmer, Leifer and Samuel position networks at descriptor_stage backbone (cluster) to check whether global augmentation costs image features off Flavell
+- [x] Rescore the best Zimmer, Leifer and Samuel position networks at descriptor_stage backbone (cluster) to check whether global augmentation costs image features off Flavell
 - [ ] Find why the ViSNet position branch learns about 2 effective dimensions (cutoff 0.35 vs a narrow worm, lmax 1, add fusion scale)
 
 ## 2026-10-28 11:16 — issue
@@ -923,3 +923,54 @@ i261028-3 check against NaN filtering (user's question; flavell_gt_identity.py @
 ## 2026-10-28 17:06
 
 i261028-3, which GT the paper loaded (user asked). Paper notebooks (barlow_track/notebooks/paper): fig_ground_truth (Fig. 3 Flavell accuracy), fig_ground_truth_accuracy_vs_val_loss and fig_ground_truth_plot_training_data_sweep all use gt = images_for_charlie/flavell_data.nwb; the 2025_07_01 project path is there only commented out. So the preprint's Flavell numbers are against real GT. Exception: fig_ground_truth_generalization (Fig. 3h) takes each analyzed project's remote project as GT; for zimmer/ and leifer/baseline_generalization_flavell_2025_07_01 (made 2025-10-10, after the 2025-10-07 config change) that is projects/2025_07_01, i.e. the tracker file, so the Zimmer->Flavell and Leifer->Flavell cells on 2025_07_01 were likely scored against tracker output. The 4 forCharlie_2 projects resolve to their own NWB GT. Training in every sweep (paper TrainedBarlow and revision rounds) uses 2025_07_01, which reads no tracks. CORRECTION to the 16:47 entry (flavell_gt_identity.py @97d324b): the tracks file's raw_segmentation_id equals images_for_charlie's on 100% of agreeing entries, but the project's own NWB copy's on 0.6%. So images_for_charlie is in the project's mask-id space and the copy is not: setting final_3d_tracks_df: null would load GT with the wrong ids. The fix is to make the project's GT the images_for_charlie NWB (nwb_config or replace the copy), not to null the tracks.
+
+## 2026-10-28 17:11 — run
+
+Local GPU: backbone vs auto rescore of the best existing fused ViSNet networks off Flavell (barlow_track@c81c641:barlow_track/scripts/scratch/backbone_rescore_off_flavell/run.sh): round_visnet_full trial27 on zimmer_1128, samuel, leifer and round_bayes_samuel trial0 on samuel, both stages with the same code and GT, local jsonl/emb cache only. Answers the 2026-10-28 to-do (does global augmentation cost image features off Flavell, and does the blind position branch add anything there). Leifer cells last (hours).
+
+run r261028-3159902 · pids 3159902 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/runs/backbone_rescore_off_flavell/run.log
+
+## 2026-10-28 17:11 — done
+
+running locally instead (see the run entry of 2026-10-28 evening)
+
+Done: Rescore the best Zimmer, Leifer and Samuel position networks at descriptor_stage backbone (cluster) to check whether global augmentation costs image features off Flavell
+
+## 2026-10-28 17:11 — todo
+
+Flavell GT follow-ups (i261028-3), left open by the user's choice; the user wants paper figures off notebooks anyway.
+
+- [ ] Rescore the Fig. 3h Zimmer->Flavell and Leifer->Flavell cells on 2025_07_01 against images_for_charlie/flavell_data.nwb
+- [ ] Make 2025_07_01's GT the images_for_charlie NWB (its own nwb/ copy has different segmentation ids), so --source project and the in-job objective score against GT
+- [ ] Find out why the 2025_07_01 nwb/ copy's raw_segmentation_id differs from images_for_charlie's
+- [ ] Move the paper's accuracy figures from notebooks into committed scripts
+
+## 2026-10-28 17:36 — issue
+
+Code review (subagent, read-only, 2026-10-28) findings that bear on recorded numbers: (a) record tags are only <round>_trial<N>_<label>, so resume/skip treats any record as done: a --max_frames smoke run poisons the later full run, a benchmark run skips flavell/samuel cells already written by the in-sweep objective (source project, project GT) under the same tag as the NWB-source benchmark cell (all 81 flavell records in round_flavell, round_flavell_more_epochs, round_flavell_paper_ablation are source project), and a --rerun_completed with another descriptor_stage deletes the other stage's record. (b) The benchmark's NWB path defaults to --nwb_objects gt: only GT neurons are candidates (oracle detections, no distractors); for position networks the ViSNet neighbourhoods at eval are also not the trained ones (flavell ~155 GT neurons vs ~188 detections).
+
+- [ ] issue i261028-4 · affects [[@BarlowTrack revision benchmark sweeps]]
+
+## 2026-10-28 17:36 — issue
+
+Code review findings on the evaluation: (a) GT-to-prediction column matching (wbfm calc_bipartite_from_ids via rename_columns_using_matching, eval_accuracy.py:801) counts 'GT NaN, prediction present' as a mismatch, so it prefers sparse predicted columns; affects --source project cells where the tracker labels every detection (zimmer 1128: 16 of 131 GT neurons under 90% coverage) and --nwb_objects all; synthetic case 0.50 instead of 1.00, real effect unmeasured. (b) Local runs used the compiled torch_cluster radius_graph (arbitrary subset when capped at max_num_neighbors) while the cluster uses the pure-torch nearest-k fallback: different ViSNet graphs for cluster-trained checkpoints rescored locally (synthetic flavell-like box: 3,784 of 5,758 edges differ). Fixed for new runs in barlow_track@86eedc1 (fallback everywhere, BARLOW_COMPILED_RADIUS_GRAPH=1 to opt out); local ViSNet results before that used the compiled graph.
+
+- [ ] issue i261028-5 · affects [[@BarlowTrack revision accuracy evaluation]]
+
+## 2026-10-28 17:36 — todo
+
+Other code-review findings, not yet affecting recorded results: production tracking (track_using_barlow embed_using_barlow) runs model.backbone only, so fused/ViSNet checkpoints track image-only through wbfm; track_using_barlow overwrites a project's final_3d_tracks_df with tracker output (root cause of i261028-3); production dask SVD whitens (u[:, :50]) while eval uses TruncatedSVD U*S; pretrained_model_path copies config args over the checkpoint's (visnet_* not compared); load_barlow_model strict=False leaves fuse_mlp/attn_gate at init for old checkpoints; embedding cache key lacks data path and code version. Unread config keys in the current rounds: training_fraction (code reads train_fraction), p_RandomNoise_base; batch_size is fixed to 1.
+
+- [ ] Production tracking: embed fused/ViSNet checkpoints with the eval's stage selection, not backbone only
+- [ ] Stop track_using_barlow overwriting final_3d_tracks_df on GT projects
+- [ ] Put source, stage, max_frames and crop flags into record tags (or check them before skipping)
+- [ ] GT-valid-frames-only column matching in the eval; measure its effect on zimmer project cells
+- [ ] Consider --nwb_objects all for flavell/samuel benchmark cells of position networks
+
+## 2026-10-28 17:36 — run
+
+Fast local position-only loop (barlow_track@86eedc1, 9943f40): keypoints_only (default off) skips volumes and crops in VolumeCoordsDataset and the frame-pair proxy; get_centroids_for_volume reads segmentation_metadata[t] directly (wbfm's accessor re-scans all frames per call, 2.3 s/frame on Zimmer; identical output on Zimmer/Flavell/Samuel, scratch/check_fast_centroids.py). scratch/posonly_fast/posonly_fast.py runs one cell. Smoke (3 epochs, rbf_rescale on, Zimmer updated-format project): 1 min 47 s, proxy 0.22/0.25/0.27 at epochs 0-2 vs 0.07/0.08/0.09 for the unfixed cluster cell round_posonly_zimmer trial 0. Cluster round_posonly_zimmer so far (unfixed encoder): trial 0 (radius 0.35, elastic off) 0.583, trial 1 (elastic on) 0.449, trial 2 (3 NN) 0.130 tracking accuracy; rbf_rescale cells still queued.
+
+## 2026-10-28 17:36
+
+r261028-3159902 first cell: round_bayes_samuel trial 0 on samuel (153.nwb, nwb_objects gt) scores 0.9508 at descriptor_stage backbone vs 0.9503 recorded fused: its (distance-blind) position branch adds nothing on Samuel. User recalls 75-80% on Samuel in the preprint era; a subagent is checking recordings and detection sets (oracle GT-only candidates vs all detections).

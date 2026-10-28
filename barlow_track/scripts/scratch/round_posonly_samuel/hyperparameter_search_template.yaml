@@ -11,9 +11,12 @@
 # Run with: python optimize_hyperparameters.py -p <this file> --direct_parameter_sweep --repetitions 1
 baseline_params_path: null
 
-objective: accuracy
-objective_dataset: samuel
-objective_minutes: 240
+# Not objective: accuracy. The in-job objective scores against the training project's own GT,
+# and the samuel project has none: its GT is only in samuel_data/153.nwb. Train on the loss
+# objective (a direct grid, so nothing is selected on it), then score every trial with
+#   run_trials_on_all_ground_truth.py --trial_parent_dir <round> --all --labs samuel --slurm --no_fail_fast
+# which reads 153.nwb, like every earlier samuel score.
+objective: loss
 # Position-only training skips the backbone but still loads volumes and crops; give it room.
 train_hours: 48
 

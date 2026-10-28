@@ -52,6 +52,16 @@ for D in zimmer flavell samuel; do
 done
 ```
 
+Samuel trains on the loss objective: the sweep's accuracy objective scores against the training
+project's own GT, and the samuel project has none (its GT is only in `samuel_data/153.nwb`; the
+first launch stopped at the preflight). Once its trials have checkpoints, score them as every
+earlier samuel number was scored:
+
+```bash
+python barlow_track/scripts/multiproject_scripts/run_trials_on_all_ground_truth.py \
+    --trial_parent_dir $B/round_posonly_samuel --all --labs samuel --device cuda --slurm --no_fail_fast
+```
+
 ## Reading it
 
 - **rbf_rescale true well above false:** the RBF scale was what kept the position branch

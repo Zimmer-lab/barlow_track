@@ -46,8 +46,9 @@ def main():
     ap.add_argument('--tol', type=float, default=2.0, help='voxels')
     args = ap.parse_args()
 
-    na, ta, A = xyz(load(args.a))
-    nb, tb, B = xyz(load(args.b))
+    df_a, df_b = load(args.a), load(args.b)
+    na, ta, A = xyz(df_a)
+    nb, tb, B = xyz(df_b)
     tb_pos = {t: i for i, t in enumerate(tb)}
     rows = [(i, tb_pos[t + args.offset]) for i, t in enumerate(ta) if t + args.offset in tb_pos]
     ia, ib = map(np.array, zip(*rows))
@@ -91,6 +92,14 @@ def main():
         if m.any():
             print(f'  {name}: A sits within {args.tol} voxels of some other B neuron in '
                   f'{np.mean(nearest[m] < args.tol):.3f} of these')
+    # Same segmentation id space? Accuracy is scored by raw_segmentation_id, so a GT whose
+    # ids are not the project's mask ids cannot score project tracks even at equal positions.
+    def ids(df, names):
+        s = df.loc[:, (names, 'raw_segmentation_id')].droplevel(1, axis=1)[names]
+        return s.to_numpy(dtype=float)
+    sid_a = ids(df_a, [na[i] for i in ra[paired]])[ia]
+    sid_b = ids(df_b, [nb[i] for i in rb[paired]])[ib]
+    print(f'raw_segmentation_id equal on agreeing entries: {np.mean(sid_a[agree] == sid_b[agree]):.4f}')
     # Unpaired A neurons: tracks with no B counterpart
     print(f'unpaired A neurons {int((~paired).sum())} with {int(np.isfinite(A[:, ra[~paired], 0]).sum())} entries')
 

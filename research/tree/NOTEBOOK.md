@@ -1050,3 +1050,17 @@ Samuel check, tracker swap: round_bayes_samuel trial 0's cached 153 embeddings (
 ## 2026-10-28 18:40 — result
 
 Samuel check: the paper-era harvard_153_flip trial_8, re-tracked from cached 153 embeddings with --cluster global, scores 0.804, reproducing its stored paper-era tracks (0.805). With labelprop-25 it scores 0.949. round_bayes_samuel trial 0: 0.951 labelprop, 0.705 global. Today's eval reproduces the paper-era Samuel number once the old tracker is used; label propagation lifts both networks to ~0.95 (oracle GT-only detections throughout).
+
+## 2026-10-28 19:47 — decision
+
+Samuel results so far (labelprop-25, oracle detections, round_bayes_samuel trial 0): 153 0.951, 137 0.848; image baseline on 153 0.821. --nwb_objects all on 153 0.898 is not comparable: 76% of GT positions sit off a mask centroid and are left out of the GT. --source project on 153 crashed (NaN centroid in _centroid_boxes). Checked with h5py: every Samuel NWB segmentation, plain and thresholded, holds only GT neurons (labels per frame <= GT count); thresholded_segmentation/185-005.nwb will not open (bad object header version). User: no avoiding GT-only segmentation on these data.
+
+## 2026-10-28 19:47 — run
+
+Samuel follow-up queue: paper-era trial 8 on 137 and 184-004, image baseline on 184-004, after the first queue ends (d2c59c3), to see whether the recording-to-recording spread is the network or the recording
+
+run r261028-3286550 · pids 3286550 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/runs/samuel_check/queue_more.log
+
+## 2026-10-28 19:47 — run
+
+r261028-3231600 partial (Samuel 153, backbone embeddings): gt_valid matching equals nandist on both networks (0.9508, 0.9484), as expected with GT-only segmentation. Whitened SVD (production's path) costs bayes0 1.4 pt (0.9508 -> 0.9365); trial 27 whiten cell still running.

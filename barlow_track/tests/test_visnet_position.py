@@ -79,3 +79,24 @@ def test_cutoff_nn_default_off_and_wired_from_args():
     assert default.cutoff_nn is None and not default.rbf_rescale
     model = BarlowWithPosition(SimpleNamespace(**base, visnet_cutoff_nn=3, visnet_rbf_rescale=True), **kw)
     assert model.visnet_enc.cutoff_nn == 3.0 and model.visnet_enc.rbf_rescale
+
+
+def test_radius_graph_keeps_the_nearest_neighbours_like_the_cluster():
+    # The cluster has no torch-cluster and uses the pure-torch fallback (nearest
+    # max_num_neighbors within r); where the compiled package exists it must be
+    # replaced, or capped neighbourhoods differ between local and cluster runs.
+    from torch_geometric.nn import radius_graph
+    from barlow_track.utils.barlow_superglue import _pure_torch_radius_graph
+    x = torch.rand(120, 3, generator=torch.Generator().manual_seed(0))  # every node capped
+    got = radius_graph(x, r=0.35, max_num_neighbors=8)
+    want = _pure_torch_radius_graph(x, 0.35, None, False, 8)
+    as_set = lambda e: set(map(tuple, e.t().tolist()))
+    assert as_set(got) == as_set(want)
+    d = torch.cdist(x, x)
+    for i in range(5):
+        nbrs = got[0][got[1] == i] if got.shape[1] else got[0]
+        others = d[i].clone()
+        others[i] = float('inf')
+        within = int((others <= 0.35).sum())
+        assert set(nbrs.tolist()) == set(others.topk(min(8, within), largest=False).indices.tolist())
+    assert (torch.bincount(got[1], minlength=len(x)) == 8).sum() > 60  # mostly capped

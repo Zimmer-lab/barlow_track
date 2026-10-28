@@ -87,13 +87,24 @@ def _ensure_radius_graph():
     exists once its __init__ has run past its own typing import). With the
     stub in place, pyg's lazy `import torch_cluster` resolves to the
     pure-torch implementation and everything downstream behaves.
-    No-op when the compiled package exists.
+    Where the compiled package exists, its radius_graph is replaced by the same
+    pure-torch one (unless BARLOW_COMPILED_RADIUS_GRAPH=1): once a node has more
+    than max_num_neighbors within the radius, the compiled kernel keeps an
+    arbitrary subset while the fallback keeps the nearest, so local runs built
+    different ViSNet graphs from the cluster (no torch-cluster) that trained
+    every checkpoint. pyg looks the function up on the module at call time, so
+    patching the attribute works whoever imported pyg first.
     """
+    import os
     try:
-        import torch_cluster  # noqa: F401
-        return False
+        import torch_cluster
     except ImportError:
-        pass
+        torch_cluster = None
+    if torch_cluster is not None:
+        if os.environ.get('BARLOW_COMPILED_RADIUS_GRAPH') == '1':
+            return False
+        torch_cluster.radius_graph = _pure_torch_radius_graph
+        return True
     import sys
     import types
     stub = types.ModuleType('torch_cluster')

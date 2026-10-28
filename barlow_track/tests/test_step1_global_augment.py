@@ -224,6 +224,40 @@ def test_keypoint_only_global_augment_leaves_crops_at_the_original_centroids(mon
     assert not torch.allclose(k1, k0, atol=1e-3) and not torch.allclose(k1, k2, atol=1e-3)
 
 
+def test_keypoints_only_skips_volumes_and_keeps_the_views(monkeypatch):
+    import barlow_track.utils.volume_data as vd
+    vol = 1.0 + np.random.RandomState(0).rand(8, 40, 40).astype(np.float32)
+    pts = np.array([[4.0, 12.0, 12.0], [4.0, 20.0, 28.0], [3.0, 28.0, 15.0], [4.0, 30.0, 30.0]])
+    monkeypatch.setattr(vd, 'get_centroids_for_volume', lambda project_data, t: (pts, np.arange(1, 5)))
+    project = type('P', (), {'red_data': np.zeros((5, *vol.shape), dtype=np.float32)})()
+    aug = dict(global_args=dict(max_degrees_z=180.0, scale_jitter=0.1, apply_to_volume=False,
+                                elastic_std=[0.5, 2.0, 2.0], elastic_length=10.0),
+               position_args=dict(jitter_std=1.0, dropout_p=0.3))
+    monkeypatch.setattr(vd, 'load_volume', lambda project_data, t: vol)
+    full = vd.VolumeCoordsDataset(project, [0], target_sz=(4, 16, 16), seed=0, **aug)[0]
+
+    def no_volume(project_data, t):
+        raise AssertionError("keypoints_only must not load volumes")
+    monkeypatch.setattr(vd, 'load_volume', no_volume)
+    fast = vd.VolumeCoordsDataset(project, [0], target_sz=(4, 16, 16), seed=0,
+                                  keypoints_only=True, **aug)[0]
+    # same keypoints and kept objects as the crop path; placeholder crops with the right N
+    for a, b in zip(full[2:], fast[2:]):
+        assert torch.equal(a, b)
+    assert fast[0].shape == (len(fast[4]), 1, 1, 1, 1) and fast[1].shape == (len(fast[5]), 1, 1, 1, 1)
+    with pytest.raises(ValueError, match="apply_to_volume"):
+        vd.VolumeCoordsDataset(project, [0], target_sz=(4, 16, 16), keypoints_only=True)
+
+
+def test_keypoints_only_is_refused_for_models_that_read_crops():
+    from types import SimpleNamespace
+    from barlow_track.scripts.train_barlow_clusterer import _keypoints_only
+    assert _keypoints_only(SimpleNamespace(fusion='add')) is False
+    assert _keypoints_only(SimpleNamespace(keypoints_only=True, fusion='position_only')) is True
+    with pytest.raises(ValueError, match="position_only"):
+        _keypoints_only(SimpleNamespace(keypoints_only=True, fusion='add'))
+
+
 def test_keypoint_only_global_augment_moves_points_like_the_volume_path():
     import barlow_track.utils.volume_data as vd
     vol = np.zeros((8, 40, 30), dtype=np.float32)

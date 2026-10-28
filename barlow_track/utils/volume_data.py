@@ -312,6 +312,31 @@ def sample_dropout_keep(n, rng, dropout_p=0.0, min_keep=2):
     return keep, np.where(keep)[0].astype(int)
 
 
+def _centroids_from_metadata_table(project_data, t):
+    """get_centroids_for_volume read straight from the per-frame metadata table, or None.
+
+    wbfm's get_all_neuron_metadata_for_single_time evaluates volumes_with_no_neurons, a
+    property that scans every frame, on each call (2.3 s a frame on Zimmer, so setup's
+    scan of all frames was quadratic). The centroids and labels are columns of
+    segmentation_metadata[t]; this returns the same arrays. None (use the wbfm call)
+    when the table is not in that form or has no frame t.
+    """
+    table = getattr(project_data.segmentation_metadata, 'segmentation_metadata', None)
+    if not isinstance(table, dict) or t not in table:
+        return None
+    df = table[t]
+    if not isinstance(df, pd.DataFrame) or not {'centroids', 'label'} <= set(df.columns):
+        return None
+    if len(df) == 0:
+        return np.zeros((0, 3)), np.zeros((0,), dtype=int)
+    zxy = np.array(df['centroids'].values.tolist(), dtype=float)
+    if zxy.ndim > 2:  # multiple channels: wbfm averages them
+        zxy = zxy.mean(axis=-1)
+    seg_ids = df['label'].to_numpy()
+    ok = ~np.isnan(zxy).any(axis=1)
+    return zxy[ok], seg_ids[ok].astype(int)
+
+
 def get_centroids_for_volume(project_data, t):
     """Centroids (z, x, y) + raw segmentation ids for one timepoint.
 
@@ -321,6 +346,9 @@ def get_centroids_for_volume(project_data, t):
     Volumes with no detections yield empty arrays (wbfm returns ([], []));
     callers treat these as skippable, mirroring the legacy empty-volume path.
     """
+    fast = _centroids_from_metadata_table(project_data, t)
+    if fast is not None:
+        return fast
     row_data, column_names = project_data.segmentation_metadata.get_all_neuron_metadata_for_single_time(
         t, as_dataframe=False)
     if len(column_names) == 0:
@@ -420,10 +448,21 @@ class VolumeCoordsDataset(Dataset):
 
     def __init__(self, project_data, frame_indices, target_sz,
                  global_args=None, photometric_args=None, position_args=None, seed=0, epoch=0,
-                 round_bounds=False, crop_augment='photometric', legacy_transform_args=None):
+                 round_bounds=False, crop_augment='photometric', legacy_transform_args=None,
+                 keypoints_only=False):
         self.project_data = project_data
         # in_bounds_mask(rounded=...): off by default so earlier runs reproduce
         self.round_bounds = bool(round_bounds)
+        # Position-only networks never read the crops: skip loading the volume and
+        # return (N, 1, 1, 1, 1) zero placeholders, so only N (the object count) is
+        # real. Keypoint augmentation draws exactly as with crops, so the views are
+        # unchanged. Needs apply_to_volume false (crops would follow the volume).
+        self.keypoints_only = bool(keypoints_only)
+        if self.keypoints_only and bool({**DEFAULT_GLOBAL_ARGS, **(global_args or {})}.get(
+                'apply_to_volume', True)):
+            raise ValueError("keypoints_only needs global_augment.apply_to_volume: false")
+        self._volume_shape = tuple(int(s) for s in project_data.red_data.shape[1:]) \
+            if self.keypoints_only else None
         self.frame_indices = list(frame_indices)
         self.target_sz = np.array(target_sz)
         self.global_args = {**DEFAULT_GLOBAL_ARGS, **(global_args or {})}
@@ -480,7 +519,10 @@ class VolumeCoordsDataset(Dataset):
 
     def __getitem__(self, idx):
         t = int(self.frame_indices[idx])
-        volume = load_volume(self.project_data, t)
+        # A shape-only stand-in when keypoints_only: _augmented_view reads only
+        # volume.shape on that path
+        volume = np.empty(self._volume_shape, dtype=np.float32) if self.keypoints_only \
+            else load_volume(self.project_data, t)
         points = self._centroids[idx].astype(float)
         np_seed, torch_seed = self._item_seeds(idx)
         # Fresh, index-specific RNGs (see class docstring): the two views still
@@ -529,6 +571,10 @@ class VolumeCoordsDataset(Dataset):
             f"dropped_bounds={n_raw - n_inbounds} kept_after_dropout={len(pts_kept)}"
         )
         crop_pts = pts_kept if to_volume else (points[keep_idx] if len(keep_idx) else points[:0])
+        if self.keypoints_only:
+            kpts = torch.from_numpy(np.asarray(pts_kept, dtype=np.float32))
+            return (torch.zeros((len(pts_kept), 1, 1, 1, 1)), self._normalize(kpts, vol_aug.shape),
+                    torch.as_tensor(np.asarray(keep_idx, dtype=np.int64)))
         crops = extract_crops(vol_aug, crop_pts, self.target_sz)
         # 4D (N,Z,X,Y) with N as the channel dim, exactly like the legacy
         # NeuronAugmentedImagePairDataset path (torchio Image convention)
@@ -610,9 +656,10 @@ class VolumeCoordsDataModule(LightningDataModule):
                  train_fraction=0.8, val_fraction=0.1, target_sz=(8, 64, 64),
                  global_args=None, photometric_args=None, position_args=None, seed=0,
                  num_workers=0, round_bounds=False, crop_augment='photometric',
-                 legacy_transform_args=None):
+                 legacy_transform_args=None, keypoints_only=False):
         super().__init__()
         self.round_bounds = bool(round_bounds)
+        self.keypoints_only = bool(keypoints_only)
         self.crop_augment = crop_augment
         self.legacy_transform_args = legacy_transform_args
         self.project_data = project_data
@@ -661,7 +708,8 @@ class VolumeCoordsDataModule(LightningDataModule):
                                       position_args=self.position_args, seed=self.seed,
                                       epoch=self._current_epoch(), round_bounds=self.round_bounds,
                                       crop_augment=self.crop_augment,
-                                      legacy_transform_args=self.legacy_transform_args)
+                                      legacy_transform_args=self.legacy_transform_args,
+                                      keypoints_only=self.keypoints_only)
         n = len(alldata)
         if n == 0:
             raise ValueError("VolumeCoordsDataModule.setup: no valid frames found")

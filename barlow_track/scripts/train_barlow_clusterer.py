@@ -24,6 +24,19 @@ from wbfm.utils.projects.finished_project_data import ProjectData
 from wbfm.utils.general.utils_filenames import get_sequential_filename
 
 
+def _keypoints_only(args):
+    """keypoints_only (default off): skip volumes and crops in the position data path.
+
+    Only position-only networks may set it; any other model would train on zero crops.
+    """
+    if not getattr(args, 'keypoints_only', False):
+        return False
+    if getattr(args, 'fusion', None) != 'position_only' or getattr(args, 'use_attention', False):
+        raise ValueError("keypoints_only needs fusion: position_only (and no attention): "
+                         "every other model reads the crops")
+    return True
+
+
 def train_barlow_network(args):
 
     # One seed for the whole run. seed_all is the entry-point fallback for code
@@ -62,7 +75,8 @@ def train_barlow_network(args):
             round_bounds=bool(getattr(args, 'round_crop_bounds', False)),
             # 'legacy': the preprint per-crop view transforms, from this config's p_* keys
             crop_augment=getattr(args, 'crop_augment', 'photometric') or 'photometric',
-            legacy_transform_args=vars(args))
+            legacy_transform_args=vars(args),
+            keypoints_only=_keypoints_only(args))
     else:
         data_module = NeuronCropImageDataModule(project_data=project_data1, num_frames=args.num_frames, batch_size=1,
                                                 train_fraction=args.train_fraction,

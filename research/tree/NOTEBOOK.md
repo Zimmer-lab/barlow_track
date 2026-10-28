@@ -786,3 +786,9 @@ run r261028-3899580 · pids 3899580 · host charles-Precision-7820-Tower · logs
 ## 2026-10-28 05:48 — decision
 
 For cluster runs (user offered to launch today): new flags, default off, barlow_track@8ae7898: crop_augment legacy (preprint per-crop view transforms in the position pipeline), global_augment.apply_to_volume false (affine, elastic, jitter, dropout move only the keypoints; crops from the untransformed volume; answers the user's point that per-crop transforms never move positions, which is why global augmentation was introduced), fusion visual_only (replaces the scratch monkeypatch). d02573b lets sweeps name nested keys (global_augment.apply_to_volume). Staged round_flavell_legacy_crop_aug (barlow_track/scripts/scratch/round_flavell_legacy_crop_aug): fusion {visual_only, add} x apply_to_volume {false, true}, 3 seeds, 12 jobs, objective accuracy on flavell; README has launch and NWB-GT rescore (truncated and rounded centres).
+
+## 2026-10-28 07:43 — surprise
+
+Cluster round_flavell_paper_ablation status (read from /lisc): position cells 4-7, 12-15 and legacy 0, 1, 3 finished. Legacy trials 2, 8, 9 hit the 41 h walltime at epochs 38, 40, 48 (legacy crop transforms take 37-41 h for 50 epochs there) and saved no model; at the timeout signal submitit's handler crashed on our string slurm_time (TypeError). Legacy 10, 11 were cancelled at the same minute (SIGTERM at epochs 23, 25, the fail-fast pattern). So the legacy training-seed spread on the cluster still has only the seed-43 cells 0, 1, 3. Fixed in barlow_track@5ca086f (integer --time, train_hours template key); round_flavell_legacy_crop_aug sets train_hours 60.
+
+- [ ] Rerun round_flavell_paper_ablation legacy cells 2 and 8-11 with train_hours 60 for the legacy seed spread

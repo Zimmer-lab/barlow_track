@@ -67,7 +67,14 @@ def embed(model, points, shape, device):
 
 
 def match_accuracy(da, db, ids_a, ids_b, gt_ids):
-    """Fraction of gt_ids present in both sets that the Hungarian assignment maps to themselves."""
+    """Fraction of gt_ids present in both sets that the Hungarian assignment maps to themselves.
+
+    b is shuffled first: with (near-)constant descriptors the assignment breaks ties
+    in index order, which scores as correct whenever both sets share an order
+    (self-matching, or two augmented views of one frame).
+    """
+    perm = np.random.RandomState(len(db)).permutation(len(db))
+    db, ids_b = db[perm], [ids_b[i] for i in perm]
     rows, cols = linear_sum_assignment(1 - da @ db.T)
     assigned = {ids_a[r]: ids_b[c] for r, c in zip(rows, cols)}
     shared = [i for i in gt_ids if i in set(ids_a) and i in set(ids_b)]

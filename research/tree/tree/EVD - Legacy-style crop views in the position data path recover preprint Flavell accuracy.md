@@ -1,14 +1,15 @@
 ---
 nodeTypeId: node_ygg_evidence
 nodeInstanceId: 01a181ae-d863-786f-abc2-1f6ced0badbf
-status: in-progress
+status: done
 priority: high
 dateCreated: 2026-10-28T09:44:41+01:00
-dateModified: 2026-10-28T09:44:55+01:00
+dateModified: 2026-10-28T10:42:15+01:00
 confidence: medium
 projects:
   - "[[barlowtrack]]"
 outcome: succeeded
+completedDate: 2026-10-28
 ---
 
 ## Purpose
@@ -17,7 +18,7 @@ Bisect the 14-point Flavell gap between the position pipeline's image features (
 
 ## Method
 
-[[@BarlowTrack preprint Flavell configuration in the position pipeline matched to the legacy crop views]]: image features only, preprint per-crop view transforms, no global volume affine, no crop-centre jitter or dropout, views re-drawn each epoch; seed 0. The epoch-12 checkpoint (of 50) scored with eval_accuracy.py --source project against the NWB GT at descriptor_stage backbone, 25 label-propagation seeds, at the default truncated crop centres and at rounded ones (as it trains). Runs r261028-838680 (training), r261028-3899580 (eval).
+[[@BarlowTrack preprint Flavell configuration in the position pipeline matched to the legacy crop views]]: image features only, preprint per-crop view transforms, no global volume affine, no crop-centre jitter or dropout, views re-drawn each epoch; seed 0. The epoch-12 checkpoint (of 50) scored with eval_accuracy.py --source project against the NWB GT at descriptor_stage backbone, 25 label-propagation seeds, at the default truncated crop centres and at rounded ones (as it trains). Runs r261028-838680 (training, stopped at epoch 18), r261028-3899580 (eval).
 
 ## Results
 
@@ -29,4 +30,4 @@ On Flavell, the position pipeline's data path itself (crops from the full volume
 
 ## Caveats
 
-One training seed, a partial (epoch-12) checkpoint, Flavell only. The arm changes several things at once relative to the image-only position run (global affine off, jitter and dropout off, legacy per-crop transforms, re-drawn views), so which of them matters is open; round_flavell_legacy_crop_aug (staged, 2 x 2 x 3 seeds) separates the global augmentation reaching the crops from the per-crop transforms and tests position fusion on top. The model was loaded with another run's args.pickle (same architecture; training writes its own only at the end). Rounded-centre eval adds 1.2 points here, 1.9 on the fused comparator.
+Closed on the epoch-12 checkpoint by decision (2026-10-28): the result already sits at the legacy level, so the remaining ~20 h of local training would not change the bisection. The run was stopped at epoch 18 and never scored at 50 epochs; its checkpoints/checkpoint.pth (epoch 18) is kept under /home/charles/.cache/barlow_scratch/train/paper_flavell_position_pipeline_legacy_matched/, but training does not resume from it, so a 50-epoch number means a fresh ~25 h run (run.sh). The `visual_only` / keypoints-only cell of round_flavell_legacy_crop_aug replicates this arm at 50 epochs with 3 seeds and supersedes this as the full-length number. One training seed, Flavell only. The arm changes several things at once relative to the image-only position run (global affine off, jitter and dropout off, legacy per-crop transforms, re-drawn views), so which of them matters is open; the round separates the global augmentation reaching the crops from the per-crop transforms and tests position fusion on top. The model was loaded with another run's args.pickle (same architecture; training writes its own only at the end). Rounded-centre eval adds 1.2 points here, 1.9 on the fused comparator.

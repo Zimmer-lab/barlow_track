@@ -796,3 +796,11 @@ Cluster round_flavell_paper_ablation status (read from /lisc): position cells 4-
 ## 2026-10-28 09:45 — run
 
 r261028-3899580: legacy-matched run at epoch 12 scores 0.938 (truncated) / 0.950 (rounded centres) on Flavell NWB GT, against 0.819 for the image-only position run and 0.956 legacy. The position data path recovers preprint accuracy once its views are made the legacy way. Recorded in [[EVD - Legacy-style crop views in the position data path recover preprint Flavell accuracy]] (open until the 50-epoch eval); [[CLM - The position pipeline's augmentation, not position fusion, holds the revision networks below the preprint]] revised.
+
+## 2026-10-28 10:41 — dropped
+
+Stopped at epoch 18 of 50 by decision: the epoch-12 result (0.950 rounded) already answers the bisection; the cluster round carries the replicates. checkpoints/checkpoint.pth (epoch 18) kept; training does not resume from it.
+
+Stopped PID 838680.
+
+dropped r261028-838680

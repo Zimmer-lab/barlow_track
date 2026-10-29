@@ -1226,3 +1226,17 @@ run r261029-3504096 · pids 3504096 · host charles-Precision-7820-Tower · logs
 ## 2026-10-29 04:11 — run
 
 r261029-3504096 done (frames300/h128/c0.35, epoch-14 proxy, seeds 43/44): elastic 0 0.560/0.568 (mean 0.564, vs 0.554 at elastic 1.0 over three seeds) and 4x faster (220 s vs 850 s per cell); elastic 2.0 0.497/0.505; jitter_std 2.0 0.519/0.528; dropout_p 0.4 0.336/0.422. Stronger augmentation hurts the proxy on every axis, dropout most; elastic deformation buys nothing at this budget. Next: weaker augmentation (dropout 0.1 and 0, jitter 0.5) with elastic off, and more frames now that cells are cheap.
+
+## 2026-10-29 04:11 — run
+
+Batch 9: weaker augmentation with elastic off (dropout 0.1, 0; jitter 0.5) and frames 600, seeds 43+44, from frames300/h128/c0.35.
+
+run r261029-3530683 · pids 3530683 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch9.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 04:40 — run
+
+r261029-3452047 done: long6 (frames 600, h128, vecnorm, cutoff 0.5, elastic 1.0, 60 epochs; proxy 0.682) tracks zimmer_1128 at 0.893 full video (labelprop 25 seeds, project segmentation, misses 7069, mismatches 15019 of 206701), up from b2's 0.843 (proxy 0.50). Position only, no image features; trial 27's image backbone alone gets 0.923 on the same recording. The proxy has ranked both full evals correctly so far. Fused dims went 39% dead by epoch 59 without hurting this.
+
+## 2026-10-29 04:40 — run
+
+r261029-3530683 done (elastic 0, frames300/h128/c0.35, epoch-14 proxy, seeds 43/44): dropout_p 0 0.657/0.629 (mean 0.643), 0.1 0.625/0.607 (0.616), 0.2 (b8) 0.564; jitter_std 0.5 0.577/0.552 (0.565, no change from 1.0); frames 600 at dropout 0.2 0.610/0.591 (0.600). Object dropout is the largest lever found: +0.08 from 0.2 to 0. The proxy matches GT objects in both frames, so it cannot see robustness to missed detections; the full eval on project segmentation decides.

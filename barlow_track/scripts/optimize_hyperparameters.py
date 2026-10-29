@@ -297,9 +297,10 @@ def measure_tracking_accuracy(args, test_losses, parent_folder, dataset_label, o
     kwargs = {k: v for k, v in eval_kwargs.items() if k != 'gt'}
     record = evaluate_trained_checkpoint(
         weights=ckpt,
-        # Same recording as training, for both crops and ground truth: the trial
-        # must be scored on the data it was trained on and on nothing else.
-        # objective_gt only swaps in another GT of that recording (Flavell's NWB).
+        # Same recording as training: the trial must be scored on the data it was
+        # trained on and on nothing else. objective_gt only swaps in another GT file
+        # of that recording (Flavell's NWB); with objective_source nwb the frames are
+        # embedded from that NWB too, exactly as the benchmark's cell does.
         project=args.project_path, gt=eval_kwargs.get('gt') or args.project_path,
         tag=tag, results_jsonl=results_jsonl, emb_dir=emb_dir,
         extra_record=extra, **kwargs)

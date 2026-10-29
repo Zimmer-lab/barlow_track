@@ -76,3 +76,6 @@ done
 # the NWB GT); they wait by themselves until the round_posonly_* jobs have left the queue
 nohup bash barlow_track/scripts/scratch/cpu_rescores/run.sh > $B/cpu_rescores.log 2>&1 &
 ```
+
+If a dispatcher dies, relaunch the same command with `--skip_completed_grid_jobs` added;
+without it, finished grid jobs are trained again into new trial_N folders.

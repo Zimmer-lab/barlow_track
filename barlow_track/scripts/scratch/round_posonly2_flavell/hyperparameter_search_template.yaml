@@ -26,7 +26,10 @@ train_hours: 48
 hyperparameters:
   - name: position_augment.jitter_std
     type: choice
-    values: [1.0, auto]
+    # Ax rejects a choice mixing a float and a string; as strings, VolumeCoordsDataset
+    # reads "1.0" as the float and the resume comparison sees equal values
+    value_type: str
+    values: ["1.0", auto]
   - name: visnet_cutoff_nn
     type: choice
     values: [0, 6]

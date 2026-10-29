@@ -3,7 +3,7 @@
 # RBF fix on, absolute cutoff 0.35, no elastic deformation, no object dropout, ViSNet
 # width 512, 600 frames, keypoints only (no volumes or crops loaded). Position jitter
 # stays isotropic 1.0: no setting is fitted to a dataset's GT.
-# The grid toggles synthetic segmentation errors (spurious points, merges, splits).
+# The grid toggles jitter_std 1.0 / auto, visnet_cutoff_nn 0 / 6 and dropout_p 0 / 0.02.
 # See round_posonly2_zimmer/README.md.
 project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/wbfm_projects/manually_annotated/paper_data/ZIM2165_Gcamp7b_worm1-2022_11_28_updated_format/project_config.yaml
 pretrained_model_path:

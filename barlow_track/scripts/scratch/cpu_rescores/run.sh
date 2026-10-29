@@ -10,7 +10,8 @@
 #      (153 NWB, GT objects); the in-job evals crashed on the NaN-centroid bug (fixed in dd0e82e).
 #   3. round_posonly_flavell: every trial with a checkpoint on the benchmark's 'flavell' cell
 #      (NWB GT objects). Their in-job records carry that tag but scored the project GT (the
-#      Flavell lab's tracker output), so --rerun_completed; the newer record wins the tag.
+#      Flavell lab's tracker output). Records are keyed on (tag, settings), so that record
+#      stays as a separate cell (best_of_table drops it); --rerun_completed is only a safeguard.
 # Run from the barlow_track checkout on the cluster (after pulling), in the background; then
 # rerun barlow_track/scripts/best_of_table.py.
 set -u
@@ -18,7 +19,9 @@ cd /lisc/data/scratch/neurobiology/zimmer/wbfm/code/barlow_track
 B=/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files
 WAIT_IDS=$(ls $B/round_posonly_{zimmer,flavell,samuel}/*_submission.sh 2>/dev/null | xargs -n1 basename | cut -d_ -f1 | sort -u)
 while true; do
-  left=$(comm -12 <(squeue -u $USER -h -o %A | sort -u) <(echo "$WAIT_IDS"))
+  # A failed squeue must not read as an empty queue
+  queued=$(squeue -u $USER -h -o %A) || { echo "$(date +%H:%M) squeue failed; retrying"; sleep 600; continue; }
+  left=$(comm -12 <(echo "$queued" | sort -u) <(echo "$WAIT_IDS"))
   [ -z "$left" ] && break
   echo "$(date +%H:%M) waiting on $(echo $left | wc -w) round_posonly jobs"; sleep 600
 done

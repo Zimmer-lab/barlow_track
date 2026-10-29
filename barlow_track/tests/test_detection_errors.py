@@ -164,3 +164,24 @@ def test_real_frame_pairs_carry_frame_t_identities(monkeypatch):
     # off: the second view is frame 0 again
     ds.position_args['pair_p'], ds._pairs = 0.0, None
     assert ds[0][5].tolist() == list(range(len(f0)))
+
+
+def test_jitter_std_given_as_a_string_number_is_that_number(monkeypatch):
+    # A sweep's string-typed choice ("1.0", next to 'auto') must train exactly as the float
+    a, b = _dataset(monkeypatch)[0], None
+    monkeypatch.setattr(vd, 'get_centroids_for_volume', lambda project_data, t: (PAIRS, np.arange(1, 5)))
+    project = type('P', (), {'red_data': np.zeros((1, 8, 50, 50), dtype=np.float32)})()
+    ds = vd.VolumeCoordsDataset(project, [0], target_sz=(4, 16, 16), seed=0, keypoints_only=True,
+                                global_args=dict(apply_to_volume=False, max_degrees_z=30.0),
+                                position_args=dict(jitter_std="0.5"))
+    assert ds.position_args['jitter_std'] == 0.5
+    for x, y in zip(a, ds[0]):
+        assert torch.equal(x, y)
+
+
+def test_auto_jitter_without_matches_raises_instead_of_falling_back(monkeypatch):
+    monkeypatch.setattr(vd, 'get_centroids_for_volume', lambda project_data, t: (PAIRS, np.arange(1, 5)))
+    project = type('P', (), {'red_data': np.zeros((3, 8, 50, 50), dtype=np.float32), 'num_frames': 3})()
+    with pytest.raises(ValueError, match="set jitter_std explicitly"):
+        vd.VolumeCoordsDataset(project, [0, 1], target_sz=(4, 16, 16), keypoints_only=True,
+                               global_args=dict(apply_to_volume=False), position_args=dict(jitter_std='auto'))

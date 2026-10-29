@@ -613,8 +613,13 @@ class VolumeCoordsDataset(Dataset):
         if geometry and bool(self.global_args.get('apply_to_volume', True)):
             raise ValueError("position_augment bend_max / axis_scale_jitter move keypoints only: "
                              "they need global_augment.apply_to_volume: false")
-        if isinstance(self.position_args.get('jitter_std'), str):
-            self.position_args['jitter_std'] = self._jitter_from_stats(self.position_args['jitter_std'])
+        js = self.position_args.get('jitter_std')
+        if isinstance(js, str):
+            # 'auto', or a number given as a string (a sweep's string-typed choice, "1.0")
+            try:
+                self.position_args['jitter_std'] = float(js)
+            except ValueError:
+                self.position_args['jitter_std'] = self._jitter_from_stats(js)
         self._pairs = self._real_pairs() if self.position_args.get('pair_p') else None
 
     def _real_pairs(self, min_frac=0.15, min_matches=8):
@@ -655,12 +660,18 @@ class VolumeCoordsDataset(Dataset):
         cand = [i for i, t in enumerate(self.frame_indices) if int(t) + 1 < n_frames]
         pick = [cand[j] for j in np.unique(np.linspace(0, len(cand) - 1, min(n_pairs, len(cand))).astype(int))] \
             if cand else []
-        pairs = [(self._centroids[i], get_centroids_for_volume(self.project_data, int(self.frame_indices[i]) + 1)[0])
-                 for i in pick]
+        pairs = []
+        for i in pick:
+            try:
+                pairs.append((self._centroids[i],
+                              get_centroids_for_volume(self.project_data, int(self.frame_indices[i]) + 1)[0]))
+            except (KeyError, IndexError, FileNotFoundError) as e:
+                logging.warning(f"jitter_std 'auto': skipping frame {self.frame_indices[i]} + 1: {e}")
         noise = centroid_noise_from_pairs(pairs)
         if noise is None:
-            logging.warning("jitter_std 'auto': too few lag-1 matches; using 1.0")
-            return 1.0
+            # Loud, not a silent fallback: a sweep's 'auto' arm must not quietly become another arm
+            raise ValueError(f"jitter_std 'auto': too few consecutive-frame matches in {len(pairs)} "
+                             f"frame pairs to estimate the centroid noise; set jitter_std explicitly")
         print(f"jitter_std 'auto' from {len(pairs)} frame pairs: (z, x, y) {np.round(noise, 3).tolist()}", flush=True)
         return [float(v) for v in noise]
 

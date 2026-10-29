@@ -272,7 +272,7 @@ def test_measure_tracking_accuracy_scores_the_trials_own_project(tmp_path, monke
 
 
 def test_objective_gt_swaps_in_another_gt_of_the_training_recording(tmp_path, monkeypatch):
-    """Flavell: crops from the training project, scored against the NWB GT, recorded as such."""
+    """Flavell: the training recording, scored against its NWB GT (and embedded from it with source nwb)."""
     trial_dir = _fake_trial(tmp_path)
     calls = {}
     monkeypatch.setattr(oh, 'evaluate_trained_checkpoint',
@@ -329,6 +329,26 @@ def test_experiment_minimizes_loss_and_maximizes_accuracy():
         objective = client.experiment.optimization_config.objective
         assert isinstance(objective.minimize, bool)
         assert objective.minimize is minimize
+
+
+def test_staged_round_templates_create_an_experiment_and_resume():
+    """Every staged round's grid must reach Ax (a float/string choice did not), and a finished
+    trial of each value must attach again on resume."""
+    pytest.importorskip('ax')
+    import glob
+    import yaml
+    from ax.service.ax_client import AxClient
+    templates = sorted(glob.glob(os.path.join(os.path.dirname(oh.__file__), 'scratch', 'round_*',
+                                              'hyperparameter_search_template.yaml')))
+    assert templates
+    for path in templates:
+        params = yaml.safe_load(open(path))['hyperparameters']
+        client = AxClient()
+        oh.create_sweep_experiment(client, params, accuracy_objective=True)
+        for p in params:
+            for v in p['values']:
+                config = oh.expand_dotted_params({**{q['name']: q['values'][0] for q in params}, p['name']: v})
+                oh._attach_trial(client, {**config, 'project_dir': '/sweep/trial_0'})
 
 
 # --------------------------------------------------------------------------

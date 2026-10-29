@@ -76,7 +76,7 @@ visnet_neighbors: 32
 visnet_rbf_rescale: true
 wandb_name: barlow_track_round_fused_fix_zimmer
 wandb_username: charlesfieseler
-weight_decay: 1e-06
+weight_decay: 1.0e-6
 zxy_RandomElasticDeformation:
 - 1
 - 3

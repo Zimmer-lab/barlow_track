@@ -1350,3 +1350,7 @@ GT-free dataset statistics (barlow_track@207994d:barlow_track/scripts/scratch/da
 ## 2026-10-29 08:29 — decision
 
 c434ceb: barlow_track/scripts/best_of_table.py writes docs/best_of_table.md, the best image-only / fused / position-only accuracy per dataset from every cluster round's exp_results.jsonl and the local scratch records, comparable records only (trained checkpoints, labelprop, default eval, full videos; Flavell only against the NWB GT and, for --source nwb, after the i261026-1 fix). cb4e869: opt-in jitter_std 'auto' (GT-free centroid noise, utils/dataset_stats.py; 1 s at setup on Zimmer, (0.31, 0.99, 1.03)); off by default, and the user wants it off in the fast iterations.
+
+## 2026-10-29 08:47 — decision
+
+a14918e: best-of table now one row per recording, all scorable ones shown (Zimmer 1128/1123/1210, five Flavell NWBs, Leifer, Samuel 137/153/184-004); dropped the Zimmer original-format and Samuel project-segmentation rows (user: redundant). Benchmark driver gains flavell_2022031603/0324-02/0330-01/0330-02, samuel_137, samuel_184; NWB datasets now pass --gt (record names its own NWB, resume matches); --device cpu requests no Slurm GPU. Staged scratch/benchmark_more_datasets/run.sh (best checkpoints of each kind x 9 further recordings, CPU only, 63+18 cells) for the user to launch. Smoke: baseline_flavell_head_rerun on flavell 2022-03-16-03, 30 frames, CPU: loads, 173 GT neurons, 0.809. Suite on CPU: 221 passed, 2 pre-existing failures; on the busy GPU 4 more tests OOM (not code).

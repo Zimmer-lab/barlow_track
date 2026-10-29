@@ -1264,3 +1264,9 @@ Cluster round_posonly (user-launched, read from exp_results.jsonl and trial trai
 ## 2026-10-29 06:37 — run
 
 r261029-3545344 done (dropout-0 base 0.657/0.629, mean 0.643, epoch-14 proxy): hidden 256 0.719/0.645 (0.682); 5 layers + vecnorm 0.636/0.593 (0.615); lr 3e-4 0.656/0.620 (0.638); frames 1000 0.622/0.628 (0.625). Only width may help (+0.04, at the noise edge); depth, lr and frames beyond 300 do not at 15 epochs.
+
+## 2026-10-29 06:37 — run
+
+Batch 12: hidden 128 and 256 seed 45, hidden 512 seeds 43+44, dropout-0 base.
+
+run r261029-3596459 · pids 3596459 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch12.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]

@@ -1154,3 +1154,35 @@ run r261028-3398874 · pids 3398874 · host charles-Precision-7820-Tower · logs
 ## 2026-10-29 00:14 — run
 
 r261028-3386058 partial, proxy at epoch 14 (batch 1 baseline 0.400, b3 frames300 0.521, b3 h128 0.451): frames300+h128 0.548, frames300+h128+lr3e-4 0.518, frames600 0.552 (27 min per cell). More frames is the main lever and stacks a little with width; lr 3e-4 no longer helps once frames are up. frames1000 still training.
+
+## 2026-10-29 00:14 — run
+
+Batch 5 (df9b045): ViSNet vector norm max_min on frames300+h128 (0.548 without), plus layers 5 and cutoff 0.5 with the norm. Runs beside batch 4's frames1000 cell; 56 cores, GPU 4.5/12 GB, so contention only affects timings.
+
+run r261029-3424998 · pids 3424998 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch5.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 00:15 — run
+
+Rerun of sc_bayes0_153_project (Samuel 153, --source project, bayes0, auto stage) now that dd0e82e skips NaN-centroid objects; it crashed before. Gives the project-segmentation number beside the NWB-GT 0.951.
+
+- [x] read r261029 sc_bayes0_153_project result
+
+run r261029-3425729 · pids 3425729 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/runs/samuel_check/queue_project.log
+
+## 2026-10-29 01:14 — run
+
+r261028-3386058 done: b4_frames1000 0.502 at epoch 14 (below frames600 0.552; still climbing, 49 min, so 15 epochs underserves it, or the held-out proxy frames thin out). r261029-3424998 (batch 5, all from frames300+h128 at 0.548): vecnorm max_min 0.564; vecnorm + layers 5 0.569 (trains now, NaN without the norm); vecnorm + cutoff 0.5 0.589, best so far and still rising 0.005/epoch. The norm lets a larger neighbourhood help where cutoff 0.25 hurt. Seed noise is not measured yet; batch 6 adds a seed repeat.
+
+## 2026-10-29 01:14 — run
+
+r261029-3425729: Samuel 153 bayes0 with --source project (project segmentation, auto stage, labelprop 25 seeds) 0.920, against 0.951 on NWB GT objects. With dd0e82e the project path runs; the 3-point gap is the segmentation's detections versus oracle ones.
+
+## 2026-10-29 01:14 — done
+
+0.920 on project segmentation vs 0.951 NWB GT
+
+Done: read r261029 sc_bayes0_153_project result
+
+## 2026-10-29 01:14 — run
+
+r261028-3398874 partial: trial 27 on zimmer_1128 with CPU tracking, backbone stage 0.923; auto stage still tracking.

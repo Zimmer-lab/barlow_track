@@ -1246,3 +1246,21 @@ r261029-3530683 done (elastic 0, frames300/h128/c0.35, epoch-14 proxy, seeds 43/
 long10: dropout 0 vs 0.2 at elastic 0, frames 600, h128, c0.35, 60 epochs, each with a full-video zimmer_1128 eval (vs long6 0.893).
 
 run r261029-3544674 · pids 3544674 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/long10.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 04:40 — run
+
+Batch 11: hidden 256, 5 layers + vecnorm, lr 3e-4, frames 1000 on the dropout-0/elastic-0 base (frames300, h128), seeds 43+44.
+
+run r261029-3545344 · pids 3545344 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch11.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 05:39 — run
+
+Partial: long10 training done, proxy at epoch 59: dropout 0 0.792, dropout 0.2 0.692 (long6 0.682); full evals running. Batch 11 so far (dropout-0 base 0.657/0.629): hidden 256 0.719/0.645, 5 layers + vecnorm 0.636 (s43), lr 3e-4 0.656 (s43), frames 1000 0.622 (s43).
+
+## 2026-10-29 06:29 — run
+
+Cluster round_posonly (user-launched, read from exp_results.jsonl and trial train_configs, 2026-10-29 06:00): Zimmer RBF fix on, cutoff_nn 0: trial 8 (elastic 0) 0.825, trial 9 (elastic 1.0) 0.827 full-video zimmer_1128; RBF off, best is nn0 el0 0.583, nn3/6/12 0.09-0.23. RBF-on nn 3/6/12 (trials 10-15) not scored yet. Flavell: RBF-off trials 0-5 only, 0.09-0.30. Samuel: no results yet. The cluster's 0.825 matches local b2's 0.843 (similar config, 60 vs 50 epochs) and confirms the RBF fix, ~+0.24 on Zimmer; elastic makes no difference there either.
+
+## 2026-10-29 06:37 — run
+
+r261029-3545344 done (dropout-0 base 0.657/0.629, mean 0.643, epoch-14 proxy): hidden 256 0.719/0.645 (0.682); 5 layers + vecnorm 0.636/0.593 (0.615); lr 3e-4 0.656/0.620 (0.638); frames 1000 0.622/0.628 (0.625). Only width may help (+0.04, at the noise edge); depth, lr and frames beyond 300 do not at 15 epochs.

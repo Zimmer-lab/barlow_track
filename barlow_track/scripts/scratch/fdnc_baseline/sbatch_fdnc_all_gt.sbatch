@@ -37,6 +37,6 @@ mkdir -p "$OUT_DIR"
 
 # Template frames: the wbfm pipeline template (10) plus four spread over the video;
 # the script also scores their GT-free multi-template vote.
-python -W ignore "$SCRIPT" --dataset "$ds" --source "$src" --orient "$orient" \
+python -W ignore "$SCRIPT" --dataset "$ds" --source "$src" --orient "$orient" --rescale ref \
     --templates 10 --n_spread 4 --threads "${SLURM_CPUS_PER_TASK:-4}" --out_dir "$OUT_DIR"
 date

@@ -777,8 +777,10 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         num_parallel_jobs = 1 if (DEBUG or run_locally) else 10
     else:
         num_parallel_jobs = int(num_parallel_jobs)
-    # CPU eval jobs have their own cap (objective_cpu_job); GPU slots count training only
-    cpu_parallel_jobs = int(hyperparameter_args.get('objective_cpu_parallel') or num_parallel_jobs)
+    # CPU eval jobs have their own cap (objective_cpu_job); GPU slots count training only.
+    # CPU jobs are plentiful on the cluster (GPU slots are the budget), so by default every
+    # trained checkpoint is scored at once
+    cpu_parallel_jobs = int(hyperparameter_args.get('objective_cpu_parallel') or 1000)
 
     if accuracy_objective:
         print(f"Objective: {objective} (Ax MAXIMIZES it) on each trial's own training project "

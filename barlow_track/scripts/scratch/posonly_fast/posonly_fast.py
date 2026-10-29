@@ -5,7 +5,8 @@ per-epoch frame-pair matching proxy (val_match_frames held-out frames). For dire
 finding only: promising cells go to a full eval (--eval) or the cluster.
 
 Usage (repo root, wbfm env):
-  python barlow_track/scripts/scratch/posonly_fast/posonly_fast.py NAME [key=value ...] [--eval]
+  python barlow_track/scripts/scratch/posonly_fast/posonly_fast.py [--lab L] NAME [key=value ...] [--eval]
+  --lab zimmer (default) | samuel | flavell picks base_<lab>.yaml and the eval below
   e.g. ... rbf_off visnet_rbf_rescale=false
        ... elastic global_augment.elastic_scale=1.0 epochs=30
 Values are parsed as YAML (true, 0.5, [1, 2]); dotted keys set nested entries.
@@ -25,6 +26,16 @@ OUT = Path(os.environ.get('POSONLY_FAST_OUT', Path.home() / '.cache/barlow_scrat
 PY = sys.executable
 EVAL_PROJECT = ('/lisc/data/scratch/neurobiology/zimmer/fieseler/wbfm_projects/manually_annotated/'
                 'paper_data/ZIM2165_Gcamp7b_worm1-2022_11_28_updated_format')
+_PAPER = '/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper'
+# Full-video eval per lab: (benchmark tag suffix, project, ground truth). All track the project
+# segmentation; Flavell scores against the NWB GT, its project GT being a tracker output.
+EVALS = {
+    'zimmer': ('zimmer_1128', EVAL_PROJECT, EVAL_PROJECT),
+    'samuel': ('samuel153_project', f'{_PAPER}/samuel_data/projects/153/project_config.yaml',
+               f'{_PAPER}/samuel_data/projects/153/project_config.yaml'),
+    'flavell': ('flavell_nwbgt', f'{_PAPER}/flavell_data/projects/2025_07_01/project_config.yaml',
+                f'{_PAPER}/flavell_data/images_for_charlie/flavell_data.nwb'),
+}
 
 
 def set_dotted(cfg, key, value):
@@ -53,9 +64,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('name')
     ap.add_argument('overrides', nargs='*')
-    ap.add_argument('--base', default=str(HERE / 'base_zimmer.yaml'))
-    ap.add_argument('--eval', action='store_true', help='full-video tracking accuracy on zimmer_1128')
+    ap.add_argument('--lab', default='zimmer', choices=list(EVALS))
+    ap.add_argument('--base', default=None, help='default: base_<lab>.yaml')
+    ap.add_argument('--eval', action='store_true', help="full-video tracking accuracy on the lab's recording")
     args = ap.parse_args()
+    args.base = args.base or str(HERE / f'base_{args.lab}.yaml')
 
     yaml = YAML()
     cfg = yaml.load(Path(args.base).read_text())
@@ -81,11 +94,12 @@ def main():
     if r.returncode != 0:
         sys.exit(r.returncode)
     if args.eval:
-        subprocess.run([PY, '-u', 'barlow_track/scripts/eval_accuracy.py', '--lab', 'zimmer',
-                        '--source', 'project', '--project', EVAL_PROJECT, '--gt', EVAL_PROJECT,
+        suffix, project, gt = EVALS[args.lab]
+        subprocess.run([PY, '-u', 'barlow_track/scripts/eval_accuracy.py', '--lab', args.lab,
+                        '--source', 'project', '--project', project, '--gt', gt,
                         '--mode', 'trained', '--weights', str(run_dir / 'resnet50.pth'),
                         '--device', 'cuda', '--track_device', 'cpu', '--emb_dir', str(run_dir / 'emb'),
-                        '--tag', f'posonly_fast_{args.name}_zimmer_1128',
+                        '--tag', f'posonly_fast_{args.name}_{suffix}',
                         '--results_jsonl', str(run_dir / 'eval.jsonl')], cwd=REPO, env=env, check=True)
 
 

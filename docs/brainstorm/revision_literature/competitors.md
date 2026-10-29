@@ -1,5 +1,9 @@
 # Competing trackers a reviewer would expect on the BarlowTrack benchmark
 
+> **Correction (2026-10-29, from the user):** BarlowTrack and ASCENT were co-submitted on purpose,
+> because the two methods are so similar. Where this report calls ASCENT uncited prior work or a
+> novelty risk, read it as concurrent work. The comparison suggestions still apply.
+
 Literature and code survey, 2026-10-29. Sources: web (journal pages, bioRxiv, GitHub API) and Zotero (the
 library holds only the BarlowTrack preprint and fDNC on this topic; most papers below are **not yet in Zotero**).
 Repo metadata (licence, last push) comes from the GitHub API on 2026-10-29. Accuracy numbers are copied from

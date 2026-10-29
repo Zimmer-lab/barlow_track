@@ -1,8 +1,8 @@
 # round_fused_fix_zimmer baseline: round_visnet_full trial 27 (0.968 on zimmer_1128 fused, 0.923
 # backbone alone; concat fusion, 2 self layers, no attention) with the position branch the
 # position-only fast loop found: ViSNet RBF fix on (every fused network so far had a
-# distance-blind ViSNet, issue i261028-2), width 512, no object dropout, z-light jitter matched
-# to measured centroid noise, 600 frames, 40 epochs. Image augmentation as trial 27 (global
+# distance-blind ViSNet, issue i261028-2), width 512, no object dropout, isotropic jitter 1.0 (nothing fitted to
+# the GT), 600 frames, 40 epochs. Image augmentation as trial 27 (global
 # affine applied to the volume, legacy p_* keys). Trial 27's own lr. See README.md.
 DEBUG: false
 attn_gate_init: -1.7048776595051507
@@ -48,10 +48,7 @@ p_RandomElasticDeformation: 1.0
 p_RandomNoise: 0.1
 position_augment:
   dropout_p: 0.0
-  jitter_std:
-  - 0.2
-  - 1.0
-  - 1.0
+  jitter_std: 1.0
   min_keep: 2
 position_encoder: visnet
 pretrained_model_path: null

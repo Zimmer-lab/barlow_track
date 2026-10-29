@@ -1,8 +1,8 @@
 # round_posonly2_zimmer baseline: position-only ViSNet (fusion position_only) on zimmer with the
 # settings the local fast loop found (barlow_track/scripts/scratch/posonly_fast, 2026-10-29):
 # RBF fix on, absolute cutoff 0.35, no elastic deformation, no object dropout, ViSNet
-# width 512, 600 frames, keypoints only (no volumes or crops loaded), and position
-# jitter matched to this dataset's measured centroid noise (scratch/centroid_noise.py).
+# width 512, 600 frames, keypoints only (no volumes or crops loaded). Position jitter
+# stays isotropic 1.0: no setting is fitted to a dataset's GT.
 # The grid toggles synthetic segmentation errors (spurious points, merges, splits).
 # See round_posonly2_zimmer/README.md.
 project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/wbfm_projects/manually_annotated/paper_data/ZIM2165_Gcamp7b_worm1-2022_11_28/project_config.yaml
@@ -62,8 +62,8 @@ crop_photometric:
   std_noise: 0.25
 position_augment:
   dropout_p: 0.0
-  # Measured per-axis centroid noise (z, x, y) voxels, rounded
-  jitter_std: [0.2, 1.0, 1.0]
+  # Isotropic, as every earlier run: no augmentation setting is fitted to this dataset's GT
+  jitter_std: 1.0
   spurious_p: 0.0
   merge_p: 0.0
   split_p: 0.0

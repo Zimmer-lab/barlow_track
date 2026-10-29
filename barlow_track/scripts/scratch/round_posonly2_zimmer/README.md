@@ -17,22 +17,22 @@ over seeds (single-seed gaps under ~0.04 in the epoch-14 proxy are noise):
 
 ## round_posonly2_{zimmer,flavell,samuel} (16 jobs each)
 
-Baseline: the settings above, keypoints only (no volumes loaded), 60 epochs, position
-jitter matched to each dataset's measured centroid noise (`scratch/centroid_noise.py`):
-Zimmer (0.17, 1.05, 1.11), Flavell (0.64, 0.81, 0.90), Samuel 153 (0.11, 0.57, 0.54)
-voxels (z, x, y), against the isotropic 1.0 every earlier run used. Grid: synthetic
-segmentation errors (d05dec1), spurious_p {0, 0.2} x merge_p {0, 0.03} x split_p {0, 0.03},
-two seeds. `spurious_std` and `split_dist` keep their defaults ((1, 5, 5) and (1, 4, 4)
-voxels), sized for Zimmer.
+Baseline: the settings above, keypoints only (no volumes loaded), 60 epochs, isotropic
+position jitter 1.0 as every earlier run. No augmentation setting is fitted to a dataset's
+GT (the user, 2026-10-29: the point is to generalize to unseen datasets): batch 14 tests
+z-light jitter (0.2, 1, 1), sized from Zimmer's GT tracks (`scratch/centroid_noise.py`), only
+as a diagnostic of whether anisotropy matters; a production setting would need a GT-free
+rule. Grid: synthetic segmentation errors (d05dec1), spurious_p {0, 0.2} x merge_p {0, 0.03}
+x split_p {0, 0.03}, two seeds, chosen by accuracy across datasets. `spurious_std` and
+`split_dist` keep their defaults ((1, 5, 5) and (1, 4, 4) voxels).
 
-Before launching, check batch 14 (local, Zimmer): if `b14_jitz` (jitter (0.2, 1, 1)) loses to
-the base (h256, isotropic 1.0), set `jitter_std: 1.0` back in the three train configs; if an
-error augmentation clearly hurts, drop it from the grid.
+Before launching, check batch 14 (local, Zimmer): if an error augmentation clearly hurts,
+drop it from the grid.
 
 ## round_fused_fix_zimmer (8 jobs)
 
-Trial 27's config with that position branch (width 512, no dropout, z-light jitter, 600
-frames, 40 epochs). Grid: visnet_rbf_rescale {false, true} x fusion {concat, add}, two seeds.
+Trial 27's config with that position branch (width 512, no dropout, isotropic jitter 1.0,
+600 frames, 40 epochs). Grid: visnet_rbf_rescale {false, true} x fusion {concat, add}, two seeds.
 `false` is the control: the blind ViSNet every fused network so far had. Afterwards score
 both descriptor stages and cross-dataset (trial 27's fused head cost 11 points on Samuel).
 

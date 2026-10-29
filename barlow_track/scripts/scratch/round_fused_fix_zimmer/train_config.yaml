@@ -54,7 +54,7 @@ position_encoder: visnet
 pretrained_model_path: null
 print_freq: 100
 project_dir: null
-project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/wbfm_projects/manually_annotated/paper_data/ZIM2165_Gcamp7b_worm1-2022_11_28/project_config.yaml
+project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/wbfm_projects/manually_annotated/paper_data/ZIM2165_Gcamp7b_worm1-2022_11_28_updated_format/project_config.yaml
 projector: 2048-2048
 projector_final: 512
 projector_norm: layernorm

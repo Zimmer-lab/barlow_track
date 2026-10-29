@@ -230,6 +230,11 @@ def resolve_objective(hyperparameter_args):
         # matrices per propagation step, which OOMs a 12 GB GPU next to the
         # trained model -- and that would waste a whole trial.
         track_device=hyperparameter_args.get('objective_track_device', 'cpu'),
+        # Ground truth to score against; None = the training project. Flavell's
+        # project GT is the Flavell lab's tracker output, so its rounds point
+        # this at the NWB file (with objective_source nwb, as the benchmark's
+        # 'flavell' cell; or project, scoring the project segmentation).
+        gt=hyperparameter_args.get('objective_gt') or None,
     )
     if eval_kwargs['max_frames'] is not None:
         eval_kwargs['max_frames'] = int(eval_kwargs['max_frames'])
@@ -242,9 +247,10 @@ def resolve_objective(hyperparameter_args):
 def objective_record_settings(eval_kwargs, baseline_params):
     """RECORD_SETTINGS of the records this sweep's objective writes (see utils_ground_truth).
 
-    measure_tracking_accuracy scores against the trial's own project, so gt is project_path.
+    measure_tracking_accuracy scores against the trial's own project unless the template
+    sets objective_gt.
     """
-    return dict(source=eval_kwargs['source'], gt=baseline_params.get('project_path'),
+    return dict(source=eval_kwargs['source'], gt=eval_kwargs.get('gt') or baseline_params.get('project_path'),
                 descriptor_stage=eval_kwargs['descriptor_stage'], cluster=eval_kwargs['cluster'],
                 num_seeds=eval_kwargs['num_seeds'], seed=eval_kwargs['seed'],
                 center_per_volume=eval_kwargs['center_per_volume'],
@@ -288,13 +294,15 @@ def measure_tracking_accuracy(args, test_losses, parent_folder, dataset_label, o
         logging.warning(f"Could not release GPU memory before the objective eval: {e}")
     print(f"[{os.path.basename(str(args.project_dir))}] scoring tracking accuracy of {ckpt} "
           f"on its own training project (this takes tens of minutes)", flush=True)
+    kwargs = {k: v for k, v in eval_kwargs.items() if k != 'gt'}
     record = evaluate_trained_checkpoint(
         weights=ckpt,
-        # Same project as training, for both crops and ground truth: the trial
+        # Same recording as training, for both crops and ground truth: the trial
         # must be scored on the data it was trained on and on nothing else.
-        project=args.project_path, gt=args.project_path,
+        # objective_gt only swaps in another GT of that recording (Flavell's NWB).
+        project=args.project_path, gt=eval_kwargs.get('gt') or args.project_path,
         tag=tag, results_jsonl=results_jsonl, emb_dir=emb_dir,
-        extra_record=extra, **eval_kwargs)
+        extra_record=extra, **kwargs)
     print(f"[{os.path.basename(str(args.project_dir))}] tracking accuracy "
           f"{record['accuracy']:.4f} ({record['n_frames']} frames, {record['total']} GT "
           f"detections, {record['minutes']:.1f} min); losses kept as diagnostics", flush=True)
@@ -498,7 +506,8 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     # 'accuracy': Ax MAXIMIZES full-video tracking accuracy, measured on the
     # trial's own training project inside the same Slurm job that trained it.
     # The dataset is never a choice here -- it is always args.project_path, the
-    # exact project the trial trained on, so train and objective cannot drift.
+    # exact project the trial trained on, so train and objective cannot drift
+    # (objective_gt can only name another GT file of that same recording).
     objective, dataset_label, objective_kwargs = resolve_objective(hyperparameter_args)
     accuracy_objective = objective == 'accuracy'
     if accuracy_objective and not baseline_params.get('project_path'):
@@ -508,7 +517,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     if accuracy_objective:
         # Fail now, not after every trial has trained for hours: a project
         # without ground truth (or a wrong path) breaks each trial's eval alike.
-        summary = preflight_trained_eval(baseline_params['project_path'],
+        summary = preflight_trained_eval(baseline_params['project_path'], gt=objective_kwargs.get('gt'),
                                          source=objective_kwargs['source'])
         print(f"Objective preflight OK: {summary}", flush=True)
     # Records/embeddings land where the standard benchmark runner looks for

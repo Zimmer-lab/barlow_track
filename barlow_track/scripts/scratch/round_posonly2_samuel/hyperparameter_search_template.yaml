@@ -14,6 +14,11 @@ baseline_params_path: null
 
 objective: accuracy
 objective_dataset: samuel
+# Score on the NWB's GT objects, the benchmark's 'samuel' cell; with the default project
+# source the record would carry that tag for a different condition (project segmentation),
+# and the benchmark would skip the real cell (objective_gt, this commit).
+objective_source: nwb
+objective_gt: /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper/samuel_data/153.nwb
 objective_minutes: 240
 # Keypoints only: no volumes, but width 512 and 600 frames; generous
 train_hours: 48

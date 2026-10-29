@@ -271,6 +271,27 @@ def test_measure_tracking_accuracy_scores_the_trials_own_project(tmp_path, monke
     assert calls['extra_record']['val_loss'] == pytest.approx(0.25)
 
 
+def test_objective_gt_swaps_in_another_gt_of_the_training_recording(tmp_path, monkeypatch):
+    """Flavell: crops from the training project, scored against the NWB GT, recorded as such."""
+    trial_dir = _fake_trial(tmp_path)
+    calls = {}
+    monkeypatch.setattr(oh, 'evaluate_trained_checkpoint',
+                        lambda **kw: calls.update(kw) or dict(accuracy=0.5, n_frames=10, total=10, minutes=1.0))
+    nwb = '/data/flavell/flavell_data.nwb'
+    _, label, kwargs = oh.resolve_objective({'objective': 'accuracy', 'objective_dataset': 'flavell',
+                                             'objective_source': 'nwb', 'objective_gt': nwb})
+    args = type('Args', (), dict(project_dir=str(trial_dir), project_path='/data/flavell/project_config.yaml'))()
+    oh.measure_tracking_accuracy(args, {}, str(tmp_path / 'sweep'), label, 'accuracy', 'r.jsonl', 'emb', kwargs)
+    assert calls['project'] == '/data/flavell/project_config.yaml' and calls['gt'] == nwb
+    assert calls['source'] == 'nwb'
+    settings = oh.objective_record_settings(kwargs, {'project_path': args.project_path})
+    assert settings['gt'] == nwb and settings['nwb_objects'] == 'gt'
+    # Unset: the training project, as before
+    _, _, kwargs = oh.resolve_objective({'objective': 'accuracy', 'objective_dataset': 'zimmer_1128'})
+    assert kwargs['gt'] is None
+    assert oh.objective_record_settings(kwargs, {'project_path': '/p.yaml'})['gt'] == '/p.yaml'
+
+
 def test_trial_without_checkpoint_is_never_tracked(tmp_path, monkeypatch):
     """A crashed trial saves no checkpoint; tracking it would waste an hour."""
     trial_dir = _fake_trial(tmp_path, with_checkpoint=False)

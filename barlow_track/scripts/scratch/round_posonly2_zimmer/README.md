@@ -41,14 +41,26 @@ frame pairs (pair_p 0.5 0.580). All stay in the code, off by default.
 
 Trial 27's config with that position branch (width 512, no dropout, isotropic jitter 1.0,
 600 frames, 40 epochs). Grid: visnet_rbf_rescale {false, true} x fusion {concat, add}, two seeds.
-`false` is the control: the blind ViSNet every fused network so far had. Afterwards score
-both descriptor stages and cross-dataset (trial 27's fused head cost 11 points on Samuel).
+`false` is the control: the blind ViSNet every fused network so far had. It stays at trial
+27's position settings (jitter 1.0, cutoff_nn 0) so the RBF fix is the only change; the
+position-only rounds test the rest. Trains on the updated-format copy of 2022-11-28 (the
+same recording as trial 27's original-format project), so its in-job record is the
+benchmark's zimmer_1128 cell. Afterwards score both descriptor stages and cross-dataset
+(trial 27's fused head cost 4-21 points on Samuel).
+
+## In-job objective ground truth
+
+round_posonly2_flavell and round_posonly2_samuel set `objective_source: nwb` and
+`objective_gt: <the recording's NWB>` (new template keys): the in-job score is then the
+benchmark's 'flavell' / 'samuel' cell (GT objects). Before, the objective scored the project
+GT under that cell's tag: for Flavell that is the Flavell lab's tracker output
+(round_posonly_flavell's 0.870 / 0.881), and the benchmark then skipped the real cell.
 
 ## Launch (cluster)
 
-The cluster checkout (`/lisc/.../wbfm/code/barlow_track`) is at d0f45b2: it lacks dd0e82e
-(the NaN-centroid fix every round_posonly_samuel eval crashed on), the vector norm and the
-segmentation-error augmentations. Push from the workstation and pull there first.
+The cluster checkout (`/lisc/.../wbfm/code/barlow_track`) is at 7d9970b; the rounds need
+the objective_gt keys and the staged yamls from later commits. Push from the workstation
+and pull there first.
 
 ```bash
 B=/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files
@@ -59,7 +71,7 @@ for R in round_posonly2_zimmer round_posonly2_flavell round_posonly2_samuel roun
   nohup python barlow_track/scripts/optimize_hyperparameters.py -p $B/$R/hyperparameter_search_template.yaml \
       --direct_parameter_sweep --repetitions 2 > $B/$R/dispatcher.log 2>&1 &
 done
+# CPU rescores (stale Flavell 03-31-01 cells, round_posonly_samuel, round_posonly_flavell vs
+# the NWB GT); they wait by themselves until the round_posonly_* jobs have left the queue
+nohup bash barlow_track/scripts/scratch/cpu_rescores/run.sh > $B/cpu_rescores.log 2>&1 &
 ```
-
-Then rescore round_posonly_samuel's crashed trials (their checkpoints are on disk) with
-`python barlow_track/scripts/multiproject_scripts/run_trials_on_all_ground_truth.py --trial_parent_dir $B/round_posonly_samuel --trials 0 1 2 --labs samuel` (add the others as they crash).

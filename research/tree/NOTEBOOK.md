@@ -1206,3 +1206,9 @@ r261028-3398874 done: trial 27 on zimmer_1128, labelprop 25 seeds, CPU tracking:
 ## 2026-10-29 02:13 — decision
 
 r261029-3452046 partial: b6_seed44 (b5 best with seed 44) 0.553 against 0.589 at seed 43, so seed noise in the epoch-14 proxy is ~0.04. Batch 5's vecnorm (+0.016) and layers-5 (+0.005) gains are inside it; only the cumulative climb from 0.400 is clearly real. cutoff 0.75 0.585, 64 neighbours 0.539: no gain. Next batch pairs cells across seeds before ranking.
+
+## 2026-10-29 02:13 — run
+
+Batch 7 (99fbb84), queued behind batch 6: seeds 44 and 45 of no-vecnorm c0.35, vecnorm c0.35 and vecnorm c0.5 (frames300, h128), three seeds each with batch 5/6.
+
+run r261029-3477540 · pids 3477540 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch7.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]

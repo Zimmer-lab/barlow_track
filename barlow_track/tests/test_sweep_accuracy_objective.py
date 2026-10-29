@@ -665,3 +665,63 @@ def test_embedding_cache_of_another_project_under_the_same_label_is_re_embedded(
                         time_to_lin={0: [0, 1], 1: [2, 3]}, lin_to_t_seg={}, n_frames=2,
                         cache_key=json.dumps(legacy, sort_keys=True))
     assert ea._load_cached_embeddings(emb, 2, key('/data/samuel/153/project_config.yaml')) is not None
+
+
+# --------------------------------------------------------------------------
+# objective_cpu_job: GPU jobs only train, each eval is a CPU-only job
+# --------------------------------------------------------------------------
+
+def _run_tiny_grid(tmp_path, monkeypatch, template_extra):
+    """A 2-job accuracy grid through the real dispatcher (submitit's inline debug executor),
+    with training and the tracking eval faked; returns the call log."""
+    pytest.importorskip('ax')
+    import yaml
+    calls = []
+
+    def fake_train(args):
+        calls.append(('train', os.path.basename(args.project_dir)))
+        open(os.path.join(args.project_dir, 'resnet50.pth'), 'wb').write(b'w')
+        return dict(test_loss=0.5)
+
+    def fake_eval(**kw):
+        calls.append(('eval', os.path.basename(os.path.dirname(kw['weights']))))
+        return dict(accuracy=0.8, n_frames=10, total=10, minutes=1.0)
+
+    monkeypatch.setattr(oh, 'train_barlow_network', fake_train)
+    monkeypatch.setattr(oh, 'evaluate_trained_checkpoint', fake_eval)
+    monkeypatch.setattr(oh, 'preflight_trained_eval', lambda *a, **k: 'ok')
+    monkeypatch.setattr(oh.time, 'sleep', lambda s: None)
+    sweep = tmp_path / 'round'
+    sweep.mkdir()
+    yaml.safe_dump(dict(project_path='/data/p/project_config.yaml', epochs=2, seed=43, wandb_name=None),
+                   open(sweep / 'train_config.yaml', 'w'))
+    yaml.safe_dump(dict(baseline_params_path=None, objective='accuracy', objective_dataset='zimmer_1128',
+                        objective_minutes=30, hyperparameters=[dict(name='lr', type='choice', values=[0.1, 0.2])],
+                        **template_extra), open(sweep / 'hyperparameter_search_template.yaml', 'w'))
+    monkeypatch.chdir(tmp_path)
+    oh.optimize_hyperparameters(str(sweep / 'hyperparameter_search_template.yaml'), run_locally=True,
+                                num_parallel_jobs=2, direct_parameter_sweep=True)
+    return calls
+
+
+def test_cpu_job_sweep_trains_in_one_job_and_scores_in_another(tmp_path, monkeypatch):
+    calls = _run_tiny_grid(tmp_path, monkeypatch, dict(objective_cpu_job=True))
+    assert sorted(c for c in calls if c[0] == 'train') == [('train', 'trial_0'), ('train', 'trial_1')]
+    assert sorted(c for c in calls if c[0] == 'eval') == [('eval', 'trial_0'), ('eval', 'trial_1')]
+    # Both training jobs ran before any eval: the evals were separate jobs, not the tail
+    # of the training jobs (with in-job scoring the order is train, eval, train, eval)
+    assert [c[0] for c in calls] == ['train', 'train', 'eval', 'eval']
+
+
+def test_default_sweep_still_scores_inside_the_training_job(tmp_path, monkeypatch):
+    calls = _run_tiny_grid(tmp_path, monkeypatch, {})
+    # train then eval back to back, per trial (one job does both)
+    assert [c[0] for c in calls] == ['train', 'eval', 'train', 'eval']
+    assert calls[1] == ('eval', calls[0][1])
+
+
+def test_cpu_eval_jobs_ask_for_no_gpu():
+    params = oh.cpu_eval_job_params({'objective_cpu_job_cpus': 24}, 240, 'round_x')
+    assert 'slurm_gres' not in params and 'slurm_constraint' not in params
+    assert params['cpus_per_task'] == 24 and params['timeout_min'] == 300
+    assert params['slurm_job_name'] == 'round_x_eval'

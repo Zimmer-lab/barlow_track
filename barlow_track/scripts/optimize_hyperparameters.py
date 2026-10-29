@@ -120,6 +120,22 @@ def job_budget_minutes(epochs, objective_minutes=0, train_hours=None):
     return train_minutes + eval_minutes
 
 
+def cpu_eval_job_params(hyperparameter_args, objective_minutes, job_name=None):
+    """Slurm parameters of the CPU-only eval jobs of an `objective_cpu_job: true` sweep.
+
+    The trial's GPU job then only trains; embedding, label propagation and scoring
+    (all CPU-bound but the embedding, which takes minutes on a CPU node too) run in a
+    job of their own with no GPU. On the cluster a full-video CPU eval took 40-130 min
+    (benchmark_more_datasets), about what it took inside the GPU jobs.
+    """
+    h = hyperparameter_args
+    return dict(timeout_min=int(objective_minutes) + 60,
+                cpus_per_task=int(h.get('objective_cpu_job_cpus', 16)),
+                slurm_mem=str(h.get('objective_cpu_job_mem', '64G')),
+                slurm_job_name=f"{job_name or 'barlow_hyperparameter_search'}_eval",
+                slurm_additional_parameters={"no-requeue": True})
+
+
 def slurm_duration(minutes):
     """Minutes -> a #SBATCH --time string (D-HH:MM:SS, or HH:MM:SS under a day)."""
     minutes = int(minutes)
@@ -526,18 +542,22 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     results_jsonl = os.path.join(str(experiment_parent_folder), 'exp_results.jsonl')
     emb_dir = os.path.join(str(experiment_parent_folder), 'emb_cache')
 
-    def evaluate(parameters, train=True):
+    def evaluate(parameters, train=True, score=True):
         """Train one trial and score it. Runs inside the trial's own Slurm job.
 
         With objective: accuracy the score comes from full-video tracking on
         args.project_path -- the same project the trial trained on -- using the
         checkpoint this job just wrote. train=False re-runs only that scoring
         step (used when a kill lost the evaluation but not the training).
+        score=False only trains (objective_cpu_job: the dispatcher then scores the
+        checkpoint in a CPU-only job) and reports whether a checkpoint was written.
         """
         # Add the baseline parameters
         args = SimpleNamespace(**parameters)
         try:
             test_losses = train_barlow_network(args) if train else None
+            if accuracy_objective and not score:
+                return {"result": None, "needs_eval": checkpoint_path(args.project_dir) is not None}
             if accuracy_objective:
                 score = measure_tracking_accuracy(
                     args, test_losses, experiment_parent_folder, dataset_label, objective,
@@ -660,7 +680,10 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         logging.warning("objective_minutes not set in the template; assuming 240 min for the "
                         "full-video tracking eval. Measure one trial and set it explicitly "
                         "(leifer-scale videos need hours, not minutes).")
-    job_minutes = job_budget_minutes(baseline_params['epochs'], objective_minutes,
+    # objective_cpu_job: the GPU jobs only train; each eval is a CPU-only job of its own
+    # (embedding, label propagation, scoring), so no GPU idles through label propagation
+    cpu_eval_job = accuracy_objective and bool(hyperparameter_args.get('objective_cpu_job', False))
+    job_minutes = job_budget_minutes(baseline_params['epochs'], 0 if cpu_eval_job else objective_minutes,
                                      train_hours=hyperparameter_args.get('train_hours'))
     print(f"Each job's walltime: {slurm_duration(job_minutes)}")
     # timeout_min (an int) is also what slurm's --time comes from. A string
@@ -675,6 +698,13 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         executor.update_parameters(slurm_gres="gpu:1")
         executor.update_parameters(slurm_constraint="l40s|a30|t4|l4")
         executor.update_parameters(slurm_additional_parameters={"no-requeue": True})  # bash equivalent (no-arg flag): #SBATCH --no-requeue
+    eval_executor = executor
+    if cpu_eval_job:
+        if not run_locally:
+            eval_executor = AutoExecutor(folder=experiment_parent_folder, cluster='slurm')
+            eval_executor.update_parameters(**cpu_eval_job_params(hyperparameter_args, objective_minutes, job_name))
+        print(f"objective_cpu_job: GPU jobs only train (walltime {slurm_duration(job_minutes)}); each "
+              f"eval runs in a CPU-only job (walltime {slurm_duration(objective_minutes + 60)})", flush=True)
 
     if direct_parameter_sweep:
         # Manually define all the trials as all combinations
@@ -747,6 +777,8 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         num_parallel_jobs = 1 if (DEBUG or run_locally) else 10
     else:
         num_parallel_jobs = int(num_parallel_jobs)
+    # CPU eval jobs have their own cap (objective_cpu_job); GPU slots count training only
+    cpu_parallel_jobs = int(hyperparameter_args.get('objective_cpu_parallel') or num_parallel_jobs)
 
     if accuracy_objective:
         print(f"Objective: {objective} (Ax MAXIMIZES it) on each trial's own training project "
@@ -757,7 +789,8 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
               f"CPU-saturating tracking stages at once. Lower --num_parallel_jobs (and/or "
               f"cpus_per_task) if the node is oversubscribed.", flush=True)
 
-    jobs = []
+    jobs = []  # (job, trial index, kind): 'train' (and score, unless objective_cpu_job), 'eval', 'cpu_eval'
+    trial_params = {}  # trial index -> the parameters it was submitted with
     submitted_jobs = 0
     trial_offset = 0
     start_time = time.time()
@@ -767,7 +800,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
 
     # Run until all the jobs have finished and our budget is used up.
     while submitted_jobs < total_budget or jobs or pending_evals:
-        for job, trial_index in jobs[:]:
+        for job, trial_index, kind in jobs[:]:
             # Poll if any jobs completed
             # Local and debug jobs don't run until .result() is called.
             if job.done() or type(job) in [LocalJob, DebugJob]:
@@ -784,6 +817,12 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                     # crashed or was killed (e.g. walltime) without a result.
                     print(f"Encountered Error, trial {trial_index} may need to be rerun: {e}")
                     result = None
+                if cpu_eval_job and kind == 'train' and isinstance(result, dict) and result.get('needs_eval'):
+                    # Trained: score it in a CPU-only job (scheduled below with the other evals)
+                    jobs.remove((job, trial_index, kind))
+                    pending_evals[trial_index] = trial_params[trial_index]
+                    print(f"Trial {trial_index} trained; queued its CPU-only eval", flush=True)
+                    continue
                 failed = trial_failed(result)
                 try:
                     if failed:
@@ -799,7 +838,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                     else:
                         raise e
 
-                jobs.remove((job, trial_index))
+                jobs.remove((job, trial_index, kind))
                 # Display the current and completed trials
                 print(exp_to_df(ax_client.experiment))
                 if failure_guard.record(failed):
@@ -809,7 +848,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                                    f"max_consecutive_failures in the template (0 disables) to change this.")
                     break
         if stop_reason is not None:
-            for job, trial_index in jobs:
+            for job, trial_index, _ in jobs:
                 try:
                     job.cancel()
                 except Exception as e:
@@ -820,8 +859,13 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         # Resumed evals go first: they are cheap (checkpoint + cached
         # embeddings already exist) and a fresh sweep must not start scoring
         # new trials while an older trial's score is still missing.
-        n_pending = min(len(pending_evals), max(0, num_parallel_jobs - len(jobs)))
-        free_slots = max(0, num_parallel_jobs - len(jobs)) - n_pending
+        if cpu_eval_job:
+            n_gpu = sum(1 for _, _, k in jobs if k != 'cpu_eval')
+            n_pending = min(len(pending_evals), max(0, cpu_parallel_jobs - (len(jobs) - n_gpu)))
+            free_slots = max(0, num_parallel_jobs - n_gpu)
+        else:
+            n_pending = min(len(pending_evals), max(0, num_parallel_jobs - len(jobs)))
+            free_slots = max(0, num_parallel_jobs - len(jobs)) - n_pending
         trial_seeds = {}
         if direct_parameter_sweep or one_at_a_time_sweep:
             # Get a new trial manually, without using the AxClient's internal logic (it can't do a grid search)
@@ -884,13 +928,20 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
             # workers must choose their own threading (or the user's export).
             for _v in _DISPATCH_THREAD_VARS:
                 os.environ.pop(_v, None)
-            job = executor.submit(evaluate, parameters, not eval_only)
+            if eval_only:
+                job = eval_executor.submit(evaluate, parameters, False, True)
+                kind = 'cpu_eval' if cpu_eval_job else 'eval'
+            else:
+                job = executor.submit(evaluate, parameters, True, not cpu_eval_job)
+                kind = 'train'
             for _v in _DISPATCH_THREAD_VARS:
                 os.environ[_v] = "1"
             if not eval_only:
                 submitted_jobs += 1
-            jobs.append((job, trial_index))
-            what = "eval-only job" if eval_only else f"{submitted_jobs}/{total_budget} submitted"
+            trial_params[trial_index] = parameters
+            jobs.append((job, trial_index, kind))
+            what = (("CPU-only " if cpu_eval_job else "") + "eval-only job") if eval_only \
+                else f"{submitted_jobs}/{total_budget} submitted"
             print(f"Submitted trial {trial_index} ({type(job).__name__}): {what}", flush=True)
             time.sleep(1)
 

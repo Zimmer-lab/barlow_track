@@ -1,0 +1,22 @@
+# round_fused_fix_zimmer: does a position branch that sees distances add to the image features?
+# 2 x 2 grid, two seeds (--repetitions 2), 8 jobs:
+#   visnet_rbf_rescale  false (blind ViSNet, as trial 27; the control) | true (the fix)
+#   fusion              concat (trial 27) | add (never collapses in round_visnet_full)
+# Run with: python optimize_hyperparameters.py -p <this file> --direct_parameter_sweep --repetitions 2
+# Score both descriptor stages afterwards (backbone and auto) with the benchmark driver, and
+# cross-dataset on samuel and leifer: trial 27's fused head cost 11 pt on samuel.
+baseline_params_path: null
+
+objective: accuracy
+objective_dataset: zimmer_1128
+objective_minutes: 240
+# Crops from 600 frames for 40 epochs: much longer than trial 27's 100 x 25
+train_hours: 120
+
+hyperparameters:
+  - name: visnet_rbf_rescale
+    type: choice
+    values: [false, true]
+  - name: fusion
+    type: choice
+    values: [concat, add]

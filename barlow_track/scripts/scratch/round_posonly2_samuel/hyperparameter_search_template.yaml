@@ -1,0 +1,25 @@
+# round_posonly2_samuel: synthetic segmentation errors on the fast loop's best position-only
+# ViSNet (see train_config.yaml). 2 x 2 x 2 grid, two seeds (--repetitions 2), 16 jobs:
+#   position_augment.spurious_p  0 | 0.2   extra detections near random objects (real
+#                                          Zimmer frames: ~20% detections without a GT name)
+#   position_augment.merge_p     0 | 0.03  object merged with its nearest neighbour
+#   position_augment.split_p     0 | 0.03  object split into two fragments
+# Run with: python optimize_hyperparameters.py -p <this file> --direct_parameter_sweep --repetitions 2
+baseline_params_path: null
+
+objective: accuracy
+objective_dataset: samuel
+objective_minutes: 240
+# Keypoints only: no volumes, but width 512 and 600 frames; generous
+train_hours: 48
+
+hyperparameters:
+  - name: position_augment.spurious_p
+    type: choice
+    values: [0.0, 0.2]
+  - name: position_augment.merge_p
+    type: choice
+    values: [0.0, 0.03]
+  - name: position_augment.split_p
+    type: choice
+    values: [0.0, 0.03]

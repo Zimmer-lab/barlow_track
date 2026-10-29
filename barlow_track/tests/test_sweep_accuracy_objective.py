@@ -725,3 +725,11 @@ def test_cpu_eval_jobs_ask_for_no_gpu():
     assert 'slurm_gres' not in params and 'slurm_constraint' not in params
     assert params['cpus_per_task'] == 24 and params['timeout_min'] == 300
     assert params['slurm_job_name'] == 'round_x_eval'
+
+
+def test_training_jobs_ask_for_a_gpu_unless_train_cpu_job():
+    gpu = oh.train_job_params({}, 'round_x')
+    assert gpu['slurm_gres'] == 'gpu:1' and gpu['slurm_job_name'] == 'round_x'
+    cpu = oh.train_job_params({'train_cpu_job': True, 'train_cpu_job_cpus': 32}, 'round_x')
+    assert 'slurm_gres' not in cpu and 'slurm_constraint' not in cpu
+    assert cpu['cpus_per_task'] == 32 and cpu['slurm_additional_parameters'] == {"no-requeue": True}

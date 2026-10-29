@@ -120,6 +120,27 @@ def job_budget_minutes(epochs, objective_minutes=0, train_hours=None):
     return train_minutes + eval_minutes
 
 
+def train_job_params(hyperparameter_args, job_name=None):
+    """Slurm parameters (but the walltime) of a sweep's training jobs.
+
+    By default one GPU. `train_cpu_job: true` (off by default) asks for no GPU, with
+    `train_cpu_job_cpus` / `train_cpu_job_mem`: for keypoints-only (position-only)
+    networks, which load no volumes. Locally an h512 / 600-frame network trained ~12x
+    slower on 16 CPU threads than on the GPU (1180 vs 94 s an epoch, under load), so
+    such rounds need a train_hours of their own; CPU jobs are plentiful, GPU slots are not.
+    """
+    h = hyperparameter_args
+    params = dict(slurm_job_name=job_name if job_name is not None else "barlow_hyperparameter_search",
+                  slurm_additional_parameters={"no-requeue": True})  # bash equivalent (no-arg flag): #SBATCH --no-requeue
+    if h.get('train_cpu_job', False):
+        params.update(cpus_per_task=int(h.get('train_cpu_job_cpus', 16)),
+                      slurm_mem=str(h.get('train_cpu_job_mem', '64G')))
+    else:
+        params.update(cpus_per_task=8, slurm_mem="128G", slurm_gres="gpu:1",
+                      slurm_constraint="l40s|a30|t4|l4")
+    return params
+
+
 def cpu_eval_job_params(hyperparameter_args, objective_minutes, job_name=None):
     """Slurm parameters of the CPU-only eval jobs of an `objective_cpu_job: true` sweep.
 
@@ -692,12 +713,10 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     # 'float'") instead of exiting cleanly at the walltime.
     executor.update_parameters(timeout_min=job_minutes)
     if not run_locally:
-        executor.update_parameters(cpus_per_task=8)
-        executor.update_parameters(slurm_mem="128G")
-        executor.update_parameters(slurm_job_name=job_name if job_name is not None else "barlow_hyperparameter_search")
-        executor.update_parameters(slurm_gres="gpu:1")
-        executor.update_parameters(slurm_constraint="l40s|a30|t4|l4")
-        executor.update_parameters(slurm_additional_parameters={"no-requeue": True})  # bash equivalent (no-arg flag): #SBATCH --no-requeue
+        executor.update_parameters(**train_job_params(hyperparameter_args, job_name))
+        if hyperparameter_args.get('train_cpu_job', False):
+            print(f"train_cpu_job: trainings run in CPU-only jobs (no GPU); set train_hours for "
+                  f"CPU speed (~12x slower than a GPU for position-only networks)", flush=True)
     eval_executor = executor
     if cpu_eval_job:
         if not run_locally:

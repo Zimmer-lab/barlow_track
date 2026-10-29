@@ -1216,3 +1216,13 @@ run r261029-3477540 · pids 3477540 · host charles-Precision-7820-Tower · logs
 ## 2026-10-29 03:12 — decision
 
 r261029-3452046 done: b6_layers5 (vecnorm c0.5 + 5 layers) 0.578. r261029-3477540 done. Epoch-14 proxy over seeds 43/44/45 (frames300, h128): no vecnorm c0.35 0.548/0.553/0.560 (mean 0.554); vecnorm c0.35 0.564/0.549/0.543 (0.552); vecnorm c0.5 0.589/0.553/0.531 (0.558). So vecnorm and cutoff 0.5 give nothing at 15 epochs; batch 5's ranking was seed 43 luck. Vecnorm's use is that deeper ViSNets train at all (5 layers: 0.569, 0.578, single seeds). Single-seed gaps under ~0.04 are noise; architecture knobs look saturated at this budget, frames and epochs are what moved the proxy. Batch 1's elastic 1.0 vs 0 (0.400 vs 0.381) was also inside the noise.
+
+## 2026-10-29 03:12 — run
+
+Batch 8 (8bb578e): augmentation strength from frames300/h128/c0.35 no vecnorm, seeds 43+44: elastic 0 and 2.0; with elastic 1.0, jitter_std 2.0 and dropout_p 0.4.
+
+run r261029-3504096 · pids 3504096 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch8.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 04:11 — run
+
+r261029-3504096 done (frames300/h128/c0.35, epoch-14 proxy, seeds 43/44): elastic 0 0.560/0.568 (mean 0.564, vs 0.554 at elastic 1.0 over three seeds) and 4x faster (220 s vs 850 s per cell); elastic 2.0 0.497/0.505; jitter_std 2.0 0.519/0.528; dropout_p 0.4 0.336/0.422. Stronger augmentation hurts the proxy on every axis, dropout most; elastic deformation buys nothing at this budget. Next: weaker augmentation (dropout 0.1 and 0, jitter 0.5) with elastic off, and more frames now that cells are cheap.

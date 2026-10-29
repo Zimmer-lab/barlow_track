@@ -178,15 +178,16 @@ def standardization_health(z1, z2, clamp_thresh=1e-6):
 def intersection_gather(idx1, idx2):
     """Align two independent dropout views on their surviving intersection.
 
-    idx1/idx2: (N1,)/(N2,) original object ids (sorted, unique). Returns
-    (sel1, sel2): index tensors gathering the COMMON ids in the same order,
-    so z1[sel1] <-> z2[sel2] are paired. Empty when there is no overlap.
+    idx1/idx2: (N1,)/(N2,) original object ids, unique except -1 (synthetic
+    detections, never paired). Returns (sel1, sel2): index tensors gathering the
+    COMMON ids in the same order, so z1[sel1] <-> z2[sel2] are paired. Empty when
+    there is no overlap.
     """
     if idx1 is None or idx2 is None:
         return None, None
     i1 = idx1.reshape(-1).tolist()
     i2 = idx2.reshape(-1).tolist()
-    set2 = set(i2)
+    set2 = set(v for v in i2 if v >= 0)
     common = [v for v in i1 if v in set2]
     if not common:
         dev = idx1.device

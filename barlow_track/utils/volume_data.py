@@ -75,6 +75,15 @@ DEFAULT_POSITION_ARGS = dict(
     jitter_std=0.0,  # voxels; float (isotropic) or (z, x, y)
     dropout_p=0.0,  # per-object independent drop prob, per view
     min_keep=2,  # always keep at least this many objects per view (if available)
+    # Synthetic segmentation errors, per view, before the global transform (all off
+    # by default). Synthetic detections carry id -1, so the loss never pairs them;
+    # they are context for the real ones. Real Zimmer frames hold ~20% detections
+    # without a GT name and miss ~14% of the GT neurons.
+    spurious_p=0.0,  # expected extra detections per object, each near a random object
+    spurious_std=(1.0, 5.0, 5.0),  # voxels (z, x, y): offset of a spurious point from its object
+    merge_p=0.0,  # per-object prob of merging with its nearest neighbour into the midpoint
+    split_p=0.0,  # per-object prob of splitting into two fragments
+    split_dist=(1.0, 4.0, 4.0),  # voxels (z, x, y): distance between the two fragments
 )
 
 
@@ -312,6 +321,50 @@ def sample_dropout_keep(n, rng, dropout_p=0.0, min_keep=2):
     return keep, np.where(keep)[0].astype(int)
 
 
+def apply_detection_errors(points_zxy, rng, spurious_p=0.0, spurious_std=(1.0, 5.0, 5.0),
+                           merge_p=0.0, split_p=0.0, split_dist=(1.0, 4.0, 4.0)):
+    """Synthetic segmentation errors on one view's detections; returns (points (M, 3), ids (M,)).
+
+    ids are the original row of each surviving real point, or -1 for synthetic ones:
+    the midpoint of a merged pair, the two fragments of a split, and spurious points
+    (each a Gaussian offset from a random object). Merges pair an object with its
+    nearest neighbour, skipping objects already merged. Draws no random numbers when
+    every probability is 0, so existing runs reproduce.
+    """
+    pts = np.asarray(points_zxy, dtype=float)
+    n = len(pts)
+    ids = np.arange(n, dtype=int)
+    if n < 2 or not (merge_p > 0 or split_p > 0 or spurious_p > 0):
+        return pts.copy(), ids
+    used = np.zeros(n, dtype=bool)
+    extra = []
+    if merge_p > 0:
+        d = np.linalg.norm(pts[:, None] - pts[None], axis=-1)
+        np.fill_diagonal(d, np.inf)
+        nearest = d.argmin(1)
+        for i in rng.permutation(np.where(rng.random(n) < merge_p)[0]):
+            j = nearest[i]
+            if used[i] or used[j]:
+                continue
+            used[i] = used[j] = True
+            extra.append((pts[i] + pts[j]) / 2)
+    if split_p > 0:
+        half = _parse_jitter_std(split_dist) / 2
+        for i in np.where(rng.random(n) < split_p)[0]:
+            if used[i]:
+                continue
+            used[i] = True
+            u = rng.normal(size=3)
+            u /= max(np.linalg.norm(u), 1e-12)
+            extra += [pts[i] + u * half, pts[i] - u * half]
+    if spurious_p > 0:
+        k = rng.binomial(n, min(float(spurious_p), 1.0))
+        if k:
+            extra += list(pts[rng.randint(n, size=k)] + rng.normal(size=(k, 3)) * _parse_jitter_std(spurious_std))
+    out = np.concatenate([pts[~used], np.reshape(extra, (-1, 3))], 0)
+    return out, np.concatenate([ids[~used], np.full(len(extra), -1, dtype=int)])
+
+
 def _centroids_from_metadata_table(project_data, t):
     """get_centroids_for_volume read straight from the per-frame metadata table, or None.
 
@@ -429,7 +482,8 @@ class VolumeCoordsDataset(Dataset):
     __getitem__ returns (y1, y2, kpts1, kpts2, idx1, idx2):
         y1/y2: (N1/N2, 1, Z, X, Y) float32 torch tensors (two global-aug views)
         kpts1/kpts2: (N1/N2, 3) normalized (z, x, y) torch tensors, augmentation-consistent
-        idx1/idx2: (N1/N2,) long tensors of original object indices, so the
+        idx1/idx2: (N1/N2,) long tensors of original object indices (-1: a synthetic
+            detection, position_args spurious_p/merge_p/split_p), so the
             training loss can align the intersection when per-view object
             dropout keeps different subsets (N1 != N2). Objects whose
             transformed centroid falls outside the volume are also dropped
@@ -537,6 +591,14 @@ class VolumeCoordsDataset(Dataset):
     def _augmented_view(self, volume, points, view=0):
         affine_args, elastic_args = split_global_args(self.global_args)
         to_volume = bool(self.global_args.get('apply_to_volume', True))
+        # Segmentation errors happen in the frame, before any motion; ids map rows
+        # back to original objects (-1: synthetic)
+        pa = self.position_args
+        points, ids = apply_detection_errors(
+            points, self.rng, spurious_p=pa.get('spurious_p', 0.0),
+            spurious_std=pa.get('spurious_std', DEFAULT_POSITION_ARGS['spurious_std']),
+            merge_p=pa.get('merge_p', 0.0), split_p=pa.get('split_p', 0.0),
+            split_dist=pa.get('split_dist', DEFAULT_POSITION_ARGS['split_dist']))
         R, t_vec = sample_global_affine(self.rng, **affine_args)
         field = sample_elastic_field(self.rng, volume.shape, **elastic_args)
         if to_volume:
@@ -571,10 +633,11 @@ class VolumeCoordsDataset(Dataset):
             f"dropped_bounds={n_raw - n_inbounds} kept_after_dropout={len(pts_kept)}"
         )
         crop_pts = pts_kept if to_volume else (points[keep_idx] if len(keep_idx) else points[:0])
+        keep_ids = ids[keep_idx] if len(keep_idx) else keep_idx
         if self.keypoints_only:
             kpts = torch.from_numpy(np.asarray(pts_kept, dtype=np.float32))
             return (torch.zeros((len(pts_kept), 1, 1, 1, 1)), self._normalize(kpts, vol_aug.shape),
-                    torch.as_tensor(np.asarray(keep_idx, dtype=np.int64)))
+                    torch.as_tensor(np.asarray(keep_ids, dtype=np.int64)))
         crops = extract_crops(vol_aug, crop_pts, self.target_sz)
         # 4D (N,Z,X,Y) with N as the channel dim, exactly like the legacy
         # NeuronAugmentedImagePairDataset path (torchio Image convention)
@@ -587,7 +650,7 @@ class VolumeCoordsDataset(Dataset):
         x = x.float().unsqueeze(1)  # (N,1,Z,X,Y)
         kpts = torch.from_numpy(np.asarray(pts_kept, dtype=np.float32))
         kpts = self._normalize(kpts, vol_aug.shape)
-        return x, kpts, torch.as_tensor(np.asarray(keep_idx, dtype=np.int64))
+        return x, kpts, torch.as_tensor(np.asarray(keep_ids, dtype=np.int64))
 
     @staticmethod
     def _normalize(kpts_vox, vol_shape):

@@ -1270,3 +1270,21 @@ r261029-3545344 done (dropout-0 base 0.657/0.629, mean 0.643, epoch-14 proxy): h
 Batch 12: hidden 128 and 256 seed 45, hidden 512 seeds 43+44, dropout-0 base.
 
 run r261029-3596459 · pids 3596459 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch12.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 06:42 — run
+
+long13: object dropout 0.02 and 0.05 (user's suggestion of 1-5%), otherwise as long10, 60 epochs + full-video zimmer_1128 eval; brackets long10's 0 and 0.2.
+
+run r261029-3598842 · pids 3598842 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/long13.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 07:42 — run
+
+r261029-3544674 done, full-video zimmer_1128 (labelprop 25 seeds, project segmentation), elastic 0, frames 600, h128, c0.35, 60 epochs: dropout 0 0.932 (misses 5761, mismatches 8312 of 206701), dropout 0.2 0.888 (8096, 15152). Dropout 0 wins on the full eval too, so independent object dropout at 0.2 hurts even with real missed detections. A position-only network now beats trial 27's image backbone on its own recording (0.923, r261028-3398874); fused trial 27 0.968. Correction to what I told the user: the proxy already embeds every detection (untracked objects included) and scores GT neurons present in both frames, so it does see real missing and extra detections as context; only the missed neurons themselves go unscored.
+
+## 2026-10-29 07:42 — run
+
+r261029-3596459 done (dropout-0 base, frames300, epoch-14 proxy): hidden 128 0.657/0.629/0.605 (mean 0.630, seeds 43-45), 256 0.719/0.645/0.686 (0.683), 512 0.737/0.720 (0.729, seeds 43-44). Width is a real lever, +0.05 per doubling, beyond the seed noise.
+
+## 2026-10-29 07:42 — decision
+
+d05dec1: opt-in position_augment spurious_p / merge_p / split_p (synthetic detections, id -1, never paired by the loss), tests in test_detection_errors.py; suite 209 passed, same 3 pre-existing failures. Anisotropic jitter needed no code (jitter_std takes (z, x, y)). Real centroid noise on Zimmer from GT tracks (lag-1 displacement minus the mean of the 6 nearest neighbours', robust std / sqrt 2): (0.17, 1.05, 1.11) voxels, so the isotropic jitter_std 1.0 is ~6x too large in z (z voxels are the coarse axis). Real frames: 169 detections per frame (79-210), 136 GT-named, 14% of GT neurons missing per frame.

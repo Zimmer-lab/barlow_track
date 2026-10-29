@@ -1186,3 +1186,23 @@ Done: read r261029 sc_bayes0_153_project result
 ## 2026-10-29 01:14 — run
 
 r261028-3398874 partial: trial 27 on zimmer_1128 with CPU tracking, backbone stage 0.923; auto stage still tracking.
+
+## 2026-10-29 01:14 — run
+
+Batch 6 (b859d44): around b5 best (vecnorm, cutoff 0.5, frames300, h128; 0.589): seed 44 repeat, cutoff 0.75, 64 neighbours, layers 5.
+
+run r261029-3452046 · pids 3452046 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch6.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 01:14 — run
+
+long6 (b859d44): b5 best with frames 600, 60 epochs, then full-video zimmer_1128 eval; against b2's 0.843.
+
+run r261029-3452047 · pids 3452047 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/long6.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 02:13 — run
+
+r261028-3398874 done: trial 27 on zimmer_1128, labelprop 25 seeds, CPU tracking: backbone 0.923, auto 0.968. So the auto (fused) stage helps on Zimmer (+4.5) and Leifer (+1.4, 0.958 to 0.972) and hurts on Samuel (-11, 0.949 to 0.837): descriptor_stage choice is dataset dependent for this network.
+
+## 2026-10-29 02:13 — decision
+
+r261029-3452046 partial: b6_seed44 (b5 best with seed 44) 0.553 against 0.589 at seed 43, so seed noise in the epoch-14 proxy is ~0.04. Batch 5's vecnorm (+0.016) and layers-5 (+0.005) gains are inside it; only the cumulative climb from 0.400 is clearly real. cutoff 0.75 0.585, 64 neighbours 0.539: no gain. Next batch pairs cells across seeds before ranking.

@@ -1,7 +1,8 @@
 #!/bin/bash
-# Batches 15 and 16 (batch15.sh, batch16.sh: same cells) as one queue on 4 parallel GPU
-# workers, all seed-43 cells first, so both batches report within ~3 h instead of ~4.5 h
-# back to back. Each fast cell needs ~2 GB of GPU memory; starts once batch 14 is done.
+# Batches 15 and 16 (batch15.sh, batch16.sh: same cells) as one queue on NWORKERS parallel
+# GPU workers (default 1; GNU xargs takes SIGUSR1 / SIGUSR2 to add / remove one while
+# running), all seed-43 cells first. Each fast cell needs ~2 GB of GPU memory and ~6 min
+# alone; 4 workers beside an eval ran out of the 12 GB. Cells with a resnet50.pth are skipped.
 cd /home/charles/Current_work/repos/barlow_track
 D=$HOME/.cache/barlow_scratch/train/posonly_fast
 until grep -q "batch14 done" $D/batch14.log 2>/dev/null; do sleep 30; done
@@ -24,10 +25,11 @@ cells() {
 }
 run_cell() {
   name=$1; shift
+  [ -f $D/$name/resnet50.pth ] && { echo "$name already done"; return; }
   seed=${name##*_s}
   $P $name $B "$@" seed=$seed > $D/$name.cell.log 2>&1
   echo "$name exit $? $(grep -o 'epoch  14  proxy [0-9.]*' $D/$name.cell.log | tail -1)"
 }
 export -f run_cell; export P B D
-cells | xargs -P 4 -L 1 bash -c 'run_cell "$@"' _
+cells | xargs -P ${NWORKERS:-1} -L 1 bash -c 'run_cell "$@"' _
 echo "queue15_16 done"

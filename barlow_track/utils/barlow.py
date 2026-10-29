@@ -540,7 +540,7 @@ def compare_model_architecture(expected_args, pretrained_args):
             for field, default, cast in (('visnet_hidden', 64, int), ('visnet_layers', 3, int),
                                          ('visnet_cutoff', 0.35, float), ('visnet_neighbors', 32, int),
                                          ('visnet_cutoff_nn', None, float), ('visnet_rbf_rescale', False, bool),
-                                         ('visnet_vecnorm', None, str)):
+                                         ('visnet_vecnorm', None, str), ('visnet_z_scale', None, float)):
                 curr = _visnet_arg(expected_args, field, default, cast)
                 pre = _visnet_arg(pretrained_args, field, default, cast)
                 if curr != pre:

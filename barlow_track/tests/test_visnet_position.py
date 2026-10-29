@@ -81,6 +81,23 @@ def test_cutoff_nn_default_off_and_wired_from_args():
     assert model.visnet_enc.cutoff_nn == 3.0 and model.visnet_enc.rbf_rescale
 
 
+def test_z_scale_stretches_z_only_and_is_off_by_default():
+    x = _points()
+    plain, stretched = _encoder(cutoff=0.35, rbf_rescale=True), _encoder(cutoff=0.35, rbf_rescale=True, z_scale=4.6)
+    stretched.load_state_dict(plain.state_dict())
+    with torch.no_grad():
+        assert torch.allclose(stretched(x), plain(x * torch.tensor([4.6, 1.0, 1.0])), atol=1e-5)
+        assert not torch.allclose(stretched(x), plain(x), atol=1e-3)
+        # rotations about z (the training augmentation's axis) stay invariant
+        assert torch.allclose(stretched(x), stretched(_rotate_z(x, 40.0)), atol=1e-4)
+    base = dict(embedding_dim=16, projector='32', projector_final=16, lambd=0.0051,
+                position_encoder='visnet', fusion='position_only', visnet_hidden=16, visnet_layers=2)
+    from barlow_track.utils.siamese import ResidualEncoder3D
+    kw = dict(backbone=ResidualEncoder3D, in_channels=1, num_levels=2, f_maps=4, crop_sz=(8, 16, 16))
+    assert BarlowWithPosition(SimpleNamespace(**base), **kw).visnet_enc.z_scale is None
+    assert BarlowWithPosition(SimpleNamespace(**base, visnet_z_scale=4.6), **kw).visnet_enc.z_scale == 4.6
+
+
 def _dense_frame(n=140, seed=0):
     # Thin in z and as dense as a centred Zimmer frame, whose neurons cluster in
     # the ganglia (~120 neighbours within 0.35; half its span when uniform)

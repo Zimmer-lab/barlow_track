@@ -389,7 +389,8 @@ class ViSNetPositionEncoder(nn.Module):
     RBF_NATIVE_CUTOFF = 5.0  # the only cutoff at which pyg's RBF means span [0, cutoff]
 
     def __init__(self, output_dim, hidden_channels=64, num_layers=3, cutoff=0.35,
-                 max_num_neighbors=32, cutoff_nn=None, rbf_rescale=False, vecnorm=None):
+                 max_num_neighbors=32, cutoff_nn=None, rbf_rescale=False, vecnorm=None,
+                 z_scale=None):
         super().__init__()
         # Radius-graph fallback is installed at module import (see
         # _USING_RADIUS_FALLBACK below); nothing to do here.
@@ -424,11 +425,20 @@ class ViSNetPositionEncoder(nn.Module):
         # (0 so a sweep can name the off value: Ax rejects None choices).
         self.cutoff = float(cutoff)
         self.cutoff_nn = float(cutoff_nn) if cutoff_nn else None
+        # Optional: stretch z before the graph. Keypoints arrive in voxel units scaled
+        # by one scalar (normalize_keypoints), so on anisotropic volumes (Zimmer: 1.5 um
+        # z planes vs 0.325 um xy pixels) z distances are compressed and the radius
+        # graph, RBFs and rotation invariance act in a non-physical metric. z_scale is
+        # the z voxel size over the xy pixel size. None or 1 keeps voxel units (default,
+        # so existing checkpoints behave unchanged).
+        self.z_scale = float(z_scale) if z_scale else None
 
     def forward(self, kpts):
         # kpts: (N, 3) float; returns (N, output_dim)
         dev = kpts.device
         x = kpts.float()
+        if self.z_scale is not None and self.z_scale != 1.0:
+            x = x * torch.tensor([self.z_scale, 1.0, 1.0], device=dev)
         # Distinct nodes sharing a voxel give zero-distance edges whose
         # direction is 0/0 = NaN downstream (pyg masks self-loops but not
         # these; seen as one all-NaN frame killing a whole benchmark).
@@ -488,7 +498,8 @@ class BarlowWithPosition(BarlowTwins3d):
                 max_num_neighbors=int(getattr(args, 'visnet_neighbors', 32)),
                 cutoff_nn=getattr(args, 'visnet_cutoff_nn', None),
                 rbf_rescale=bool(getattr(args, 'visnet_rbf_rescale', False)),
-                vecnorm=getattr(args, 'visnet_vecnorm', None))
+                vecnorm=getattr(args, 'visnet_vecnorm', None),
+                z_scale=getattr(args, 'visnet_z_scale', None))
         elif self.pos_encoder != 'keypoint_mlp':
             raise ValueError(f"Unknown position_encoder '{self.pos_encoder}'; use 'keypoint_mlp' or 'visnet'")
         self.norm_visual = _make_norm(self.fusion_norm, embedding_dim)

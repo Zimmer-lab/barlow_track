@@ -1506,3 +1506,13 @@ r261029-3754534: round_posonly_flavell trials 8 / 9 (RBF fix, cutoff_nn 0, elast
 ## 2026-10-29 12:42 — result
 
 r261029-3755323 batch 17 done, seed 44 (base 0.645, base + jitter auto 0.693): cutoff_nn 6 0.618, 12 0.652, 6 + auto 0.645. Both seeds put cutoff_nn 6 about 0.05 below the fixed cutoff on the epoch-14 proxy, against the cluster's full-video +0.04 (round_posonly_zimmer). Proxy and full video disagree here; round_posonly2 tests both on full video.
+
+## 2026-10-29 12:42 — run
+
+long15: visnet_cutoff_nn 0 vs 6, full-video zimmer_1128 eval, at round_posonly2's base (h512, 600 frames, 60 epochs, elastic 0, dropout 0.02, jitter auto); settles the proxy-vs-full-video disagreement of batch 17 a day before the cluster round.
+
+run r261029-3865613 · pids 3865613 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/long15.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 13:21 — decision
+
+Pre-launch code review (subagent, read-only) of 7d9970b..HEAD: one blocker, the three round_posonly2 grids crashed at Ax experiment creation (choice mixing 1.0 and 'auto'; confirmed), fixed with value_type str and numeric strings read as floats (resume checked). Follow-ups fixed: auto jitter raises instead of silently using 1.0; cpu_rescores squeue-failure guard; relaunch needs --skip_completed_grid_jobs. Checked fine: default-off augmentations bitwise identical to 7d9970b, id/row alignment, objective_gt records match the benchmark's 'flavell'/'samuel' settings and tags, budgets (posonly2 53 h per job).

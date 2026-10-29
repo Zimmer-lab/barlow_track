@@ -41,6 +41,51 @@ def lag1_matches(a, b, icp_iters=10):
     return a_al, iab, mutual
 
 
+def nonrigid_matches(a, b, iters=4, k=8, resid=2.0):
+    """Row of b per row of a (-1: unmatched) for consecutive frames, without GT.
+
+    Affine ICP, then `iters` rounds moving each point by the median displacement of its k
+    nearest matched points (locally rigid motion), keeping mutual nearest neighbours closer
+    than half the within-frame NN distance. Finally drops matches whose displacement is
+    more than `resid` voxels from their neighbours' median (None: keep all). On Zimmer
+    lag 1 the residual filter takes precision from 0.84 to 0.96 at ~47 matches per frame
+    (scratch/pair_pseudolabels.py)."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    none = np.full(len(a), -1)
+    if len(a) <= k or len(b) <= k:
+        return none
+    d_in = cKDTree(a).query(a, 2)[0][:, 1]
+    moved, tb = affine_icp(a, b), cKDTree(b)
+    for it in range(iters + 1):
+        dab, iab = tb.query(moved)
+        _, iba = cKDTree(moved).query(b)
+        mutual = (iba[iab] == np.arange(len(a))) & (dab < 0.5 * d_in)
+        am = np.where(mutual)[0]
+        if len(am) <= k:
+            return none
+        disp = b[iab[am]] - a[am]
+        if it == iters:
+            break
+        _, nb = cKDTree(a[am]).query(a, k)
+        moved = a + np.median(disp[nb], 1)
+    if resid is not None:
+        _, nb = cKDTree(a[am]).query(a[am], k + 1)
+        bad = np.linalg.norm(disp - np.median(disp[nb[:, 1:]], 1), axis=1) >= resid
+        mutual[am[bad]] = False
+    return np.where(mutual, iab, -1)
+
+
+def chained_matches(frames, **match_kw):
+    """Row of frames[-1] per row of frames[0] (-1: unmatched) by chaining nonrigid_matches.
+
+    A row survives only if every consecutive pair matches it, so recall drops with the lag."""
+    idx = np.arange(len(frames[0]))
+    for a, b in zip(frames[:-1], frames[1:]):
+        nxt = nonrigid_matches(a, b, **match_kw)
+        idx = np.where(idx >= 0, nxt[np.maximum(idx, 0)], -1)
+    return idx
+
+
 def centroid_noise_from_pairs(pairs, k=6, icp_iters=10):
     """Per-axis centroid noise (z, x, y), robust std / sqrt(2), from consecutive-frame centroid pairs.
 

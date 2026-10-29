@@ -90,6 +90,13 @@ DEFAULT_POSITION_ARGS = dict(
     axis_scale_jitter=0.0,  # per-axis scale 1 +- U(0, a) about the centroid; float or (z, x, y)
     cut_p=0.0,  # prob of dropping everything beyond a random plane normal to z, x or y
     cut_max=0.15,  # max fraction of objects such a cut removes
+    # Real frame pairs (off by default): with prob pair_p the second view is frame t + lag
+    # (lag uniform in 1..pair_lag) instead of frame t, its identities from GT-free
+    # matching of consecutive frames (dataset_stats.nonrigid_matches, residual filter
+    # pair_resid voxels); unmatched objects get id -1. Both views are then augmented as usual.
+    pair_p=0.0,
+    pair_lag=1,
+    pair_resid=2.0,
 )
 
 
@@ -608,6 +615,32 @@ class VolumeCoordsDataset(Dataset):
                              "they need global_augment.apply_to_volume: false")
         if isinstance(self.position_args.get('jitter_std'), str):
             self.position_args['jitter_std'] = self._jitter_from_stats(self.position_args['jitter_std'])
+        self._pairs = self._real_pairs() if self.position_args.get('pair_p') else None
+
+    def _real_pairs(self, min_matches=4):
+        """Per frame, the usable (t + lag, its centroids, frame-t row per row or -1) for lag in
+        1..pair_lag, matched without GT (see DEFAULT_POSITION_ARGS pair_p)."""
+        from barlow_track.utils.dataset_stats import chained_matches
+        pa = self.position_args
+        n_frames = int(getattr(self.project_data, 'num_frames', 0) or 0)
+        out, n_matched = [], []
+        for i, t in enumerate(tqdm(self.frame_indices, desc="Matching real frame pairs", leave=False)):
+            t, frames, pairs = int(t), [self._centroids[i]], []
+            for lag in range(1, int(pa.get('pair_lag', 1)) + 1):
+                if t + lag >= n_frames:
+                    break
+                frames.append(get_centroids_for_volume(self.project_data, t + lag)[0])
+                idx = chained_matches(frames, resid=pa.get('pair_resid', 2.0))
+                if (idx >= 0).sum() < min_matches:
+                    break
+                base_ids = np.full(len(frames[-1]), -1)
+                base_ids[idx[idx >= 0]] = np.where(idx >= 0)[0]
+                pairs.append((t + lag, np.asarray(frames[-1], dtype=float), base_ids))
+                n_matched.append(int((idx >= 0).sum()))
+            out.append(pairs)
+        print(f"real frame pairs: {len(n_matched)} over {len(out)} frames, median "
+              f"{np.median(n_matched) if n_matched else 0:.0f} matched objects", flush=True)
+        return out
 
     def _jitter_from_stats(self, mode, n_pairs=50):
         """jitter_std 'auto': per-axis centroid noise estimated from the segmentation alone
@@ -658,12 +691,18 @@ class VolumeCoordsDataset(Dataset):
         # differ from each other because they draw from the same fresh stream
         # in sequence, but the pair is reproducible across workers and epochs.
         self.rng = np.random.RandomState(np_seed)
+        # A real frame pair replaces the second view's frame (drawn only when pair_p is on)
+        volume2, points2, base_ids2 = volume, points, None
+        if self._pairs is not None and self.rng.random() < self.position_args['pair_p'] and self._pairs[idx]:
+            t2, points2, base_ids2 = self._pairs[idx][self.rng.randint(len(self._pairs[idx]))]
+            if not self.keypoints_only:
+                volume2 = load_volume(self.project_data, t2)
         with _seeded_torch_rng(torch_seed):
             y1, k1, i1 = self._augmented_view(volume, points, view=0)
-            y2, k2, i2 = self._augmented_view(volume, points, view=1)
+            y2, k2, i2 = self._augmented_view(volume2, points2, view=1, base_ids=base_ids2)
         return y1, y2, k1, k2, i1, i2
 
-    def _augmented_view(self, volume, points, view=0):
+    def _augmented_view(self, volume, points, view=0, base_ids=None):
         affine_args, elastic_args = split_global_args(self.global_args)
         to_volume = bool(self.global_args.get('apply_to_volume', True))
         # Segmentation errors happen in the frame, before any motion; ids map rows
@@ -674,6 +713,8 @@ class VolumeCoordsDataset(Dataset):
             spurious_std=pa.get('spurious_std', DEFAULT_POSITION_ARGS['spurious_std']),
             merge_p=pa.get('merge_p', 0.0), split_p=pa.get('split_p', 0.0),
             split_dist=pa.get('split_dist', DEFAULT_POSITION_ARGS['split_dist']))
+        if base_ids is not None:  # a real frame pair: rows of another frame, ids of frame t
+            ids = np.where(ids >= 0, base_ids[np.maximum(ids, 0)], -1)
         R, t_vec = sample_global_affine(self.rng, **affine_args)
         field = sample_elastic_field(self.rng, volume.shape, **elastic_args)
         if to_volume:

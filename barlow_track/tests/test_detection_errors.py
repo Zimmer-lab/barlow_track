@@ -138,3 +138,29 @@ def test_bend_needs_keypoint_only_augmentation(monkeypatch):
         vd.VolumeCoordsDataset(None, [0], target_sz=(4, 16, 16), position_args=dict(bend_max=0.3))
     y1, y2, k1, k2, i1, i2 = _dataset(monkeypatch, bend_max=0.3, axis_scale_jitter=0.1, cut_p=0.5)[0]
     assert len(k1) == len(i1) and len(k2) == len(i2)
+
+
+def test_real_frame_pairs_carry_frame_t_identities(monkeypatch):
+    # Frame 1 is frame 0 moved rigidly plus small noise, its rows shuffled and two objects
+    # missing: the second view's ids must name frame 0's rows (-1 for none)
+    from barlow_track.utils.dataset_stats import nonrigid_matches
+    g = np.stack(np.meshgrid(np.arange(3) * 6.0, np.arange(8) * 12.0, np.arange(8) * 12.0, indexing='ij'), -1)
+    f0 = g.reshape(-1, 3) + [2.0, 10.0, 10.0]
+    perm = np.random.RandomState(0).permutation(len(f0))[:-2]
+    f1 = f0[perm] + [0, 4.0, -2.0] + np.random.RandomState(1).normal(size=(len(perm), 3)) * 0.1
+    m = nonrigid_matches(f0, f1)
+    assert ((m == -1) | (perm[np.maximum(m, 0)] == np.arange(len(f0)))).all() and (m >= 0).mean() > 0.9
+    frames = {0: f0, 1: f1}
+    monkeypatch.setattr(vd, 'get_centroids_for_volume', lambda project_data, t: (frames[t], np.arange(len(frames[t]))))
+    project = type('P', (), {'red_data': np.zeros((2, 30, 120, 120), dtype=np.float32), 'num_frames': 2})()
+    ds = vd.VolumeCoordsDataset(project, [0], target_sz=(4, 16, 16), keypoints_only=True,
+                                global_args=dict(apply_to_volume=False, max_degrees_z=0.0, scale_jitter=0.0,
+                                                 elastic_scale=0.0),
+                                position_args=dict(pair_p=1.0))
+    _, _, k1, k2, i1, i2 = ds[0]
+    assert i1.tolist() == list(range(len(f0))) and len(i2) == len(perm)
+    real = i2.numpy() >= 0
+    assert real.mean() > 0.9 and (i2.numpy()[real] == perm[real]).all()
+    # off: the second view is frame 0 again
+    ds.position_args['pair_p'], ds._pairs = 0.0, None
+    assert ds[0][5].tolist() == list(range(len(f0)))

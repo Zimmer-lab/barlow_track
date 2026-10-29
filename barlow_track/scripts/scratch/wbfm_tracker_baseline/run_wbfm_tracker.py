@@ -10,7 +10,8 @@ run_trials_on_all_ground_truth.DATASETS (NWB sources only):
      combine_tracking_and_tracklets do (2a build_frame_objects, 2b match_adjacent_volumes
      (SuperGlue), 2c postprocess_matches_to_tracklets, 3a track_time_independent
      (SuperGlue against a template), 3b match_tracklets_and_tracks_using_neuron_initialization),
-     skipping a step whose output exists; CUDA is used only if visible;
+     skipping a step whose output exists; CUDA is used only if visible (zero-brightness
+     objects first get their bbox centre as centroid, see fix_nonfinite_centroids);
   3. scores 3-tracking/postprocessing/combined_3d_tracks.h5 against the NWB GT with the
      scoring block of eval_accuracy.run_eval, matching on raw_segmentation_id (the mask
      labels, which the new project keeps from the NWB).
@@ -69,6 +70,36 @@ def create_project(nwb, parent):
     if cfg is None:
         raise RuntimeError(f"project creation left no project_config.yaml under {parent}")
     return cfg
+
+
+def fix_nonfinite_centroids(project_cfg):
+    """Give zero-brightness objects their bbox centre as centroid.
+
+    The recalculated metadata has brightness-weighted centroids, so an object whose voxels
+    are all 0 in the red channel gets (nan, nan, nan) and 2a crashes on int(z) (Samuel 153:
+    96 one-voxel objects of 120923). The original is kept as metadata_before_centroid_fix.pickle.
+    """
+    import pickle
+    import numpy as np
+    fname = os.path.join(os.path.dirname(project_cfg), '1-segmentation', 'metadata.pickle')
+    backup = fname.replace('metadata.pickle', 'metadata_before_centroid_fix.pickle')
+    with open(fname, 'rb') as f:
+        metadata = pickle.load(f)
+    n_fixed = 0
+    for df in metadata.values():
+        for i in df.index:
+            if np.all(np.isfinite(np.asarray(df.at[i, 'centroids'], dtype=float))):
+                continue
+            bbox = df.at[i, 'bbox']  # (z0, x0, y0, z1, x1, y1), exclusive ends
+            df.at[i, 'centroids'] = tuple((bbox[k] + bbox[k + 3] - 1) / 2 for k in range(3))
+            n_fixed += 1
+    if n_fixed:
+        if not os.path.exists(backup):
+            os.rename(fname, backup)
+        with open(fname, 'wb') as f:
+            pickle.dump(metadata, f)
+    print(f"centroid fix: {n_fixed} objects", flush=True)
+    return n_fixed
 
 
 def score(project_cfg, nwb):
@@ -137,6 +168,7 @@ def main():
         rec['step_seconds']['create'] = round(time.time() - t0)
     rec['project'] = project_cfg
     print(f"project: {project_cfg}", flush=True)
+    rec['n_centroids_fixed'] = fix_nonfinite_centroids(project_cfg)
     if args.create_only:
         return
 

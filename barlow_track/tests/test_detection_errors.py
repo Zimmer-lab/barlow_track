@@ -71,3 +71,21 @@ def test_views_carry_synthetic_rows_as_minus_one(monkeypatch, kw):
     assert (i1 == -1).any() or (i2 == -1).any()
     real = [v for v in i1.tolist() if v >= 0]
     assert len(real) == len(set(real)) and set(real) <= {0, 1, 2, 3}
+
+
+def test_auto_jitter_recovers_anisotropic_centroid_noise(monkeypatch):
+    # A grid of objects moving rigidly between frames plus (z, x, y) noise (0.2, 1, 1): the
+    # GT-free estimate must find the anisotropy without any track labels
+    g = np.stack(np.meshgrid(np.arange(4) * 6.0, np.arange(10) * 12.0, np.arange(10) * 12.0, indexing='ij'), -1)
+    base = g.reshape(-1, 3) + [2.0, 10.0, 10.0]
+    rng = np.random.RandomState(0)
+    frames = {t: base + [0, 3.0 * t, 0] + rng.normal(size=base.shape) * [0.2, 1.0, 1.0] for t in range(12)}
+    monkeypatch.setattr(vd, 'get_centroids_for_volume', lambda project_data, t: (frames[t], np.arange(len(base))))
+    project = type('P', (), {'red_data': np.zeros((12, 30, 140, 140), dtype=np.float32), 'num_frames': 12})()
+    ds = vd.VolumeCoordsDataset(project, list(range(11)), target_sz=(4, 16, 16), keypoints_only=True,
+                                global_args=dict(apply_to_volume=False), position_args=dict(jitter_std='auto'))
+    z, x, y = ds.position_args['jitter_std']
+    assert 0.1 < z < 0.4 and 0.6 < x < 1.6 and 0.6 < y < 1.6
+    with pytest.raises(ValueError, match="auto"):
+        vd.VolumeCoordsDataset(project, [0], target_sz=(4, 16, 16), keypoints_only=True,
+                               global_args=dict(apply_to_volume=False), position_args=dict(jitter_std='fit'))

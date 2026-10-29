@@ -72,7 +72,7 @@ DEFAULT_CROP_PHOTOMETRIC_ARGS = dict(
 )
 
 DEFAULT_POSITION_ARGS = dict(
-    jitter_std=0.0,  # voxels; float (isotropic) or (z, x, y)
+    jitter_std=0.0,  # voxels; float (isotropic), (z, x, y), or 'auto' (from GT-free dataset stats)
     dropout_p=0.0,  # per-object independent drop prob, per view
     min_keep=2,  # always keep at least this many objects per view (if available)
     # Synthetic segmentation errors, per view, before the global transform (all off
@@ -553,6 +553,28 @@ class VolumeCoordsDataset(Dataset):
                 zxy, seg = np.zeros((0, 3)), np.zeros((0,), dtype=int)
             self._centroids.append(zxy)
             self._seg_ids.append(seg)
+        if isinstance(self.position_args.get('jitter_std'), str):
+            self.position_args['jitter_std'] = self._jitter_from_stats(self.position_args['jitter_std'])
+
+    def _jitter_from_stats(self, mode, n_pairs=50):
+        """jitter_std 'auto': per-axis centroid noise estimated from the segmentation alone
+        (no GT; utils/dataset_stats.py), from up to n_pairs (t, t+1) pairs of this dataset's
+        frames. Off by default: it reads n_pairs extra metadata frames at start."""
+        if mode != 'auto':
+            raise ValueError(f"jitter_std must be a float, (z, x, y) or 'auto', got {mode!r}")
+        from barlow_track.utils.dataset_stats import centroid_noise_from_pairs
+        n_frames = int(getattr(self.project_data, 'num_frames', 0) or 0)
+        cand = [i for i, t in enumerate(self.frame_indices) if int(t) + 1 < n_frames]
+        pick = [cand[j] for j in np.unique(np.linspace(0, len(cand) - 1, min(n_pairs, len(cand))).astype(int))] \
+            if cand else []
+        pairs = [(self._centroids[i], get_centroids_for_volume(self.project_data, int(self.frame_indices[i]) + 1)[0])
+                 for i in pick]
+        noise = centroid_noise_from_pairs(pairs)
+        if noise is None:
+            logging.warning("jitter_std 'auto': too few lag-1 matches; using 1.0")
+            return 1.0
+        print(f"jitter_std 'auto' from {len(pairs)} frame pairs: (z, x, y) {np.round(noise, 3).tolist()}", flush=True)
+        return [float(v) for v in noise]
 
     def __len__(self):
         return len(self.frame_indices)

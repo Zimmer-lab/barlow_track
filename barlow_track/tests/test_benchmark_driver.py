@@ -26,7 +26,27 @@ def test_project_datasets_score_against_their_own_gt(lab):
     assert os.path.dirname(_flag(cmd, '--project')) == drv.DATASETS[lab]['project']
 
 
-def test_nwb_datasets_pass_their_nwb():
-    cmd = drv.build_eval_cmd('flavell', 'tag', 'w.pth', _args(), 'r.jsonl', 'emb')
-    assert _flag(cmd, '--nwb') == drv.DATASETS['flavell']['nwb']
-    assert '--gt' not in cmd
+@pytest.mark.parametrize('lab', [k for k, v in drv.DATASETS.items() if v['source'] == 'nwb'])
+def test_nwb_datasets_pass_their_nwb_as_source_and_gt(lab):
+    cmd = drv.build_eval_cmd(lab, 'tag', 'w.pth', _args(), 'r.jsonl', 'emb')
+    assert _flag(cmd, '--nwb') == _flag(cmd, '--gt') == drv.DATASETS[lab]['nwb']
+    # The record's gt then matches what a resumed run asks for, so finished cells are skipped
+    assert drv.requested_settings(lab, _args())['gt'] == drv.DATASETS[lab]['nwb']
+    assert _flag(cmd, '--lab') in ('flavell', 'samuel', 'leifer')
+
+
+@pytest.mark.parametrize('device, gres', [('cuda', 'gpu:1'), ('cpu', None)])
+def test_slurm_asks_for_a_gpu_only_when_embedding_on_one(monkeypatch, tmp_path, device, gres):
+    import sys
+    seen = {}
+
+    class FakeExecutor:
+        def __init__(self, folder, cluster):
+            pass
+
+        def update_parameters(self, **kw):
+            seen.update(kw)
+    monkeypatch.setitem(sys.modules, 'submitit', SimpleNamespace(AutoExecutor=FakeExecutor))
+    args = SimpleNamespace(slurm_time='01:00:00', slurm_cpus=4, slurm_mem='8G', device=device, fail_fast=True)
+    assert drv.run_slurm([], str(tmp_path / 'r.jsonl'), args) == []
+    assert seen.get('slurm_gres') == gres

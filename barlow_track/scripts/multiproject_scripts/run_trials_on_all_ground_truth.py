@@ -59,12 +59,21 @@ DATASETS = {
                    nwb=os.path.join(_PAPER_OTHER, "leifer_data/Leifer_NeRVE_Worm1.nwb")),
     "samuel": dict(source="nwb",
                    nwb=os.path.join(_PAPER_OTHER, "samuel_data/153.nwb")),
+    # Further GT recordings (not in DEFAULT_LABS). Flavell: the four forCharlie_2 NWBs
+    # (1600 frames each, GT from the Flavell lab's own tracker like flavell_data.nwb);
+    # Samuel: 137, and 184-004 from thresholded_segmentation (the top-level 184-004.nwb
+    # holds only 10 image frames). 185-005.nwb does not open (bad object header).
+    **{f"flavell_{d.replace('-', '')}": dict(
+        source="nwb", nwb=os.path.join(_PAPER_OTHER, f"flavell_data/forCharlie_2/{d}/flavell_data.nwb"))
+       for d in ("2022-03-16-03", "2022-03-24-02", "2022-03-30-01", "2022-03-30-02")},
+    "samuel_137": dict(source="nwb", nwb=os.path.join(_PAPER_OTHER, "samuel_data/137.nwb")),
+    "samuel_184": dict(source="nwb",
+                       nwb=os.path.join(_PAPER_OTHER, "samuel_data/thresholded_segmentation/184-004.nwb")),
 }
 
 # eval_accuracy.py addresses projects by lab; nwb-source datasets reuse the
 # matching lab entry and override the NWB path.
-LAB_FOR_DATASET = {"zimmer_1128": "zimmer", "zimmer_1123": "zimmer", "zimmer_1210": "zimmer",
-                   "flavell": "flavell", "leifer": "leifer", "samuel": "samuel"}
+LAB_FOR_DATASET = {name: name.split("_")[0] for name in DATASETS}
 
 # Default evaluation set: one zimmer dataset plus the three external labs.
 # The other zimmer datasets remain available via --labs.
@@ -282,13 +291,12 @@ def run_slurm(tasks, results_jsonl, args):
     from submitit import AutoExecutor
     folder = os.path.dirname(os.path.abspath(results_jsonl))
     executor = AutoExecutor(folder=folder, cluster="slurm")
-    executor.update_parameters(
-        slurm_time=args.slurm_time,
-        cpus_per_task=args.slurm_cpus,
-        slurm_mem=args.slurm_mem,
-        slurm_gres="gpu:1",
-        slurm_job_name="barlow_benchmark",
-    )
+    params = dict(slurm_time=args.slurm_time, cpus_per_task=args.slurm_cpus, slurm_mem=args.slurm_mem,
+                  slurm_job_name="barlow_benchmark")
+    if not str(args.device).startswith("cpu"):
+        # --device cpu (with --track_device cpu) runs on CPU-only nodes: ask for no GPU
+        params["slurm_gres"] = "gpu:1"
+    executor.update_parameters(**params)
     future_to_task = {}
     for lab, trial_num, tag, cmd in tasks:
         fut = executor.submit(run_one, cmd, None, tag)
@@ -339,7 +347,9 @@ def build_eval_cmd(lab, tag, weights, args, results_jsonl, emb_dir):
     if weights is not None:
         cmd += ["--weights", weights]
     if spec["source"] == "nwb":
-        cmd += ["--nwb", spec["nwb"]]
+        # --gt too, so the record names this NWB rather than the lab's default GT (for the
+        # default datasets the two are the same file); requested_settings expects it
+        cmd += ["--nwb", spec["nwb"], "--gt", spec["nwb"]]
     else:
         cmd += ["--project", os.path.join(spec["project"], "project_config.yaml")]
         # Without --gt, eval_accuracy falls back to its lab-level GT (the 1128

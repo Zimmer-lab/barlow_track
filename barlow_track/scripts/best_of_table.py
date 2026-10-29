@@ -13,8 +13,10 @@ Markdown table, one row per dataset and evaluation condition:
 - Flavell: NWB ground truth only (the project GT is a tracker output, issue i261028-3), and
   --source nwb records only if they carry nwb_arrays='by_name' (the neuron-order fix for
   issue i261026-1, 79abd66); --source project against the NWB GT is unaffected;
-- Samuel: per recording, oracle detections (--source nwb, GT objects only) kept apart from
-  the project segmentation (--source project).
+- Zimmer: the updated-format project copies only (the original-format ones are the same
+  recordings); Samuel: GT objects only (the project segmentation row was redundant);
+- one row per recording: Zimmer 2022-11-28 / 11-23 worm 11 / 12-10, the five Flavell NWBs,
+  Leifer, Samuel 137 / 153 / 184-004.
 
 Duplicate tags keep the latest record of a file. Usage (repo root, wbfm env):
   python barlow_track/scripts/best_of_table.py [--out docs/best_of_table.md]
@@ -37,29 +39,54 @@ def _stem(path):
     return os.path.basename(os.path.dirname(p)) if p.endswith('.yaml') else os.path.basename(p.rstrip('/'))
 
 
+ZIMMER_RECORDINGS = {'2022_11_28': 'Zimmer 2022-11-28', '2022-11-23_worm11': 'Zimmer 2022-11-23 worm 11',
+                     '2022-12-10': 'Zimmer 2022-12-10'}
+
+
+# Every GT recording we can score, shown even before it has a record (the benchmark driver's
+# datasets: zimmer_1123 and zimmer_1210, flavell_2022*, samuel_137, samuel_184 beyond the defaults)
+ALL_ROWS = [*ZIMMER_RECORDINGS.values(), 'Flavell 2022-03-31-01 (project segmentation)',
+            *(f'Flavell {d} (GT objects)' for d in ('2022-03-31-01', '2022-03-16-03', '2022-03-24-02',
+                                                    '2022-03-30-01', '2022-03-30-02')),
+            'Leifer NeRVE worm 1 (GT objects)', *(f'Samuel {r} (GT objects)' for r in ('137', '153', '184-004'))]
+
+
+def _flavell_recording(nwb):
+    # images_for_charlie (and its local copy, local_data/flavell) holds 2022-03-31-01 (its label
+    # maps are named so); the others sit in forCharlie_2/<recording>/
+    parent = os.path.basename(os.path.dirname(str(nwb)))
+    return '2022-03-31-01' if parent in ('images_for_charlie', 'flavell') else parent
+
+
 def dataset_of(rec):
-    """(dataset row label, None) or (None, reason it is not comparable)."""
+    """(dataset row label, None) or (None, reason it is left out)."""
     lab, source, gt = str(rec.get('lab') or ''), rec.get('source'), str(rec.get('gt') or '')
     if lab.startswith('zimmer'):
-        variant = 'updated-format copy' if 'updated_format' in str(rec.get('project') or gt) else 'original project'
-        return f"Zimmer 2022-11-28 ({variant})", None
+        where = str(rec.get('project') or gt)
+        if 'updated_format' not in where:
+            # Same recordings as the updated-format copies, which every current run uses
+            return None, 'zimmer original-format project (redundant with the updated copy)'
+        for key, name in ZIMMER_RECORDINGS.items():
+            if key in where:
+                return name, None
+        return None, f'unknown zimmer project {where}'
     if lab == 'leifer':
-        return "Leifer NeRVE worm 1 (NWB GT, GT objects)", None
+        return "Leifer NeRVE worm 1 (GT objects)", None
     if lab == 'flavell':
         if source == 'nwb':
             if rec.get('nwb_arrays') != 'by_name':
                 return None, 'flavell nwb before the neuron-order fix'
-            return "Flavell 2022-03-31-01 (NWB GT, GT objects)", None
+            return f"Flavell {_flavell_recording(gt)} (GT objects)", None
         if gt.endswith('.nwb'):
-            return "Flavell 2022-03-31-01 (NWB GT, project segmentation)", None
+            return f"Flavell {_flavell_recording(gt)} (project segmentation)", None
         return None, 'flavell project GT (tracker output)'
     if lab == 'samuel':
-        rec_name = _stem(gt).replace('.nwb', '') or '153'
         if source == 'project':
-            return f"Samuel {rec_name} (project segmentation)", None
+            return None, 'samuel project segmentation (redundant with GT objects)'
         objects = rec.get('nwb_objects') or 'gt'
-        return (f"Samuel {rec_name} (GT objects)", None) if objects == 'gt' else \
-            (None, f'samuel nwb_objects {objects}')
+        if objects != 'gt':
+            return None, f'samuel nwb_objects {objects}'
+        return f"Samuel {_stem(gt).replace('.nwb', '') or '153'} (GT objects)", None
     return None, f'unknown lab {lab!r}'
 
 
@@ -77,7 +104,7 @@ def category_of(rec):
 
 
 def load_records():
-    files = sorted(glob.glob(f'{ROUNDS}/*/exp_results.jsonl')) + \
+    files = sorted(glob.glob(f'{ROUNDS}/*/exp_results*.jsonl')) + \
         sorted(glob.glob(f'{LOCAL}/**/*.jsonl', recursive=True))
     out = []
     for f in files:
@@ -139,7 +166,7 @@ def best_table(records):
 
 
 def render(best, skipped, n_records):
-    rows = sorted({ds for ds, _ in best})
+    rows = ALL_ROWS + sorted({ds for ds, _ in best} - set(ALL_ROWS))
     lines = ["# Best tracking accuracy per dataset", "",
              "Generated by `barlow_track/scripts/best_of_table.py` from every trained-checkpoint record "
              f"(label propagation) in the cluster rounds and the local scratch results ({n_records} records). "
@@ -158,9 +185,9 @@ def render(best, skipped, n_records):
         lines.append(f"| {ds} | " + " | ".join(cells) + " |")
     lines += ["", "Left out as not comparable: " + "; ".join(f"{k} ({v})" for k, v in sorted(skipped.items())) + ".",
               "", "Caveats: GT-object rows (Leifer, Samuel NWB, Flavell NWB source) track oracle detections; project "
-              "segmentation rows track every detection. Zimmer's two project copies are the same recording; "
-              "whether their GT versions match is not checked, so they stay apart. Local records exist only on "
-              "the workstation's cache. The preprint networks have not been re-scored on Zimmer or Leifer yet."]
+              "segmentation rows track every detection. Flavell GT is the Flavell lab's own tracker output. "
+              "Local records exist only on the workstation's cache. The preprint networks have not been "
+              "re-scored on Zimmer or Leifer yet."]
     return "\n".join(lines) + "\n"
 
 

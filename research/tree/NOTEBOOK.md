@@ -1334,3 +1334,19 @@ Staged (barlow_track@1977e9a): round_posonly2_{zimmer,flavell,samuel}, 16 jobs e
 ## 2026-10-29 08:11 — run
 
 Batch 14 first cell: b14_jitz_s43 (jitter (0.2, 1, 1), h256 dropout-0 base) 0.785 at epoch 14 against the isotropic-jitter base's 0.719 at seed 43: +0.066, above the ~0.04 seed noise but one seed so far.
+
+## 2026-10-29 08:13 — decision
+
+User (2026-10-29 ~08:15): cluster has many jobs pending, so no rush; gather as much information as reasonable before the next round. Plan before launching round_posonly2/round_fused_fix: (1) finish batch 14 and the dropout 0.02/0.05 and h512 full evals; (2) full-video eval on Zimmer of the batch-14 winner (matched jitter + any error augmentation that helps) at h512; (3) the same settings on Samuel 153 and Flavell (8741c78 adds --lab to posonly_fast), old base vs new, since every setting so far was found on Zimmer only; (4) trim the staged rounds by what transfers. GPU is full (11.7 GB) until long13's evals release it.
+
+## 2026-10-29 08:14 — decision
+
+User (2026-10-29): avoid jitter matched to the ground truth; the methods must generalize to unseen datasets, so no setting is fitted to the GT at hand. Reverted the staged rounds (round_posonly2_*, round_fused_fix_zimmer) to isotropic jitter_std 1.0 (306fca2). Batch 14's z-light cells (sized from Zimmer GT tracks) stay as a diagnostic of whether anisotropy matters; if it does, a production rule must be GT-free (e.g. the same residual estimate from unlabelled mutual-nearest-neighbour matches between consecutive frames, or the voxel aspect ratio). Same principle already holds elsewhere: elastic_std was matched to GT motion but elastic is off; spurious_p 0.2 came from the GT-named fraction but is gridded against 0 and chosen by accuracy across datasets.
+
+## 2026-10-29 08:20 — result
+
+GT-free dataset statistics (barlow_track@207994d:barlow_track/scripts/scratch/dataset_stats.py; segmentation only: affine-ICP alignment of consecutive frames, mutual NN matches within half the NN spacing, residual vs neighbours' displacement). Centroid noise (z, x, y) voxels, GT-free vs GT-track estimate (centroid_noise.py): Zimmer (0.30, 0.91, 0.94) vs (0.17, 1.05, 1.11); Flavell (0.80, 0.87, 0.85) vs (0.64, 0.81, 0.90); Samuel (0.10, 0.30, 0.30) vs (0.11, 0.57, 0.54). It recovers the anisotropy and the scale within ~2x (Samuel xy low, likely the match gate truncating its small spacing). Unmatched fraction after ICP: Zimmer 0.57, Flavell 0.74, Samuel 0.10: an affine does not absorb Zimmer/Flavell lag-1 bending, so it is no miss-rate estimate there. Also: detections per frame 170/178/91 (CV 0.12/0.07/0.12), within-frame NN median (z, x, y) Zimmer (2.9, 4.5, 4.5), Flavell (2.9, 3.9, 2.7), Samuel (1.0, 2.9, 2.7). The user allows dataset statistics available on new data, nothing needing GT; the GT estimate here only validates the GT-free one.
+
+## 2026-10-29 08:29 — decision
+
+c434ceb: barlow_track/scripts/best_of_table.py writes docs/best_of_table.md, the best image-only / fused / position-only accuracy per dataset from every cluster round's exp_results.jsonl and the local scratch records, comparable records only (trained checkpoints, labelprop, default eval, full videos; Flavell only against the NWB GT and, for --source nwb, after the i261026-1 fix). cb4e869: opt-in jitter_std 'auto' (GT-free centroid noise, utils/dataset_stats.py; 1 s at setup on Zimmer, (0.31, 0.99, 1.03)); off by default, and the user wants it off in the fast iterations.

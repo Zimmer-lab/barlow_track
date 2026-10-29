@@ -1354,3 +1354,147 @@ c434ceb: barlow_track/scripts/best_of_table.py writes docs/best_of_table.md, the
 ## 2026-10-29 08:47 — decision
 
 a14918e: best-of table now one row per recording, all scorable ones shown (Zimmer 1128/1123/1210, five Flavell NWBs, Leifer, Samuel 137/153/184-004); dropped the Zimmer original-format and Samuel project-segmentation rows (user: redundant). Benchmark driver gains flavell_2022031603/0324-02/0330-01/0330-02, samuel_137, samuel_184; NWB datasets now pass --gt (record names its own NWB, resume matches); --device cpu requests no Slurm GPU. Staged scratch/benchmark_more_datasets/run.sh (best checkpoints of each kind x 9 further recordings, CPU only, 63+18 cells) for the user to launch. Smoke: baseline_flavell_head_rerun on flavell 2022-03-16-03, 30 frames, CPU: loads, 173 GT neurons, 0.809. Suite on CPU: 221 passed, 2 pre-existing failures; on the busy GPU 4 more tests OOM (not code).
+
+## 2026-10-29 08:57 — run
+
+posonly_fast batch 15 (831f6a5, augmentations 62f6943): from the batch-14 base (h256, dropout 0, elastic 0), seeds 43/44, epoch-14 proxy: jitter_std auto (GT-free estimate) and 0, axis_scale_jitter 0.1, bend_max 0.3, cut_p 0.5 / cut_max 0.15, global scale_jitter 0 and 0.2. Queued behind batch 14.
+
+run r261029-3707539 · pids 3707539 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch15.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 08:57 — result
+
+r261029-3636490 (batch 14, seed 43, epoch-14 proxy; base 0.719): jitter (0.2,1,1) 0.785, spurious 0.2 0.666, merge 0.05 0.700, split 0.05 0.713, all combined (anisotropic jitter + spurious 0.2 + merge/split 0.03) 0.691. The segmentation-error augmentations cost the proxy even on top of the jitter gain; the jitter gain is GT-matched, so batch 15 tests the GT-free auto estimate instead. Seed 44 still running.
+
+## 2026-10-29 09:08 — run
+
+posonly_fast batch 16 (a524744): real frame pairs, the second view is frame t+lag with GT-free identities (nonrigid_matches, unmatched id -1). Cells pair_p 0.5 / 1.0 (lag 1), pair_p 0.5 lag 1-3, pair_p 0.5 resid 1.5; seeds 43/44, batch-14 base, queued behind batch 15. Caveat: a training frame's t+1 can be a held-out proxy frame (positions only, no labels).
+
+run r261029-3720770 · pids 3720770 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch16.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 09:08 — result
+
+GT-free frame-pair matching scored against GT tracks (scratch/pair_pseudolabels.py @2676174, diagnostic only; 40 start frames per dataset). Lag 1, resid filter 2.0: Zimmer 42 matches/frame at precision 0.964, Flavell 26 at 0.82 (its GT is itself a tracker output), Samuel lag 1 unfiltered 76 at 0.98. Plain affine ICP + mutual NN was 0.75 (Zimmer) / 0.64 (Flavell); the local-median refinement and the residual filter carry it. Chaining to longer lags keeps precision but recall collapses (Zimmer lag 3: 14/frame). So real frame pairs are usable at lag 1 on Zimmer and Samuel, doubtful on Flavell.
+
+## 2026-10-29 09:08 — idea
+
+Augmentation ideas still untested after batch 16, if real pairs help: (1) pseudo-label mining from the network itself (match embeddings between t and t+k, keep confident mutual matches, retrain), a self-training loop that needs no GT; (2) lag-k pairs from nonrigid matching on a coarse-to-fine schedule; (3) z-dependent dropout (dim planes at the volume edges).
+
+## 2026-10-29 09:27 — decision
+
+Real frame pairs (batch 16, r261029-3720770): training reads no GT; identities come from nonrigid_matches on the segmentation alone, and GT was only used to score them (pair_pseudolabels.py). One GT-informed choice remains: pair_resid 2.0 was picked from the GT precision on Zimmer. To be fully GT-free it should be tied to the GT-free noise estimate (e.g. a multiple of the auto jitter) or fixed in advance and not tuned. The user's concern: matching-based pairs are pseudo-labels from a second tracker, biased to easy neurons.
+
+## 2026-10-29 09:27 — idea
+
+Correspondence-free loss for real frame pairs: a contrastive random walk (Jabri et al. 2020, space-time correspondence) between the embeddings of frames t and t+k. Softmax affinities A(t->t+k) and A(t+k->t), and the loss is the cross-entropy of the round trip returning each object to itself (palindrome t->t+k->t). No matching, no GT; it can sit beside the Barlow loss on the synthetic pairs. Also possible: an entropic optimal-transport (Sinkhorn) soft assignment as the latent correspondence.
+
+## 2026-10-29 09:32 — decision
+
+Decision (user, 2026-10-29): keep batch 16. GT-free locally-rigid pseudo-labels are close to rigid augmentation, which is invisible to ViSNet, but the matched objects keep the residual strongly non-rigid motion, which may help even with many objects lost. The cycle-consistency loss went into the tree as a low-priority question for after the revisions.
+
+- [ ] If batch 16 helps: make pair_resid GT-free (a multiple of the auto centroid-noise estimate), since 2.0 was chosen from GT precision
+
+## 2026-10-29 09:38 — dropped
+
+superseded by queue15_16 (same cells, 4 parallel workers)
+
+dropped r261029-3707539
+
+## 2026-10-29 09:38 — dropped
+
+superseded by queue15_16 (same cells, 4 parallel workers)
+
+dropped r261029-3720770
+
+## 2026-10-29 09:38 — run
+
+posonly_fast batches 15+16 as one queue (577b209): the same 22 cells, 4 GPU workers, seed 43 first, after batch 14; aiming for results within ~3 h to stage the next cluster round. Per-cell logs: posonly_fast/<name>.cell.log.
+
+run r261029-3738930 · pids 3738930 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/queue15_16.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 09:54 — dropped
+
+stopped: 4 workers beside long14's eval ran out of GPU memory (12 of 15 started cells OOM'd, moved to posonly_fast/_oom_failed) and maxed the GPU during the user's call. 3 cells finished (results logged).
+
+dropped r261029-3738930
+
+## 2026-10-29 09:54 — run
+
+Rest of the batch 15+16 queue (19 cells), 1 GPU worker while long14's eval holds the GPU, then 2 (the user asked for at most 2 GPU jobs during a call); finished cells skipped.
+
+run r261029-3751540 · pids 3751540 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/queue15_16b.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 09:54 — result
+
+First batch 15/16 cells, seed 43, epoch-14 proxy (base 0.719, GT-matched jitter (0.2,1,1) 0.785): jitter_std auto (GT-free) 0.768; axis_scale_jitter 0.1 0.695; real pairs pair_p 1.0 0.577 (well below base: with every second view a real pair, only the ~35 matched objects per frame are in the loss). Batch 14 seed 44 last cell (all combined) 0.625.
+
+## 2026-10-29 09:58 — run
+
+Rescore round_posonly_flavell trials 8/9 (RBF fix) on the Flavell project segmentation against the NWB GT, CPU only, local records (f4f1ff1).
+
+run r261029-3754534 · pids 3754534 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/rescore_posonly_flavell.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 09:58 — result
+
+Cluster position-only rounds (trained-mode labelprop, full video, own training project as GT): round_posonly_zimmer, all 16 trials scored on zimmer_1128 (original-format project): RBF fix off 0.09-0.58, on 0.66-0.87. With the fix, cutoff_nn 6 is best (0.868 elastic 0, 0.829 elastic 1), then 0 (0.825 / 0.827), 12 (0.801 / 0.727), 3 (0.691 / 0.657); elastic 1 never helps (-0.04 mean). Trial 8 cross-dataset: zimmer_1210 0.808, Flavell NWB 0.558, Flavell 2022-03-16-03 0.634, samuel_137 0.204. round_posonly_flavell: fix off 0.09-0.30, on (cutoff_nn 0) 0.870 / 0.881 against the project GT (tracker output, i261028-3; NWB rescore running); trials 10-15 not trained yet. round_posonly_samuel: 4 checkpoints, no scores (evals crash on the NaN-centroid bug, cluster checkout lacks dd0e82e). Local best for comparison: long10 0.932 on Zimmer (h128, dropout 0, 600 frames).
+
+## 2026-10-29 09:58 — decision
+
+Local loop has not tried visnet_cutoff_nn 6 on the current base (cluster: 0.868 vs 0.825 at 0); add it to the next local queue and to the next cluster round's base candidates.
+
+## 2026-10-29 09:59 — run
+
+posonly_fast batch 17: visnet_cutoff_nn 6 / 12 (and 6 with jitter auto) on the batch-14 base, seeds 43/44, after the 15+16 queue.
+
+run r261029-3755323 · pids 3755323 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch17.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 10:58 — result
+
+r261029-3598842 (long13, h128, 600 frames, elastic 0, 60 epochs, full-video zimmer_1128 labelprop): dropout 0.02 0.945, dropout 0.05 0.931 (epoch-59 proxy 0.782 / 0.797), against long10 dropout 0 0.932 and 0.2 0.888. A little dropout (the user's 1-5%) is at least as good as none; 0.945 is the best position-only Zimmer number so far, above trial 27's image backbone (0.923), below its fused 0.968. One seed each, so 0.932 vs 0.945 is within plausible noise.
+
+## 2026-10-29 10:58 — result
+
+r261029-3751540 seed 43 so far (epoch-14 proxy, batch-14 base 0.719; base seeds 43/44/45 0.719/0.645/0.686): jitter auto 0.768 (seed 44 0.693, base s44 0.645: +0.05 both seeds); jitter 0 0.631; bend 0.3 0.707; axis scale 0.1 0.695; plane cut 0.5 0.664; global scale_jitter 0 0.686, 0.2 0.659 (0.1 base best). Real frame pairs all below base: pair_p 0.5 0.580, 1.0 0.577, 0.5 lag 1-3 0.612, 0.5 resid 1.5 0.647. Reading: positional jitter matters and the GT-free anisotropic estimate beats isotropic 1.0; the new geometry augmentations are neutral to harmful; GT-free real pairs hurt the proxy (stricter filter hurts less, so pseudo-label errors or the easy-object bias are likely the cause).
+
+## 2026-10-29 11:36 — result
+
+r261029-3633727 (long14, width 512, dropout 0, 600 frames, elastic 0, 60 epochs): full-video zimmer_1128 0.958 (epoch-59 proxy 0.903). Best position-only Zimmer network so far, above trial 27's image backbone (0.923), 0.012 below trial 27 fused (0.970).
+
+## 2026-10-29 11:36 — result
+
+r261029-3751540 done, seed 44 (base s44 0.645): jitter auto 0.693, jitter 0 0.595, bend 0.3 0.665, cut 0.5 0.623, global scale 0 / 0.2 0.651 / 0.630, real pairs 0.5 / 1.0 / lag3 / r1.5 0.573 / 0.562 / 0.566 / 0.531. Seed 44 agrees with seed 43 everywhere: jitter auto +0.05 on both seeds is the only gain; bend is neutral; cut, jitter 0, scale 0.2 and every real-pair setting hurt.
+
+## 2026-10-29 11:36 — result
+
+Cluster CPU benchmark (benchmark_more_datasets/run.sh, run by the user; cluster at 7d9970b) on 9 further GT recordings. Image-only round_flavell_paper_ablation t0 is >=0.957 on all five Flavell recordings and 0.942 / 0.879 on Zimmer 1123 / 1210, but 0.468 / 0.432 on Samuel 137 / 184. Trial 27 fused: Zimmer 0.979 / 0.920, Flavell 03-16 / 03-24 0.977 / 0.957 but 03-30-01 / 03-30-02 0.817 / 0.800, Samuel 0.662 / 0.832; its backbone alone collapses on 03-30-01 / 03-30-02 (0.477 / 0.660) and is better on Samuel (0.868 / 0.934). Every Zimmer- or Samuel-trained network collapses on Flavell 03-30-01 / 03-30-02 (0.47-0.63 image-only). Position-only t8 (old base) transfers poorly (Flavell 0.56-0.76, Samuel 0.20 / 0.38). Three Flavell 2022-03-31-01 NWB cells were skipped as already recorded, but their records predate the neuron-order fix (nwb_arrays None): t27 auto 0.820, bayes_samuel t0 auto 0.709, 2x2 t6 0.703; they need --rerun_completed.
+
+- [ ] Rerun Flavell 2022-03-31-01 NWB cells predating the neuron-order fix with --rerun_completed: round_visnet_full t27, round_bayes_samuel t0, round_2x2 t6 (auto stage)
+
+## 2026-10-29 11:48 — issue
+
+Accuracy-objective sweeps on Flavell and Samuel tagged their in-job record with the benchmark's NWB cell label ('flavell', 'samuel') while scoring the project GT (Flavell's is the lab's tracker output); the benchmark then skips the real GT-object cell as done. round_posonly_flavell's 0.870 / 0.881 are such records. Fixed for new rounds by objective_gt (ecd3617); old rounds rescored by cpu_rescores/run.sh with --rerun_completed.
+
+- [x] issue i261029-1 · affects [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 11:48 — decision
+
+Decisions (user, 2026-10-29): Flavell objective must use the NWB GT (objective_gt added, ecd3617; Samuel round too, for the same tag reason); priority is getting position-only to work cleanly, so round_fused_fix_zimmer stays a clean RBF-fix test at trial 27's position settings; CPU rescores staged to wait for the round_posonly jobs to leave the queue. Waiting on the user's push, pull and launch.
+
+## 2026-10-29 11:48 — resolved
+
+logged with a broken --affects (the note title's comma split it); relogged with the note named by a unique part of its title
+
+resolved i261029-1
+
+## 2026-10-29 11:48 — issue
+
+Accuracy-objective sweeps on Flavell and Samuel tagged their in-job record with the benchmark's NWB cell label ('flavell', 'samuel') while scoring the project GT (Flavell's is the lab's tracker output); the benchmark then skips the real GT-object cell as done. round_posonly_flavell's 0.870 / 0.881 are such records. Fixed for new rounds by objective_gt (ecd3617); old rounds rescored by cpu_rescores/run.sh with --rerun_completed.
+
+- [ ] issue i261029-2 · affects [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 11:59 — result
+
+r261029-3755323 batch 17 seed 43 (epoch-14 proxy, base 0.719, base + jitter auto 0.768): cutoff_nn 6 0.670, 12 0.694, 6 + jitter auto 0.709. Locally cutoff_nn 6 trails the fixed cutoff by ~0.05 (one seed, noise ~0.04), the opposite of round_posonly_zimmer's full video (0.868 vs 0.825). The round_posonly2 grid tests both, so no change.
+
+## 2026-10-29 12:14 — decision
+
+Pre-launch check of the four staged rounds (2443724): objective preflight passes for all (round_posonly2_zimmer moved to the updated-format project; the original-format one fails with the current wbfm), jitter_std auto runs on each training project: Zimmer (0.30, 0.99, 0.95), Flavell (0.81, 0.84, 0.83), Samuel (0.10, 0.30, 0.31). Ready for the user's push and launch.

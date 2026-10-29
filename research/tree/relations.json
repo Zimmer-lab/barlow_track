@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastModified": 1793236481154,
+  "lastModified": 1793262752206,
   "relations": {
     "01a1659f-a4ba-700e-91b0-c603dda7da35": {
       "id": "01a1659f-a4ba-700e-91b0-c603dda7da35",
@@ -2227,6 +2227,13 @@
       "source": "01a18539-33f2-7407-98bc-364afc22c1db",
       "destination": "01a165a1-044f-7d60-aec8-7f28b24b881c",
       "created": 1793236481012
+    },
+    "01a186ca-11cd-7ad8-bbdb-91c549b3c511": {
+      "id": "01a186ca-11cd-7ad8-bbdb-91c549b3c511",
+      "type": "relation_ygg_follows-from",
+      "source": "01a186ca-11cc-7e08-b09f-dd5ec0fba44c",
+      "destination": "01a165a4-a369-7b64-90e0-989cf2c75d13",
+      "created": 1793262752205
     }
   }
 }

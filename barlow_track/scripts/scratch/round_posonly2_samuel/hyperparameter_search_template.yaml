@@ -1,9 +1,14 @@
-# round_posonly2_samuel: synthetic segmentation errors on the fast loop's best position-only
-# ViSNet (see train_config.yaml). 2 x 2 x 2 grid, two seeds (--repetitions 2), 16 jobs:
-#   position_augment.spurious_p  0 | 0.2   extra detections near random objects (real
-#                                          Zimmer frames: ~20% detections without a GT name)
-#   position_augment.merge_p     0 | 0.03  object merged with its nearest neighbour
-#   position_augment.split_p     0 | 0.03  object split into two fragments
+# round_posonly2_samuel: the fast loop's best position-only ViSNet (see train_config.yaml) with
+# the three settings the local loop and round_posonly_zimmer left open. 2 x 2 x 2 grid, two
+# seeds (--repetitions 2), 16 jobs:
+#   position_augment.jitter_std  1.0 | auto  isotropic voxels, or per-axis centroid noise
+#                                            estimated from the segmentation alone (no GT;
+#                                            utils/dataset_stats.py, cb4e869)
+#   visnet_cutoff_nn             0 | 6       fixed cutoff 0.35 in normalized units, or each
+#                                            frame rescaled so the cutoff is 6 median NN
+#                                            distances (scale-invariant, so global scale
+#                                            jitter is a no-op; round_posonly_zimmer: 0.825 vs 0.868)
+#   position_augment.dropout_p   0 | 0.02    (local full video: 0.932 vs 0.945, one seed)
 # Run with: python optimize_hyperparameters.py -p <this file> --direct_parameter_sweep --repetitions 2
 baseline_params_path: null
 
@@ -14,12 +19,12 @@ objective_minutes: 240
 train_hours: 48
 
 hyperparameters:
-  - name: position_augment.spurious_p
+  - name: position_augment.jitter_std
     type: choice
-    values: [0.0, 0.2]
-  - name: position_augment.merge_p
+    values: [1.0, auto]
+  - name: visnet_cutoff_nn
     type: choice
-    values: [0.0, 0.03]
-  - name: position_augment.split_p
+    values: [0, 6]
+  - name: position_augment.dropout_p
     type: choice
-    values: [0.0, 0.03]
+    values: [0.0, 0.02]

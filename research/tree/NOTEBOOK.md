@@ -1498,3 +1498,11 @@ r261029-3755323 batch 17 seed 43 (epoch-14 proxy, base 0.719, base + jitter auto
 ## 2026-10-29 12:14 — decision
 
 Pre-launch check of the four staged rounds (2443724): objective preflight passes for all (round_posonly2_zimmer moved to the updated-format project; the original-format one fails with the current wbfm), jitter_std auto runs on each training project: Zimmer (0.30, 0.99, 0.95), Flavell (0.81, 0.84, 0.83), Samuel (0.10, 0.30, 0.31). Ready for the user's push and launch.
+
+## 2026-10-29 12:42 — result
+
+r261029-3754534: round_posonly_flavell trials 8 / 9 (RBF fix, cutoff_nn 0, elastic 0 / 1) on the Flavell 2022-03-31-01 project segmentation scored against the NWB GT: 0.916 / 0.934 (1600 frames), against 0.870 / 0.881 on the project GT. On that row the best image-only is 0.958 (baseline_flavell_head_rerun) and the best fused 0.927, so a Flavell-trained position-only network is within 2.4 points of the best image network there. Records local (~/.cache/barlow_scratch/rescore_posonly_flavell).
+
+## 2026-10-29 12:42 — result
+
+r261029-3755323 batch 17 done, seed 44 (base 0.645, base + jitter auto 0.693): cutoff_nn 6 0.618, 12 0.652, 6 + auto 0.645. Both seeds put cutoff_nn 6 about 0.05 below the fixed cutoff on the epoch-14 proxy, against the cluster's full-video +0.04 (round_posonly_zimmer). Proxy and full video disagree here; round_posonly2 tests both on full video.

@@ -84,6 +84,12 @@ DEFAULT_POSITION_ARGS = dict(
     merge_p=0.0,  # per-object prob of merging with its nearest neighbour into the midpoint
     split_p=0.0,  # per-object prob of splitting into two fragments
     split_dist=(1.0, 4.0, 4.0),  # voxels (z, x, y): distance between the two fragments
+    # Keypoint-only geometry, per view, after the global transform (all off by default;
+    # need global_augment.apply_to_volume false, since crops would not follow)
+    bend_max=0.0,  # radians: max bend of the cloud's in-plane principal axis into an arc
+    axis_scale_jitter=0.0,  # per-axis scale 1 +- U(0, a) about the centroid; float or (z, x, y)
+    cut_p=0.0,  # prob of dropping everything beyond a random plane normal to z, x or y
+    cut_max=0.15,  # max fraction of objects such a cut removes
 )
 
 
@@ -365,6 +371,48 @@ def apply_detection_errors(points_zxy, rng, spurious_p=0.0, spurious_std=(1.0, 5
     return out, np.concatenate([ids[~used], np.full(len(extra), -1, dtype=int)])
 
 
+def apply_keypoint_geometry(points_zxy, rng, bend_max=0.0, axis_scale_jitter=0.0):
+    """Body-like deformations of one view's keypoints: an in-plane bend, then per-axis scaling.
+
+    The bend maps the cloud's principal in-plane (x, y) axis onto an arc, preserving arc
+    length; the swept angle is U(-bend_max, bend_max) over the cloud's extent along that
+    axis, so it is scale-free and needs no annotation. z is left alone. Per-axis scaling
+    is about the centroid. Draws no random numbers when both are 0.
+    """
+    pts = np.asarray(points_zxy, dtype=float).copy()
+    scale = _parse_jitter_std(axis_scale_jitter)
+    if len(pts) < 3 or (not bend_max and not scale.any()):
+        return pts
+    if bend_max:
+        xy = pts[:, 1:]
+        c = xy.mean(0)
+        e = np.linalg.svd(xy - c, full_matrices=False)[2][0]
+        n = np.array([-e[1], e[0]])
+        s, u = (xy - c) @ e, (xy - c) @ n
+        kappa = rng.uniform(-bend_max, bend_max) / max(float(np.ptp(s)), 1e-9)
+        if abs(kappa) > 1e-12:
+            r = 1.0 / kappa - u
+            s, u = r * np.sin(kappa * s), 1.0 / kappa - r * np.cos(kappa * s)
+            pts[:, 1:] = c + s[:, None] * e + u[:, None] * n
+    if scale.any():
+        c = pts.mean(0)
+        pts = c + (pts - c) * (1.0 + rng.uniform(-scale, scale))
+    return pts
+
+
+def sample_plane_cut(points_zxy, rng, cut_p=0.0, cut_max=0.15):
+    """Bool keep mask: with prob cut_p, drop the objects beyond a random plane normal to z, x
+    or y, at most cut_max of them, from a random side (an edge of the field of view). All
+    kept, and no random numbers drawn, when cut_p is 0."""
+    pts = np.asarray(points_zxy, dtype=float)
+    keep = np.ones(len(pts), dtype=bool)
+    if not cut_p or len(pts) < 3 or rng.random() >= cut_p:
+        return keep
+    axis, frac, low = rng.randint(3), rng.uniform(0, cut_max), rng.random() < 0.5
+    coord = pts[:, axis]
+    return coord >= np.quantile(coord, frac) if low else coord <= np.quantile(coord, 1 - frac)
+
+
 def _centroids_from_metadata_table(project_data, t):
     """get_centroids_for_volume read straight from the per-frame metadata table, or None.
 
@@ -553,6 +601,11 @@ class VolumeCoordsDataset(Dataset):
                 zxy, seg = np.zeros((0, 3)), np.zeros((0,), dtype=int)
             self._centroids.append(zxy)
             self._seg_ids.append(seg)
+        geometry = self.position_args.get('bend_max') or np.any(
+            _parse_jitter_std(self.position_args.get('axis_scale_jitter') or 0.0))
+        if geometry and bool(self.global_args.get('apply_to_volume', True)):
+            raise ValueError("position_augment bend_max / axis_scale_jitter move keypoints only: "
+                             "they need global_augment.apply_to_volume: false")
         if isinstance(self.position_args.get('jitter_std'), str):
             self.position_args['jitter_std'] = self._jitter_from_stats(self.position_args['jitter_std'])
 
@@ -631,6 +684,8 @@ class VolumeCoordsDataset(Dataset):
         # (keypoints only when the volume stays put)
         pts_aug = apply_position_jitter(pts_aug, self.rng,
                                         self.position_args.get('jitter_std', 0.0))
+        pts_aug = apply_keypoint_geometry(pts_aug, self.rng, bend_max=pa.get('bend_max', 0.0),
+                                          axis_scale_jitter=pa.get('axis_scale_jitter', 0.0))
         # Drop objects rotated/translated completely out of frame: their
         # clipped crops would be edge duplicates with out-of-range keypoints.
         # Keep original indices so the loss can still align the intersection.
@@ -640,6 +695,8 @@ class VolumeCoordsDataset(Dataset):
             valid = in_bounds_mask(pts_aug, vol_aug.shape, rounded=self.round_bounds)
         else:
             valid = np.ones(n_raw, dtype=bool)
+        valid = valid & sample_plane_cut(pts_aug, self.rng, cut_p=pa.get('cut_p', 0.0),
+                                         cut_max=pa.get('cut_max', DEFAULT_POSITION_ARGS['cut_max']))
         n_inbounds = int(np.asarray(valid).sum()) if n_raw else 0
         valid_orig_idx = np.where(valid)[0]
         pts_valid = pts_aug[valid] if len(pts_aug) else pts_aug

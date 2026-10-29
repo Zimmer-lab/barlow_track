@@ -59,7 +59,8 @@ def _dataset(monkeypatch, **position_args):
 
 def test_default_views_are_unchanged_by_the_new_keys(monkeypatch):
     base = _dataset(monkeypatch)[0]
-    zeros = _dataset(monkeypatch, spurious_p=0.0, merge_p=0.0, split_p=0.0)[0]
+    zeros = _dataset(monkeypatch, spurious_p=0.0, merge_p=0.0, split_p=0.0, bend_max=0.0,
+                     axis_scale_jitter=0.0, cut_p=0.0)[0]
     for a, b in zip(base, zeros):
         assert torch.equal(a, b)
 
@@ -89,3 +90,51 @@ def test_auto_jitter_recovers_anisotropic_centroid_noise(monkeypatch):
     with pytest.raises(ValueError, match="auto"):
         vd.VolumeCoordsDataset(project, [0], target_sz=(4, 16, 16), keypoints_only=True,
                                global_args=dict(apply_to_volume=False), position_args=dict(jitter_std='fit'))
+
+
+def test_geometry_off_draws_nothing_and_keeps_points():
+    from barlow_track.utils.volume_data import apply_keypoint_geometry, sample_plane_cut
+    rng = np.random.RandomState(0)
+    state = rng.get_state()[1].copy()
+    assert np.array_equal(apply_keypoint_geometry(PAIRS, rng), PAIRS)
+    assert sample_plane_cut(PAIRS, rng).all()
+    assert np.array_equal(rng.get_state()[1], state)
+
+
+def test_bend_keeps_arc_length_and_curves_a_line():
+    from barlow_track.utils.volume_data import apply_keypoint_geometry
+    line = np.stack([np.full(21, 3.0), np.linspace(0, 100, 21), np.full(21, 50.0)], 1)
+    for seed in range(5):
+        out = apply_keypoint_geometry(line, np.random.RandomState(seed), bend_max=1.0)
+        steps = np.linalg.norm(np.diff(out, axis=0), axis=1)
+        assert np.allclose(np.diff(line, axis=0)[:, 1].sum(), steps.sum(), rtol=1e-3)  # arc length kept
+        assert np.allclose(out[:, 0], 3.0)  # z untouched
+    assert np.ptp(out[:, 2]) > 1.0  # no longer a straight line
+
+
+def test_axis_scale_jitter_stays_within_its_range():
+    from barlow_track.utils.volume_data import apply_keypoint_geometry
+    out = apply_keypoint_geometry(PAIRS, np.random.RandomState(0), axis_scale_jitter=(0.0, 0.2, 0.2))
+    ratio = np.ptp(out, 0)[1:] / np.ptp(PAIRS, 0)[1:]
+    assert ((ratio > 0.8 - 1e-9) & (ratio < 1.2 + 1e-9)).all() and np.allclose(np.ptp(out, 0)[0], np.ptp(PAIRS, 0)[0])
+
+
+def test_plane_cut_drops_one_end_of_one_axis():
+    from barlow_track.utils.volume_data import sample_plane_cut
+    pts = np.random.RandomState(1).rand(200, 3) * [20, 300, 300]
+    cuts = [sample_plane_cut(pts, np.random.RandomState(s), cut_p=1.0, cut_max=0.2) for s in range(20)]
+    assert all(0.79 <= k.mean() <= 1.0 for k in cuts) and any(k.mean() < 0.95 for k in cuts)
+    for keep in cuts:
+        if keep.all():
+            continue
+        # the dropped objects lie beyond a threshold on some axis
+        assert any(pts[~keep, a].max() < pts[keep, a].min() or pts[~keep, a].min() > pts[keep, a].max()
+                   for a in range(3))
+
+
+def test_bend_needs_keypoint_only_augmentation(monkeypatch):
+    monkeypatch.setattr(vd, 'get_centroids_for_volume', lambda project_data, t: (PAIRS, np.arange(1, 5)))
+    with pytest.raises(ValueError, match="apply_to_volume"):
+        vd.VolumeCoordsDataset(None, [0], target_sz=(4, 16, 16), position_args=dict(bend_max=0.3))
+    y1, y2, k1, k2, i1, i2 = _dataset(monkeypatch, bend_max=0.3, axis_scale_jitter=0.1, cut_p=0.5)[0]
+    assert len(k1) == len(i1) and len(k2) == len(i2)

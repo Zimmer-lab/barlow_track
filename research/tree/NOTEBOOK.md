@@ -1288,3 +1288,37 @@ r261029-3596459 done (dropout-0 base, frames300, epoch-14 proxy): hidden 128 0.6
 ## 2026-10-29 07:42 — decision
 
 d05dec1: opt-in position_augment spurious_p / merge_p / split_p (synthetic detections, id -1, never paired by the loss), tests in test_detection_errors.py; suite 209 passed, same 3 pre-existing failures. Anisotropic jitter needed no code (jitter_std takes (z, x, y)). Real centroid noise on Zimmer from GT tracks (lag-1 displacement minus the mean of the 6 nearest neighbours', robust std / sqrt 2): (0.17, 1.05, 1.11) voxels, so the isotropic jitter_std 1.0 is ~6x too large in z (z voxels are the coarse axis). Real frames: 169 detections per frame (79-210), 136 GT-named, 14% of GT neurons missing per frame.
+
+## 2026-10-29 07:42 — run
+
+Batch 14: jitter (0.2, 1, 1), spurious 0.2, merge 0.05, split 0.05, and all combined, on the h256 dropout-0 base, seeds 43+44.
+
+run r261029-3633726 · pids 3633726 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch14.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 07:42 — run
+
+long14: long10_drop0 (0.932) at hidden 512, 60 epochs + full-video zimmer_1128 eval.
+
+run r261029-3633727 · pids 3633727 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/long14.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 07:45 — dropped
+
+two streams beside long13 and long14 ran out of GPU memory within a minute; relaunched as one stream
+
+dropped r261029-3633726
+
+## 2026-10-29 07:45 — run
+
+Batch 14 relaunched (one stream, waits for long13's training): same cells as r261029-3633726.
+
+run r261029-3636490 · pids 3636490 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch14.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 08:01 — run
+
+Cluster state 2026-10-29 08:05 (from round folders; no squeue here): round_posonly_zimmer 12 of 16 scored, 4 running; round_posonly_flavell 7 of 16 finished, 3 running, 6 not started; round_posonly_samuel 12 submitted, 3 finished but all crashed in the eval (_centroid_boxes, NaN centroid: the bug dd0e82e fixes), 2 running, 7 not started. Its trained checkpoints are on disk, so they can be rescored with --skip-trained once the cluster code has the fix. The cluster checkout is at d0f45b2, without dd0e82e; local is 48 commits ahead of origin. round_flavell_paper_ablation: 14 of 16 results; the last 2 logs stopped on 2026-10-27, presumably dead.
+
+- [ ] push and pull dd0e82e on the cluster, then rescore round_posonly_samuel's crashed trials
+
+## 2026-10-29 08:01
+
+Correction to the 08:01 entry: there is no --skip-trained flag. Rescore the Samuel checkpoints with run_trials_on_all_ground_truth.py --trials N (it scores existing trial checkpoints and skips recorded tags).

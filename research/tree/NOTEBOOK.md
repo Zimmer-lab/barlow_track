@@ -1516,3 +1516,109 @@ run r261029-3865613 · pids 3865613 · host charles-Precision-7820-Tower · logs
 ## 2026-10-29 13:21 — decision
 
 Pre-launch code review (subagent, read-only) of 7d9970b..HEAD: one blocker, the three round_posonly2 grids crashed at Ax experiment creation (choice mixing 1.0 and 'auto'; confirmed), fixed with value_type str and numeric strings read as floats (resume checked). Follow-ups fixed: auto jitter raises instead of silently using 1.0; cpu_rescores squeue-failure guard; relaunch needs --skip_completed_grid_jobs. Checked fine: default-off augmentations bitwise identical to 7d9970b, id/row alignment, objective_gt records match the benchmark's 'flavell'/'samuel' settings and tags, budgets (posonly2 53 h per job).
+
+## 2026-10-29 13:49 — run
+
+posonly_fast batch 18 (queue18.sh): do the Zimmer fast-loop settings transfer? Samuel 153 and Flavell projects, batch-14 base, cells base / jitter auto / cutoff_nn 6 / dropout 0.02, seeds 43/44, 3 GPU workers after long15 trains. Proxy GT: Samuel's final_tracks (95 named per frame, loaded with allow_hybrid_loading as training does); Flavell's is the project GT (the lab's tracker output), so Flavell ranks settings only.
+
+run r261029-3914302 · pids 3914302 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/queue18.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]
+
+## 2026-10-29 14:12 — decision
+
+User's goal for the next ~2 weeks (2026-10-29): a finalized architecture that (a) works on ALL GT recordings, not one per lab (Samuel varies most), (b) runs efficiently (hundreds of jobs to reproduce the paper figures), (c) shows a label-propagation benefit (Samuel), (d) shows a benefit of the transpose / object-space loss (lambd_obj), e.g. faster training or data efficiency. Position helping is optional; position-only and image-only quality are means, not ends: if a fused network beats them, that is the result. The position-only sweep continues but is judged against the best fused numbers.
+
+## 2026-10-29 14:12 — run
+
+posonly_fast batch 19 (queue19.sh): transpose loss where accuracy is not saturated, lambd_obj 0 / 0.67 / 1 x 30 / 100 / 300 training frames, Zimmer position-only, seeds 43/44, after batch 18; per-epoch proxy curves give training speed too.
+
+run r261029-3931397 · pids 3931397 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/queue19.log · for [[EVD - Loss-term ablation where accuracy is not saturated]]
+
+## 2026-10-29 14:21 — decision
+
+objective_cpu_job (default off, 3e014a0): GPU jobs only train, each eval (embedding, label propagation, scoring) is a CPU-only Slurm job with its own cap. The user (2026-10-29): move everything possible to CPU so GPU slots are used efficiently; cross-lab generalization is not needed (self-supervised, a network per recording), so 'works on all datasets' means one recipe trained per recording. Use objective_cpu_job in the weekend round; the running rounds keep in-job evals.
+
+## 2026-10-29 14:22 — decision
+
+Correction to the previous entry: objective_cpu_job is commit d37ac74, not 3e014a0 (AGENTS.md, which also documents it, is git-ignored and local only).
+
+## 2026-10-29 14:50 — run
+
+CPU-training probe: position-only cell at round_posonly2's base (h512, 600 frames, 3 epochs) on CPU with 16 threads, to see whether position-only training can leave the GPU entirely (the user: CPU jobs are plentiful, GPU slots are the budget). Local load ~55 of 56 cores, so the timing is pessimistic.
+
+run r261029-3966658 · pids 3966658 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/cpu_probe.log
+
+## 2026-10-29 14:52 — decision
+
+objective_cpu_parallel now defaults to 1000 (was num_parallel_jobs=10): every trained checkpoint is scored at once on CPU nodes, since only GPU slots are scarce (0884732)
+
+## 2026-10-29 14:57 — run
+
+r261029-3966658: CPU-only training of the h512 / 600-frame position-only network (16 threads, local load ~69 on 56 cores): 100 steps in 246 s, so ~1180 s per epoch against ~94 s on the GPU (12.5x). On a dedicated 16-CPU node maybe half that: 60 epochs in ~10-20 h. Viable for position-only rounds given the generous walltime; stopped after epoch-0 timing
+
+## 2026-10-29 14:58 — decision
+
+train_cpu_job (template key, off by default; 22c6f0c): training jobs ask for no GPU (train_cpu_job_cpus 16, train_cpu_job_mem 64G), for keypoints-only rounds. With objective_cpu_job a position-only round then uses no GPU at all. Needs train_hours sized for ~12x GPU time (r261029-3966658)
+
+## 2026-10-29 14:58 — ask
+
+Per-recording training for the weekend round: 9 GT recordings have a trainable wbfm project with segmentation metadata (zimmer 1128/1123/1210, flavell 2025_07_01 + the four forCharlie_2, samuel 153). Leifer (leifer_project_barlow/_gt), samuel 137 and samuel 184 have no 1-segmentation/metadata.pickle, and loading their NWBs as projects fails (no segmentation metadata), so they cannot be trained on without rebuilding metadata (a write to /lisc, or a local copy) or training on the NWB's GT objects only (which leaks which objects are tracked).
+
+- [ ] ask a261029-1 · on [[QUE - Do the preprint accuracies hold under the corrected evaluation and tracking code]] · For Leifer, Samuel 137 and Samuel 184: rebuild segmentation metadata into a new project copy (where?), train on the NWB objects, or leave them out of the per-recording round?
+
+## 2026-10-29 15:09 — run
+
+r261029-3966658 correction: the first kill stopped only the wrapper shell; the trainer ran on to step 400 (1034 s, a steady ~262 s per 100 steps, so ~1260 s an epoch of 480 steps, 13x the GPU) before I stopped it (PID 3966671)
+
+## 2026-10-29 15:15 — decision
+
+make_per_recording_rounds.py (6e88c46): one round per GT recording from one base config and grid (project_path, target_sz_z 16 for Flavell, objective_dataset = benchmark label, NWB objective_gt). The objective preflight passes on all 9 trainable recordings (zimmer 1123/1128/1210, flavell + 4 forCharlie_2, samuel 153). The weekend round will use it.
+
+## 2026-10-29 15:54 — run
+
+round_posonly2 first cluster records (GT objects, label propagation, seed 43): Flavell position-only 0.975-0.980 (trials 0-2, jitter 1.0), above the best image-only 0.963 on that recording. Samuel 153: jitter 1.0 0.694-0.727 (trials 0-3), jitter auto 0.768 / 0.904 / 0.936 (trials 5 / 4 / 6; best auto + cutoff_nn 6 + dropout 0), so the GT-free per-axis jitter is worth ~+0.2 on Samuel, where the segmentation's centroid noise is ~(0.1, 0.3, 0.3) voxels. No Zimmer or fused_fix records yet. best_of_table regenerated.
+
+## 2026-10-29 16:09 — run
+
+r261029-3931397 (batch 19, position-only Zimmer, epoch-14 proxy, seeds 43/44): lambd_obj 0 > 0.67 > 1.0 at every training-frame count. 30 frames 0.496/0.467 vs 0.490/0.463 vs 0.477/0.452; 100 frames 0.604/0.608 vs 0.594/0.592 vs 0.585/0.577; 300 frames 0.768/0.676 vs 0.714/0.648 vs 0.682/0.636. So in the position-only network the transpose loss gives no data-efficiency gain and costs 0.01-0.05 on the proxy (the 300-frame gap is beyond seed noise). Only the proxy at epoch 14; untested in fused / image networks or on the full video.
+
+## 2026-10-29 16:09 — run
+
+r261029-3914302 (batch 18, proxy, seeds 43/44): Samuel base 0.504/0.568, jitter auto 0.549/0.609 (+0.04 both seeds), cutoff_nn 6 0.459/0.516 (-0.05), dropout 0.02 0.499/0.566 (0). Flavell base 0.781/0.722, auto 0.783/0.728 (0), cnn6 0.738/0.674 (-0.045), dropout 0.793/0.722 (0). The proxy again penalises cutoff_nn 6 while the full video favours it (round_posonly2_samuel 0.727 vs 0.706 at jitter 1.0, 0.936 vs 0.904 at auto; round_posonly_zimmer 0.868 vs 0.825): on cutoff_nn the proxy cannot be trusted; long15 checks it locally on full video.
+
+## 2026-10-29 16:10 — run
+
+Batch 20 (4af7fc0): lambd_obj 0 vs 0.67 in image-only (fusion visual_only) and fused (add) networks from the round_fused_fix_zimmer config, 100 frames, 15 epochs, seeds 43/44, 2 workers. Does the transpose loss help where it was meant to (image features), after batch 19 found it costs position-only networks a little?
+
+run r261029-4011812 · pids 4011812 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch20.log · for [[EVD - Loss-term ablation where accuracy is not saturated]]
+
+## 2026-10-29 16:20 — run
+
+r261029-3865613 (long15, position-only Zimmer at the posonly2 base with jitter auto and dropout 0.02, 60 epochs, seed 43, full video with label propagation): cutoff_nn 0 0.961, cutoff_nn 6 0.943. 0.961 is the best position-only Zimmer score so far (long14, jitter 1.0 and dropout 0: 0.958). So on Zimmer at this base the fixed cutoff wins on full video too, while on Samuel cutoff_nn 6 wins (round_posonly2_samuel 0.936 vs 0.904 at jitter auto): the cutoff choice looks dataset-dependent (one seed each), and it should stay in the grid rather than be fixed.
+
+## 2026-10-29 17:40 — run
+
+r261029-4011812 seed 43, image-only (fusion visual_only, trial 27 image settings, 100 frames, 15 epochs, Zimmer), epoch-14 proxy: lambd_obj 0.67 0.617 vs lambd_obj 0 0.482. The transpose loss trains faster too: 0.67 passes 0.48 at epoch 3, lambd_obj 0 only reaches it at epoch 14 (~4x fewer epochs). The opposite of the position-only networks (batch 19). One seed so far; s44 and the fused cells are running. Fused add lobj0.67 s43 ran out of GPU memory beside another cell; dropped batch 20 to 1 worker and queued its rerun after the batch
+
+## 2026-10-29 17:40 — run
+
+batch 20 retry of the out-of-memory cell (b20_add_lobj0.67_s43), one worker, after batch 20 ends
+
+run r261029-4053272 · pids 4053272 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch20_retry.log · for [[EVD - Loss-term ablation where accuracy is not saturated]]
+
+## 2026-10-29 17:52 — decision
+
+User (2026-10-29): in the preprint, varying lambd_obj didn't matter much; either loss trained well. Training dynamics and data efficiency were not checked then. Test it on the Samuel recordings too, and anywhere else it might help. So batch 20's gap at epoch 14 may be speed rather than final accuracy: run it long enough to see whether lambd_obj 0 catches up, and at few frames.
+
+## 2026-10-29 17:53 — run
+
+Batch 21 (11a58ec), after the batch 20 retry, one worker: image-only lambd_obj 0 / 0.67 on Samuel 153 (30 / 100 frames, 30 epochs, seeds 43/44: does 0 catch up, as the preprint's final accuracies suggest?) and on Zimmer (100 frames, 40 epochs, seed 43, with full-video eval)
+
+run r261029-4059380 · pids 4059380 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch21.log · for [[EVD - Loss-term ablation where accuracy is not saturated]]
+
+## 2026-10-29 18:32 — decision
+
+Ax (Bayesian) mode already scores trials on full-video tracking accuracy in CPU jobs: objective: accuracy + objective_cpu_job: true, without --direct_parameter_sweep. The train job frees its GPU slot, the eval runs as a CPU job, and its accuracy completes the Ax trial (the GP fits that, never val loss); Ax keeps proposing new trials into free GPU slots meanwhile. New test (ef21c16) runs a 3-trial Ax sweep through the real dispatcher with faked train/eval. The user (2026-10-29) suggests using Ax over a promising range rather than fixed grids.
+
+## 2026-10-29 19:35 — decision
+
+Distilled the 2026-10-28/29 position-only work into the tree: filled and finished [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]] (high); new evidence on GT-free jitter, augmentation dead ends, lambd_obj in position-only networks, the ViSNet cutoff and CPU training cost; new low-confidence claim [[CLM - A position-only network tracks within a few points of the best image or fused network]]; Findings line in ideas/barlowtrack.md. Issue i261028-2's three notes still need judging with the user.

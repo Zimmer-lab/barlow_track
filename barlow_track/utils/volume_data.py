@@ -617,9 +617,11 @@ class VolumeCoordsDataset(Dataset):
             self.position_args['jitter_std'] = self._jitter_from_stats(self.position_args['jitter_std'])
         self._pairs = self._real_pairs() if self.position_args.get('pair_p') else None
 
-    def _real_pairs(self, min_matches=4):
+    def _real_pairs(self, min_frac=0.15, min_matches=8):
         """Per frame, the usable (t + lag, its centroids, frame-t row per row or -1) for lag in
-        1..pair_lag, matched without GT (see DEFAULT_POSITION_ARGS pair_p)."""
+        1..pair_lag, matched without GT (see DEFAULT_POSITION_ARGS pair_p). A lag with fewer
+        than min_frac of frame t's objects matched (often a failed alignment) is not used,
+        and the item falls back to the synthetic pair."""
         from barlow_track.utils.dataset_stats import chained_matches
         pa = self.position_args
         n_frames = int(getattr(self.project_data, 'num_frames', 0) or 0)
@@ -631,7 +633,7 @@ class VolumeCoordsDataset(Dataset):
                     break
                 frames.append(get_centroids_for_volume(self.project_data, t + lag)[0])
                 idx = chained_matches(frames, resid=pa.get('pair_resid', 2.0))
-                if (idx >= 0).sum() < min_matches:
+                if (idx >= 0).sum() < max(min_matches, min_frac * len(frames[0])):
                     break
                 base_ids = np.full(len(frames[-1]), -1)
                 base_ids[idx[idx >= 0]] = np.where(idx >= 0)[0]

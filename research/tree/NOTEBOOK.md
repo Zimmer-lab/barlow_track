@@ -1322,3 +1322,15 @@ Cluster state 2026-10-29 08:05 (from round folders; no squeue here): round_poson
 ## 2026-10-29 08:01
 
 Correction to the 08:01 entry: there is no --skip-trained flag. Rescore the Samuel checkpoints with run_trials_on_all_ground_truth.py --trials N (it scores existing trial checkpoints and skips recorded tags).
+
+## 2026-10-29 08:07 — result
+
+Centroid noise per axis from GT tracks (barlow_track@bfde2bf:barlow_track/scripts/scratch/centroid_noise.py; upper bound, includes local non-rigid motion), voxels (z, x, y): Zimmer (0.17, 1.05, 1.11), Flavell (0.64, 0.81, 0.90), Samuel 153 (0.11, 0.57, 0.54). Every position run so far used jitter_std 1.0 on every axis: 6-9x the real z noise on Zimmer and Samuel, ~2x in xy on Samuel.
+
+## 2026-10-29 08:11 — decision
+
+Staged (barlow_track@1977e9a): round_posonly2_{zimmer,flavell,samuel}, 16 jobs each (spurious_p {0, 0.2} x merge_p {0, 0.03} x split_p {0, 0.03}, two seeds; base RBF fix, width 512, 600 frames, 60 epochs, dropout 0, elastic 0, keypoints only, jitter matched per dataset) and round_fused_fix_zimmer, 8 jobs (trial 27 + that position branch; visnet_rbf_rescale {false, true} x fusion {concat, add}, two seeds). README and launch in scratch/round_posonly2_zimmer/README.md; needs push + pull on the cluster first (cluster at d0f45b2). Smoke-tested 1 epoch on CPU. User will launch from the office.
+
+## 2026-10-29 08:11 — run
+
+Batch 14 first cell: b14_jitz_s43 (jitter (0.2, 1, 1), h256 dropout-0 base) 0.785 at epoch 14 against the isotropic-jitter base's 0.719 at seed 43: +0.066, above the ~0.04 seed noise but one seed so far.

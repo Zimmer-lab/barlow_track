@@ -28,6 +28,9 @@ import sys
 import time
 
 import pandas as pd
+# Before project creation runs: something it imports loads pip's vendored typing_extensions,
+# after which importing pytorch_lightning (wbfm's superglue, steps 2a-3a) raises TypeError
+import pytorch_lightning  # noqa: F401
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 sys.path.insert(0, REPO)

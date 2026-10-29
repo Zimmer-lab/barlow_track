@@ -720,6 +720,44 @@ def test_default_sweep_still_scores_inside_the_training_job(tmp_path, monkeypatc
     assert calls[1] == ('eval', calls[0][1])
 
 
+def test_bayesian_sweep_fits_the_cpu_job_accuracy(tmp_path, monkeypatch):
+    # Ax mode (no --direct_parameter_sweep) with objective_cpu_job: each trial completes in
+    # Ax with the full-video accuracy its CPU eval job returned, not a training loss
+    pytest.importorskip('ax')
+    import yaml
+    calls = []
+
+    def fake_train(args):
+        calls.append('train')
+        open(os.path.join(args.project_dir, 'resnet50.pth'), 'wb').write(b'w')
+        return dict(test_loss=0.5)
+
+    def fake_eval(**kw):
+        calls.append('eval')
+        lr = yaml.safe_load(open(os.path.join(os.path.dirname(kw['weights']), 'train_config.yaml')))['lr']
+        return dict(accuracy=1.0 - lr, n_frames=10, total=10, minutes=1.0)
+
+    monkeypatch.setattr(oh, 'train_barlow_network', fake_train)
+    monkeypatch.setattr(oh, 'evaluate_trained_checkpoint', fake_eval)
+    monkeypatch.setattr(oh, 'preflight_trained_eval', lambda *a, **k: 'ok')
+    monkeypatch.setattr(oh.time, 'sleep', lambda s: None)
+    sweep = tmp_path / 'round'
+    sweep.mkdir()
+    yaml.safe_dump(dict(project_path='/data/p/project_config.yaml', epochs=2, seed=43, wandb_name=None),
+                   open(sweep / 'train_config.yaml', 'w'))
+    yaml.safe_dump(dict(baseline_params_path=None, objective='accuracy', objective_dataset='zimmer_1128',
+                        objective_minutes=30, objective_cpu_job=True,
+                        hyperparameters=[dict(name='lr', type='range', bounds=[0.1, 0.5])]),
+                   open(sweep / 'hyperparameter_search_template.yaml', 'w'))
+    monkeypatch.chdir(tmp_path)
+    oh.optimize_hyperparameters(str(sweep / 'hyperparameter_search_template.yaml'), run_locally=True,
+                                num_parallel_jobs=1, total_budget=3)
+    assert calls == ['train', 'eval'] * 3
+    best = yaml.safe_load(open(sweep / 'best_parameters.yaml'))
+    assert best['objective'] == 'accuracy'
+    assert abs(best['best_accuracy'] - (1.0 - best['lr'])) < 1e-6
+
+
 def test_cpu_eval_jobs_ask_for_no_gpu():
     params = oh.cpu_eval_job_params({'objective_cpu_job_cpus': 24}, 240, 'round_x')
     assert 'slurm_gres' not in params and 'slurm_constraint' not in params

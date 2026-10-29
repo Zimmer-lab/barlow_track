@@ -5,7 +5,7 @@
 # stays isotropic 1.0: no setting is fitted to a dataset's GT.
 # The grid toggles synthetic segmentation errors (spurious points, merges, splits).
 # See round_posonly2_zimmer/README.md.
-project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/wbfm_projects/manually_annotated/paper_data/ZIM2165_Gcamp7b_worm1-2022_11_28/project_config.yaml
+project_path: /lisc/data/scratch/neurobiology/zimmer/fieseler/wbfm_projects/manually_annotated/paper_data/ZIM2165_Gcamp7b_worm1-2022_11_28_updated_format/project_config.yaml
 pretrained_model_path:
 wandb_name: barlow_track_round_posonly2_zimmer
 wandb_username: charlesfieseler

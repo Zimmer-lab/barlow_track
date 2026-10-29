@@ -17,7 +17,8 @@ over seeds (single-seed gaps under ~0.04 in the epoch-14 proxy are noise):
 
 ## round_posonly2_{zimmer,flavell,samuel} (16 jobs each)
 
-Baseline: the settings above, keypoints only (no volumes loaded), 60 epochs, width 512, no
+Baseline: the settings above (Zimmer on the updated-format 2022-11-28 copy, the benchmark's
+zimmer_1128 project), keypoints only (no volumes loaded), 60 epochs, width 512, no
 dropout, isotropic position jitter 1.0, elastic off. No augmentation setting is fitted to a
 dataset's GT (the user, 2026-10-29: the point is to generalize to unseen datasets).
 

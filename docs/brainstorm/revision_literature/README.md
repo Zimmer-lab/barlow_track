@@ -80,7 +80,10 @@ Evidence notes. The reports were written by agents and are only partly checked:
 ### Comparisons with other methods (competitors.md)
 
 9. **Must compare:** ASCENT (self-supervised, trained per recording, public code, reports 95.9% on
-   our exact Leifer recording); fDNC (the wbfm wrapper exists, and an agent is running it now);
+   our exact Leifer recording). **Note from the user (2026-10-29): BarlowTrack was co-submitted with
+   ASCENT, precisely because the two are so similar.** It is concurrent work, not missed prior work,
+   so the agents' "novelty gap" framing in competitors.md and losses_tracking.md does not apply. A
+   same-data, same-metric comparison is still the most informative one. fDNC (the wbfm wrapper exists, and an agent is running it now);
    ZephIR (needs at least one annotated frame; report it as "uses k GT frames").
 10. **Cheap floor:** CPD or Hungarian matching on centroids.
 11. **Leifer literature table:** the published numbers are on our exact recording, though each paper
@@ -93,5 +96,4 @@ Evidence notes. The reports were written by agents and are only partly checked:
   fDNC never ablated its own augmentations.
 - The invariance argument: ViSNet only sees local neighbourhoods, so only deformation within one
   cutoff radius changes its input (augmentations.md Part 1).
-- Position ASCENT carefully: its recipe overlaps BarlowTrack's (two augmented views, image plus
-  position, trained per recording) and it does not cite BarlowTrack.
+- ASCENT is a co-submitted companion paper (see item 9); describe it as concurrent work.

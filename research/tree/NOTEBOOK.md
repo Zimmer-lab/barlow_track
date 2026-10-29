@@ -1240,3 +1240,9 @@ r261029-3452047 done: long6 (frames 600, h128, vecnorm, cutoff 0.5, elastic 1.0,
 ## 2026-10-29 04:40 — run
 
 r261029-3530683 done (elastic 0, frames300/h128/c0.35, epoch-14 proxy, seeds 43/44): dropout_p 0 0.657/0.629 (mean 0.643), 0.1 0.625/0.607 (0.616), 0.2 (b8) 0.564; jitter_std 0.5 0.577/0.552 (0.565, no change from 1.0); frames 600 at dropout 0.2 0.610/0.591 (0.600). Object dropout is the largest lever found: +0.08 from 0.2 to 0. The proxy matches GT objects in both frames, so it cannot see robustness to missed detections; the full eval on project segmentation decides.
+
+## 2026-10-29 04:40 — run
+
+long10: dropout 0 vs 0.2 at elastic 0, frames 600, h128, c0.35, 60 epochs, each with a full-video zimmer_1128 eval (vs long6 0.893).
+
+run r261029-3544674 · pids 3544674 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/long10.log · for [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]]

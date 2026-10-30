@@ -1,0 +1,16 @@
+# round_wk1: the per-recording recipe comparison for the final architecture (weekend 2026-10-31).
+# Image-only (visual_only) vs fused (add, RBF-fixed ViSNet, z stretched by the voxel aspect)
+# x lambd_obj 0 (feature loss only) / 0.67 (default) / 1 (transpose loss only), 100 frames.
+# Goals: (a) one recipe per recording on all GT recordings, (d) the transpose loss: batch 20 / 21
+# found it trains image networks faster and with fewer frames, but not fused ones.
+# 6 jobs per recording; --repetitions 2 on zimmer_1128, samuel, flavell_2022033001.
+objective_cpu_job: true
+objective_minutes: 720
+train_hours: 48
+hyperparameters:
+  - name: fusion
+    type: choice
+    values: [visual_only, add]
+  - name: lambd_obj
+    type: choice
+    values: [0.0, 0.67, 1.0]

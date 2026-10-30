@@ -280,6 +280,10 @@ def resolve_objective(hyperparameter_args):
         # re-export), not only the GT objects; 'gt' (default) keeps recorded cells comparable
         eval_kwargs['nwb_objects'] = hyperparameter_args.get('objective_nwb_objects', 'gt')
         eval_kwargs['nwb_gt_mapping'] = hyperparameter_args.get('objective_nwb_gt_mapping', 'centroid')
+    # objective_snapshots (default off): also score the trial's epoch_snapshots (train
+    # config key) after the final checkpoint, each under <tag>_epNNN; the objective stays
+    # the final checkpoint's accuracy
+    eval_kwargs['snapshots'] = bool(hyperparameter_args.get('objective_snapshots', False))
     if eval_kwargs['max_frames'] is not None:
         eval_kwargs['max_frames'] = int(eval_kwargs['max_frames'])
         logging.warning(f"objective_max_frames={eval_kwargs['max_frames']}: the objective is "
@@ -340,7 +344,7 @@ def measure_tracking_accuracy(args, test_losses, parent_folder, dataset_label, o
         logging.warning(f"Could not release GPU memory before the objective eval: {e}")
     print(f"[{os.path.basename(str(args.project_dir))}] scoring tracking accuracy of {ckpt} "
           f"on its own training project (this takes tens of minutes)", flush=True)
-    kwargs = {k: v for k, v in eval_kwargs.items() if k != 'gt'}
+    kwargs = {k: v for k, v in eval_kwargs.items() if k not in ('gt', 'snapshots')}
     record = evaluate_trained_checkpoint(
         weights=ckpt,
         # Same recording as training: the trial must be scored on the data it was
@@ -353,7 +357,34 @@ def measure_tracking_accuracy(args, test_losses, parent_folder, dataset_label, o
     print(f"[{os.path.basename(str(args.project_dir))}] tracking accuracy "
           f"{record['accuracy']:.4f} ({record['n_frames']} frames, {record['total']} GT "
           f"detections, {record['minutes']:.1f} min); losses kept as diagnostics", flush=True)
+    if eval_kwargs.get('snapshots'):
+        score_epoch_snapshots(args, tag, results_jsonl, emb_dir, eval_kwargs, extra)
     return record['accuracy']
+
+
+def score_epoch_snapshots(args, tag, results_jsonl, emb_dir, eval_kwargs, extra):
+    """Score each epoch snapshot of a trial (train_barlow_clusterer epoch_snapshots) as the
+    objective scores its final checkpoint, under <tag>_epNNN. Snapshots already recorded with
+    these settings are skipped (resume); a failure is logged and never fails the trial."""
+    import glob
+    snaps = sorted(glob.glob(os.path.join(args.project_dir, 'epoch_snapshots', 'epoch_*', 'resnet50.pth')))
+    settings = objective_record_settings(eval_kwargs, {'project_path': args.project_path})
+    done = read_results_by_tag(results_jsonl, settings=settings) if snaps else {}
+    kwargs = {k: v for k, v in eval_kwargs.items() if k not in ('gt', 'snapshots')}
+    for weights in snaps:
+        epoch = int(os.path.basename(os.path.dirname(weights)).split('_')[-1])
+        snap_tag = f"{tag}_ep{epoch:03d}"
+        if snap_tag in done:
+            continue
+        try:
+            rec = evaluate_trained_checkpoint(
+                weights=weights, project=args.project_path, gt=eval_kwargs.get('gt') or args.project_path,
+                tag=snap_tag, results_jsonl=results_jsonl, emb_dir=emb_dir,
+                extra_record={**extra, 'snapshot_epoch': epoch}, **kwargs)
+            print(f"[{os.path.basename(str(args.project_dir))}] epoch {epoch} snapshot: tracking "
+                  f"accuracy {rec['accuracy']:.4f} ({rec['minutes']:.1f} min)", flush=True)
+        except Exception as e:
+            logging.warning(f"Epoch {epoch} snapshot of {args.project_dir} not scored: {e!r}")
 
 
 def _to_yaml_safe(obj):

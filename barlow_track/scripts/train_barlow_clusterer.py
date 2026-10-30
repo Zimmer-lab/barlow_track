@@ -295,6 +295,9 @@ def train_barlow_network(args):
     # reproducible. The legacy crop pipeline draws from the global RNG and needs nothing.
     reaugment = bool(getattr(args, 'reaugment_each_epoch', False)) and use_position
     timer = _PhaseTimer(bool(getattr(args, 'timing_log', False)), gpu)
+    # epoch_snapshots (default none): epoch counts after which to keep the weights, e.g.
+    # [1, 2, 5, 10, 20], each a loadable model folder (see _save_epoch_snapshot)
+    snapshot_epochs = {int(e) for e in (getattr(args, 'epoch_snapshots', None) or [])}
     if timer.enabled and use_position:
         # Splits 'data' into volume reading, augmentation and crop phases (num_workers 0 only)
         data_module.alldata.timings = {}
@@ -469,6 +472,8 @@ def train_barlow_network(args):
                 timer.lap('val_match_proxy')
                 timer.add_items('val_item', data_module)
                 timer.report(epoch)
+                if epoch + 1 in snapshot_epochs:
+                    _save_epoch_snapshot(model, args, epoch + 1)
                 if run is not None:
                     run.log(val_losses)
                 # Printing
@@ -560,7 +565,24 @@ def train_barlow_network(args):
     return test_losses
 
 
-RUN_OUTPUT_GLOBS = ('resnet50*.pth', 'args*.pickle', 'log/stats*.json', 'checkpoints/checkpoint*.pth')
+RUN_OUTPUT_GLOBS = ('resnet50*.pth', 'args*.pickle', 'log/stats*.json', 'checkpoints/checkpoint*.pth',
+                    'epoch_snapshots/*/*')
+
+
+def epoch_snapshot_dir(project_dir, epoch):
+    return os.path.join(project_dir, 'epoch_snapshots', f'epoch_{int(epoch):03d}')
+
+
+def _save_epoch_snapshot(model, args, epoch):
+    """Weights after `epoch` epochs as <project_dir>/epoch_snapshots/epoch_NNN/{resnet50.pth,
+    args.pickle}: load_barlow_model and the trained-mode eval read it like a finished run."""
+    d = epoch_snapshot_dir(args.project_dir, epoch)
+    os.makedirs(d, exist_ok=True)
+    fname = os.path.join(d, 'resnet50.pth')
+    torch.save(model.state_dict(), fname)
+    snap_args = SimpleNamespace(**{**vars(args), 'model_fname': fname, 'snapshot_epoch': int(epoch)})
+    with open(os.path.join(d, 'args.pickle'), 'wb') as f:
+        pickle.dump(snap_args, f)
 
 
 def _archive_previous_run(project_dir, keep=()):

@@ -791,3 +791,35 @@ def test_training_jobs_ask_for_a_gpu_unless_train_cpu_job():
     cpu = oh.train_job_params({'train_cpu_job': True, 'train_cpu_job_cpus': 32}, 'round_x')
     assert 'slurm_gres' not in cpu and 'slurm_constraint' not in cpu
     assert cpu['cpus_per_task'] == 32 and cpu['slurm_additional_parameters'] == {"no-requeue": True}
+
+
+def test_objective_snapshots_scores_each_epoch_snapshot_after_the_final(tmp_path, monkeypatch):
+    trial_dir = _fake_trial(tmp_path)
+    for e in (1, 5, 10):
+        d = trial_dir / 'epoch_snapshots' / f'epoch_{e:03d}'
+        d.mkdir(parents=True)
+        (d / 'resnet50.pth').write_bytes(b'x')
+    calls = []
+
+    def fake_eval(**kw):
+        calls.append((kw['weights'], kw['tag'], (kw.get('extra_record') or {}).get('snapshot_epoch')))
+        if kw['tag'].endswith('_ep010'):
+            raise RuntimeError("labelprop died")
+        return dict(accuracy=0.9 if 'epoch_snapshots' not in kw['weights'] else 0.1,
+                    n_frames=10, total=10, minutes=1.0)
+    monkeypatch.setattr(oh, 'evaluate_trained_checkpoint', fake_eval)
+    args = type('Args', (), dict(project_dir=str(trial_dir), project_path='/p/project_config.yaml'))()
+    tag = record_tag(str(tmp_path / 'sweep'), 3, 'zimmer_1128')
+    # epoch 1 is already recorded with these settings (a resumed eval job)
+    monkeypatch.setattr(oh, 'read_results_by_tag', lambda path, settings=None: {f"{tag}_ep001": {}})
+    _, label, kwargs = oh.resolve_objective({'objective': 'accuracy', 'objective_dataset': 'zimmer_1128',
+                                             'objective_snapshots': True})
+    acc = oh.measure_tracking_accuracy(args, {}, str(tmp_path / 'sweep'), label, 'accuracy', 'r.jsonl', 'emb', kwargs)
+    assert acc == 0.9  # the objective is the final checkpoint, and a failed snapshot does not fail it
+    assert [c[1] for c in calls] == [tag, f"{tag}_ep005", f"{tag}_ep010"]
+    assert calls[1][0].endswith('epoch_snapshots/epoch_005/resnet50.pth') and calls[1][2] == 5
+    # Off by default: only the final checkpoint
+    calls.clear()
+    _, label, kwargs = oh.resolve_objective({'objective': 'accuracy', 'objective_dataset': 'zimmer_1128'})
+    oh.measure_tracking_accuracy(args, {}, str(tmp_path / 'sweep'), label, 'accuracy', 'r.jsonl', 'emb', kwargs)
+    assert [c[1] for c in calls] == [tag]

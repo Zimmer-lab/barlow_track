@@ -1817,3 +1817,25 @@ Weekend rounds staged (89508b5, README barlow_track/scripts/scratch/round_wk1_sr
 Decision (user, 2026-10-30): train on every mask the data has, including the GT-seeded watershed masks in the Leifer re-export v2, as already happens on Samuel (all masks GT-seeded). So round_wk1_leifer must train on a wbfm project built from the v2 NWB (Leifer_NeRVE_Worm1_reexport_A2.nwb, being built), not the v1 NeRVE-only project; the Leifer round waits for it.
 
 - [ ] When Leifer v2 is validated: point leifer_reexport (run_trials DATASETS) at A2, build its wbfm project, set TRAIN_PROJECTS['leifer'] to it, regenerate round_wk1_leifer, update the round README
+
+## 2026-10-30 07:03 — decision
+
+Decision (user, 2026-10-30): the Leifer re-export only adds segmentation and green; its GT must be the old NWB's exactly. Told the export agent: A2 keeps the old GT (drops the 208 extra clicks, stores volume 1535 z-flipped as the old file does, with its GT); only the red-line repair in 39 volumes remains as an image difference. v1 (A / B) snapped matched GT to mask centroids (median 0.49 um), so its centroids differ; A2 replaces it.
+
+## 2026-10-30 07:11 — decision
+
+Correction (user, 2026-10-30): keep the full GT and the correct data; the old NWB is a guide. A2 keeps the 208 manual clicks in volumes 78, 405, 945, 1516 (in manualSummary.manualPoints; the old export dropped them, the volumes where NeRVE blanked its detections) and stores volume 1535 un-flipped; GT positions are the raw clicks. Supersedes the 07:03 instruction.
+
+## 2026-10-30 07:30 — decision
+
+Sweep objective can now score NWB recordings on every detection (objective_nwb_objects: all, objective_nwb_gt_mapping; ba..., defaults unchanged). The Leifer weekend round will train on the v2 re-export project and score on the v2 NWB with all detections (~117 NeRVE masks per volume, ~40 of them non-GT, plus pseudo masks for missed GT) and segmentation_id mapping (user: use the non-GT detections for training and testing). Open: Flavell has untracked masks too (~180 per frame vs 163 GT) but the staged Flavell rounds score GT objects only.
+
+## 2026-10-30 08:22 — run
+
+Leifer re-export A2 done and validated (subagent, d4379ef; validate_A2.log checked): 26.5 GB, red + green (NeRVE's projective fit of S2AHiRes, corr 0.70 vs <= 0.19 for flips / 0.57 for a 1-frame offset; in-mask green 2.28x), NeRVE masks plus 12,019 capped watershed masks (median 94 voxels vs NeRVE 113), full GT as raw clicks (old points identical except volume 1535's pure z flip; +208 clicks), every GT point has a NeuronSegmentationID. 1671 unmatched clicks sit inside a NeRVE mask matched to another GT neuron (probably merged masks). leifer_reexport now points at A2 (f7c7151); building its wbfm project; v1 project moved to wbfm_tracker_baseline/leifer_reexport_v1_nerve_only.
+
+run r261030-309374 · pids 309374 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/wbfm_tracker/leifer_reexport_A2_create.log
+
+## 2026-10-30 08:32 — decision
+
+Decision (user, 2026-10-30): test (and train) under the conditions of a new recording without GT, i.e. with every detection as distractors. Flavell training projects already hold every detection (152-177 objects per frame vs 136-173 GT neurons; NWB untracked masks 149-182); the staged Flavell objectives scored GT objects only, now nwb_objects all (make_per_recording_rounds OBJECTIVE_EXTRA). Scores on these cells are not comparable to earlier GT-object Flavell cells; distractors cannot be scored beyond their effect on GT neurons (misses / mismatches).

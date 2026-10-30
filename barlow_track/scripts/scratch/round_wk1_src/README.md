@@ -32,12 +32,14 @@ round_fused_fix_zimmer's own results (rbf fix x concat / add) were not back when
 
 The 12 recordings: zimmer_1123 / 1128 / 1210, flavell + 4 forCharlie_2 recordings, samuel (153),
 samuel_137, samuel_184, leifer.
-- Leifer: **hold round_wk1_leifer back** until it is regenerated. It should train on every mask the
-  data has (the user, 2026-10-30: as on Samuel, whose masks are all GT-seeded), i.e. a project built
-  from the re-export v2 (NeRVE masks plus capped watershed masks for GT that NeRVE missed, both
-  channels), which is still being built. The staged copy points at the v1 project (NeRVE masks only).
-  It is scored on the old Leifer NWB (GT objects), as the benchmark's 'leifer' cell. Its eval is slow
-  (the old file's chunking): objective_minutes 720.
+- Leifer is `round_wk1_leifer_reexport`: trains on the wbfm project of the A2 re-export (red +
+  green, NeRVE masks plus capped watershed masks for GT clicks NeRVE missed; every mask, as on
+  Samuel) and scores on the A2 NWB with every detection (`objective_nwb_objects: all`, GT mapped
+  by NeuronSegmentationID). Launch it only once `wbfm_tracker_baseline/leifer_reexport/
+  Leifer_NeRVE_Worm1_reexport_A2/1-segmentation/metadata.pickle` exists (the project build, run from
+  the workstation, writes it last). objective_minutes 720.
+- Flavell objectives track every detection (`objective_nwb_objects: all`): the user, 2026-10-30,
+  test as on a new recording without GT. Not comparable to earlier GT-object Flavell cells.
 - samuel_137 / 184 train on projects built from their NWBs (same folder; centroid fix applied).
 
 ## Launch (cluster)
@@ -49,7 +51,7 @@ d9cfd1a, and the new projects).
 B=/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files
 cd /lisc/data/scratch/neurobiology/zimmer/wbfm/code/barlow_track && git pull
 S=barlow_track/scripts/scratch
-for R in $(cd $S && ls -d round_wk1_* round_wk1f30_* | grep -v -e _src -e _leifer); do  # leifer: see above
+for R in $(cd $S && ls -d round_wk1_* round_wk1f30_* | grep -v _src); do  # leifer_reexport: see above
   case $R in
     round_wk1f30_*|round_wk1_zimmer_1128|round_wk1_samuel|round_wk1_flavell_2022033001) REP=2 ;;
     *) REP=1 ;;

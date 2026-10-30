@@ -19,3 +19,4 @@ objective: accuracy
 objective_dataset: flavell_2022032402
 objective_source: nwb
 objective_gt: /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper/flavell_data/forCharlie_2/2022-03-24-02/flavell_data.nwb
+objective_nwb_objects: all

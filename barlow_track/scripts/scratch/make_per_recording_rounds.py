@@ -28,9 +28,10 @@ _PAPER_OTHER = "/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_pap
 _NEW_PROJECTS = "/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/wbfm_tracker_baseline"
 
 # Benchmark label -> the wbfm project trained on (with segmentation metadata). Zimmer
-# labels train on their GT project itself. Leifer trains on the project of its re-export
-# (NeRVE's masks only, no GT-seeded masks) and is scored on the old Leifer NWB, as the
-# benchmark's 'leifer' cell; samuel_137 / 184 train on projects built from their NWBs.
+# labels train on their GT project itself. leifer_reexport trains on the project of the
+# Leifer re-export (every mask in it: NeRVE's plus GT-seeded watershed masks, as Samuel's are
+# all GT-seeded; the user, 2026-10-30) and is scored on that NWB with every detection;
+# samuel_137 / 184 train on projects built from their NWBs.
 TRAIN_PROJECTS = {
     **{k: os.path.join(v['project'], 'project_config.yaml')
        for k, v in DATASETS.items() if k.startswith('zimmer_')},
@@ -42,7 +43,17 @@ TRAIN_PROJECTS = {
     'samuel': os.path.join(_PAPER_OTHER, 'samuel_data/projects/153/project_config.yaml'),
     'samuel_137': os.path.join(_NEW_PROJECTS, 'samuel_137/137/project_config.yaml'),
     'samuel_184': os.path.join(_NEW_PROJECTS, 'samuel_184/184-004/project_config.yaml'),
-    'leifer': os.path.join(_NEW_PROJECTS, 'leifer_reexport/Leifer_NeRVE_Worm1_reexport_A/project_config.yaml'),
+    'leifer_reexport': os.path.join(_NEW_PROJECTS, 'leifer_reexport/Leifer_NeRVE_Worm1_reexport_A2/project_config.yaml'),
+}
+
+# Objective keys beyond the GT source: score as on a new recording without GT, i.e. track every
+# detection of the NWB, distractors included (the user, 2026-10-30), not only the GT objects.
+# Flavell's GT positions are mask centroids (the default mapping); the Leifer re-export's are
+# manual clicks, so its GT maps to masks through NeuronSegmentationID. Samuel's NWB masks are
+# the GT neurons only, so 'all' would change nothing there.
+OBJECTIVE_EXTRA = {
+    'leifer_reexport': dict(objective_nwb_objects='all', objective_nwb_gt_mapping='segmentation_id'),
+    **{k: dict(objective_nwb_objects='all') for k in DATASETS if k.startswith('flavell')},
 }
 
 # Flavell neurons span median 8 / p90 12 / max 16 z-planes (AGENTS.md); z=8 truncates them
@@ -83,6 +94,7 @@ def round_files(name, label, base, grid, z_scale_from_voxels=False):
     ds = DATASETS[label]
     if ds['source'] == 'nwb':
         tpl.update(objective_source='nwb', objective_gt=ds['nwb'])
+    tpl.update(OBJECTIVE_EXTRA.get(label, {}))
     return cfg, tpl
 
 

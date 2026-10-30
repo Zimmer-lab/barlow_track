@@ -265,3 +265,20 @@ def test_correlation_for_plot_single_object_view_returns_none():
     one = (torch.rand(1, 1, 8, 8, 8), torch.rand(3, 1, 8, 8, 8),
            torch.rand(1, 3), torch.rand(3, 3))
     assert _correlation_for_plot(None, one, 'cpu', True) is None
+
+
+def test_nwb_gt_mapping_by_segmentation_id_keeps_clicks_off_the_mask_centroid():
+    """A manual click 1 voxel off its mask's centroid maps only with gt_mapping='segmentation_id'."""
+    from types import SimpleNamespace
+    from barlow_track.scripts.eval_accuracy import _nwb_all_objects
+    seg = np.zeros((1, 5, 12, 12), dtype=np.uint16)
+    seg[0, 1:4, 1:4, 1:4] = 3       # centroid (2, 2, 2)
+    seg[0, 1:4, 7:10, 7:10] = 1007  # a pseudo mask, centroid (2, 8, 8)
+    nwb = SimpleNamespace(raw_segmentation=seg)
+    # (z, x, y) = (2, 3, 2): 1 voxel from label 3's centroid; second GT exactly on 1007; third id absent
+    arrays = dict(gz=np.array([[2., 2., 2.]]), gx=np.array([[3., 8., 5.]]), gy=np.array([[2., 8., 5.]]),
+                  gs=np.array([[3., 1007., 5.]]))
+    _, by_centroid = _nwb_all_objects(nwb, arrays, [0])
+    _, by_id = _nwb_all_objects(nwb, arrays, [0], gt_mapping='segmentation_id')
+    assert np.array_equal(by_centroid[0], [np.nan, 1007, np.nan], equal_nan=True)
+    assert np.array_equal(by_id[0], [3, 1007, np.nan], equal_nan=True)

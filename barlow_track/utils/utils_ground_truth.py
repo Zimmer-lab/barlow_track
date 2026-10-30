@@ -228,7 +228,7 @@ def record_tag(trial_parent_dir, trial_num, dataset_label):
 # decide "already done" or "latest wins" compare these as well as the tag.
 RECORD_SETTINGS = ('source', 'gt', 'descriptor_stage', 'cluster', 'num_seeds', 'seed',
                    'center_per_volume', 'l2_per_volume', 'nwb_objects', 'max_frames',
-                   'svd', 'gt_matching')
+                   'svd', 'gt_matching', 'nwb_gt_mapping')
 # What records written before a setting existed were measured with
 _LEGACY_SETTINGS = dict(svd='scaled', gt_matching='nandist')
 
@@ -237,10 +237,13 @@ def _setting_value(rec, key):
     """A record's (or a request's) value for one RECORD_SETTINGS key, normalized.
 
     Records written before a field existed get the value the code then implied:
-    max_frames None (full video), nwb_objects 'gt' on the NWB source, and _LEGACY_SETTINGS.
+    max_frames None (full video), nwb_objects 'gt' on the NWB source, nwb_gt_mapping
+    'centroid' with nwb_objects 'all', and _LEGACY_SETTINGS.
     """
     if key == 'nwb_objects' and rec.get('nwb_objects') is None:
         return 'gt' if rec.get('source') == 'nwb' else None
+    if key == 'nwb_gt_mapping' and rec.get('nwb_gt_mapping') is None:
+        return 'centroid' if _setting_value(rec, 'nwb_objects') == 'all' else None
     v = rec.get(key, _LEGACY_SETTINGS.get(key))
     if key == 'gt' and isinstance(v, str):
         v = os.path.normpath(v)

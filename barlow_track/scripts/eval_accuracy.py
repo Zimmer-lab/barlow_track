@@ -364,7 +364,7 @@ def _load_nwb_arrays(nwb_project):
                 gr=field('raw_neuron_ind_in_list'), gs=field('raw_segmentation_id'))
 
 
-def _nwb_all_objects(nwb_project, arrays, frame_list, tol=0.5):
+def _nwb_all_objects(nwb_project, arrays, frame_list, tol=0.5, gt_mapping='centroid'):
     """Every detection of an NWB's raw_segmentation, and the GT neurons among them.
 
     Returns ({t: (labels (M,), centroids (M, 3) zxy)}, gt_label (T, n_gt)):
@@ -374,6 +374,11 @@ def _nwb_all_objects(nwb_project, arrays, frame_list, tol=0.5):
     the GT's raw_segmentation_id and raw_neuron_ind_in_list, so this mapping
     reproduces the NWB ids while checking them against the masks. Two GT
     neurons on one label are both left unmapped.
+
+    gt_mapping 'segmentation_id' takes the label from the GT's own
+    raw_segmentation_id instead (when that label exists in the frame's masks),
+    for NWBs whose GT positions are manual clicks rather than mask centroids
+    (the Leifer re-export).
     """
     from skimage.measure import regionprops
     if getattr(nwb_project, 'raw_segmentation', None) is None:
@@ -393,10 +398,15 @@ def _nwb_all_objects(nwb_project, arrays, frame_list, tol=0.5):
         if not len(js) or not len(labels):
             n_unmapped += len(js)
             continue
-        g = np.stack([gz[t, js], gx[t, js], gy[t, js]], 1)
-        d = np.sqrt(((g[:, None] - cen[None]) ** 2).sum(-1))
-        k = d.argmin(1)
-        ok = d[np.arange(len(js)), k] <= tol
+        if gt_mapping == 'segmentation_id':
+            ids = arrays['gs'][t, js]
+            k = np.searchsorted(labels, np.nan_to_num(ids, nan=-1).astype(int)).clip(0, len(labels) - 1)
+            ok = np.isfinite(ids) & (labels[k] == ids)
+        else:
+            g = np.stack([gz[t, js], gx[t, js], gy[t, js]], 1)
+            d = np.sqrt(((g[:, None] - cen[None]) ** 2).sum(-1))
+            k = d.argmin(1)
+            ok = d[np.arange(len(js)), k] <= tol
         vals, counts = np.unique(k[ok], return_counts=True)
         shared = np.isin(k, vals[counts > 1]) & ok
         n_shared += int(shared.sum())
@@ -524,6 +534,11 @@ def _parse_args(argv=None):
                     help="source nwb: 'all' embeds and tracks every detection of the NWB's "
                          "raw_segmentation, as the project source does; 'gt' (default, kept so "
                          "recorded scores reproduce) gives the tracker only the GT neurons")
+    ap.add_argument('--nwb_gt_mapping', choices=['centroid', 'segmentation_id'], default='centroid',
+                    help="with --nwb_objects all: which mask a GT neuron is: 'centroid' (default) "
+                         "the mask whose centroid is within 0.5 voxel of the GT position; "
+                         "'segmentation_id' the GT's own raw_segmentation_id (GT positions that "
+                         "are manual clicks, e.g. leifer_reexport)")
     ap.add_argument('--round_crop_centers', action='store_true',
                     help='project source: crop around the rounded centroid, as training does, '
                          'instead of the truncated one (default, kept so recorded scores reproduce); '
@@ -678,7 +693,9 @@ def run_eval(args):
     nwb_all = args.source == 'nwb' and getattr(args, 'nwb_objects', 'gt') == 'all'
     if args.source == 'nwb':
         arrays = _load_nwb_arrays(src_data)
-        nwb_objects, nwb_gt_label = _nwb_all_objects(src_data, arrays, frame_list) if nwb_all else (None, None)
+        nwb_objects, nwb_gt_label = _nwb_all_objects(
+            src_data, arrays, frame_list, gt_mapping=getattr(args, 'nwb_gt_mapping', 'centroid')
+        ) if nwb_all else (None, None)
         frame_iter_fn = lambda: _iter_nwb_frames(src_data, arrays, target_sz, normalizer, frame_list,
                                                 device=device, crop_window=args.crop_window,
                                                 objects=nwb_objects)
@@ -851,6 +868,7 @@ def run_eval(args):
                    crop_window=(getattr(args, 'crop_window', 'pad') if device.type == 'cuda' else 'cpu'),
                    crop_center='trunc' if args.source != 'nwb' and not _round_centers else 'round',
                    nwb_objects=(getattr(args, 'nwb_objects', 'gt') if args.source == 'nwb' else None),
+                   nwb_gt_mapping=(getattr(args, 'nwb_gt_mapping', 'centroid') if nwb_all else None),
                    nwb_arrays=('by_name' if args.source == 'nwb' else None),
                    emb_path=os.path.abspath(emb_path),
                    accuracy=float(stats['accuracy']),
@@ -1007,7 +1025,7 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
                                 center_per_volume=False, l2_per_volume=False,
                                 track_device='cpu', skip_embed=True, extra_record=None,
                                 crop_window='pad', round_crop_centers=False, nwb_objects='gt',
-                                svd='scaled', gt_matching='nandist'):
+                                svd='scaled', gt_matching='nandist', nwb_gt_mapping='centroid'):
     """Track one trained checkpoint on `project` and return its accuracy record.
 
     Programmatic entry point used by the hyperparameter sweep's in-job
@@ -1032,7 +1050,7 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
         l2_per_volume=l2_per_volume, device=device, track_device=track_device,
         results_jsonl=results_jsonl, emb_dir=emb_dir, tag=tag, extra_record=extra_record,
         crop_window=crop_window, round_crop_centers=round_crop_centers, nwb_objects=nwb_objects,
-        svd=svd, gt_matching=gt_matching)
+        svd=svd, gt_matching=gt_matching, nwb_gt_mapping=nwb_gt_mapping)
     _check_args(args)
     return run_eval(args)[-1]
 

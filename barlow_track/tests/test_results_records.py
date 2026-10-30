@@ -75,3 +75,10 @@ def test_svd_and_gt_matching_separate_cells_and_legacy_records_are_the_defaults(
     assert read_results_by_tag(path, dict(want, gt_matching='gt_valid'))[
         'round_x_trial0_flavell']['accuracy'] == 0.95
     assert read_results_by_tag(path, want)['round_x_trial0_flavell']['accuracy'] == 0.9
+
+
+def test_nwb_gt_mapping_separates_cells_and_defaults_to_centroid_for_all_objects():
+    old_all = _rec(nwb_objects='all')
+    assert settings_match(old_all, dict(nwb_objects='all', nwb_gt_mapping='centroid'))
+    assert not settings_match(old_all, dict(nwb_gt_mapping='segmentation_id'))
+    assert settings_match(_rec(), dict(nwb_objects='gt', nwb_gt_mapping=None))

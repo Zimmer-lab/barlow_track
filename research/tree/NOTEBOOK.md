@@ -1839,3 +1839,7 @@ run r261030-309374 · pids 309374 · host charles-Precision-7820-Tower · logs /
 ## 2026-10-30 08:32 — decision
 
 Decision (user, 2026-10-30): test (and train) under the conditions of a new recording without GT, i.e. with every detection as distractors. Flavell training projects already hold every detection (152-177 objects per frame vs 136-173 GT neurons; NWB untracked masks 149-182); the staged Flavell objectives scored GT objects only, now nwb_objects all (make_per_recording_rounds OBJECTIVE_EXTRA). Scores on these cells are not comparable to earlier GT-object Flavell cells; distractors cannot be scored beyond their effect on GT neurons (misses / mismatches).
+
+## 2026-10-30 08:56 — run
+
+r261030-309374: Leifer A2 wbfm project built (metadata.pickle written, centroid fix applied; cluster_config_cpu_only.yaml added). round_wk1_leifer_reexport can launch (41bec69).

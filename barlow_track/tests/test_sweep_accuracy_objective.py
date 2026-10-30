@@ -292,6 +292,26 @@ def test_objective_gt_swaps_in_another_gt_of_the_training_recording(tmp_path, mo
     assert oh.objective_record_settings(kwargs, {'project_path': '/p.yaml'})['gt'] == '/p.yaml'
 
 
+def test_objective_can_track_every_nwb_detection(tmp_path, monkeypatch):
+    """Leifer re-export: every detection, GT mapped by segmentation id; default stays GT objects."""
+    trial_dir = _fake_trial(tmp_path)
+    calls = {}
+    monkeypatch.setattr(oh, 'evaluate_trained_checkpoint',
+                        lambda **kw: calls.update(kw) or dict(accuracy=0.5, n_frames=10, total=10, minutes=1.0))
+    _, label, kwargs = oh.resolve_objective({'objective': 'accuracy', 'objective_dataset': 'leifer_reexport',
+                                             'objective_source': 'nwb', 'objective_gt': '/l.nwb',
+                                             'objective_nwb_objects': 'all',
+                                             'objective_nwb_gt_mapping': 'segmentation_id'})
+    args = type('Args', (), dict(project_dir=str(trial_dir), project_path='/l/project_config.yaml'))()
+    oh.measure_tracking_accuracy(args, {}, str(tmp_path / 'sweep'), label, 'accuracy', 'r.jsonl', 'emb', kwargs)
+    assert calls['nwb_objects'] == 'all' and calls['nwb_gt_mapping'] == 'segmentation_id'
+    settings = oh.objective_record_settings(kwargs, {'project_path': args.project_path})
+    assert settings['nwb_objects'] == 'all' and settings['nwb_gt_mapping'] == 'segmentation_id'
+    _, _, kwargs = oh.resolve_objective({'objective': 'accuracy', 'objective_source': 'nwb', 'objective_gt': '/l.nwb'})
+    settings = oh.objective_record_settings(kwargs, {'project_path': '/p.yaml'})
+    assert settings['nwb_objects'] == 'gt' and settings['nwb_gt_mapping'] is None
+
+
 def test_trial_without_checkpoint_is_never_tracked(tmp_path, monkeypatch):
     """A crashed trial saves no checkpoint; tracking it would waste an hour."""
     trial_dir = _fake_trial(tmp_path, with_checkpoint=False)

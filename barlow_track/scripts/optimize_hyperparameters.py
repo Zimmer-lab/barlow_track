@@ -273,6 +273,11 @@ def resolve_objective(hyperparameter_args):
         # 'flavell' cell; or project, scoring the project segmentation).
         gt=hyperparameter_args.get('objective_gt') or None,
     )
+    if eval_kwargs['source'] == 'nwb':
+        # 'all' tracks every detection of the NWB's raw_segmentation (Flavell, the Leifer
+        # re-export), not only the GT objects; 'gt' (default) keeps recorded cells comparable
+        eval_kwargs['nwb_objects'] = hyperparameter_args.get('objective_nwb_objects', 'gt')
+        eval_kwargs['nwb_gt_mapping'] = hyperparameter_args.get('objective_nwb_gt_mapping', 'centroid')
     if eval_kwargs['max_frames'] is not None:
         eval_kwargs['max_frames'] = int(eval_kwargs['max_frames'])
         logging.warning(f"objective_max_frames={eval_kwargs['max_frames']}: the objective is "
@@ -292,7 +297,9 @@ def objective_record_settings(eval_kwargs, baseline_params):
                 num_seeds=eval_kwargs['num_seeds'], seed=eval_kwargs['seed'],
                 center_per_volume=eval_kwargs['center_per_volume'],
                 l2_per_volume=eval_kwargs['l2_per_volume'], max_frames=eval_kwargs['max_frames'],
-                nwb_objects='gt' if eval_kwargs['source'] == 'nwb' else None,
+                nwb_objects=eval_kwargs.get('nwb_objects'),
+                nwb_gt_mapping=(eval_kwargs.get('nwb_gt_mapping', 'centroid')
+                                if eval_kwargs.get('nwb_objects') == 'all' else None),
                 svd=eval_kwargs.get('svd', 'scaled'), gt_matching=eval_kwargs.get('gt_matching', 'nandist'))
 
 

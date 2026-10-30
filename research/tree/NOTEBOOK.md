@@ -1803,3 +1803,11 @@ r261030-158650: wbfm project from the Leifer re-export built in 31 min (wbfm_tra
 Batch 20 done (r261029-4011812 / r261029-4053272), Zimmer 100 frames, epoch-14 proxy, seeds 43 / 44: image-only lambd_obj 0.67 vs 0 = .617 / .444 vs .482 / .390 (+0.14 / +0.05); fused add 0.67 vs 0 = .687 / .626 vs .692 / .647 (-0.01 / -0.02). So the transpose term speeds up image-only training but not fused (position-dominated) training. Batch 21 (r261029-4059380), Samuel 153 image-only, 30 epochs, proxy at epoch 29: lambd_obj 0.67 vs 0 at 30 frames .559 / .499 vs .384 / .330 (+0.18 / +0.17), at 100 frames .556 / .549 vs .396 / .402 (+0.16 / +0.15). The gap did not close by epoch 29 and 30-frame 0.67 matches 100-frame 0.67: a data-efficiency and speed benefit for image networks, both seeds (goal d). Zimmer 40-epoch full-video cells still running.
 
 for [[EVD - Loss-term ablation where accuracy is not saturated]]
+
+## 2026-10-30 06:14 — decision
+
+eval_accuracy --nwb_gt_mapping segmentation_id (opt-in, default centroid) maps GT to masks through NeuronSegmentationID, for the Leifer re-export v2 where GT positions stay the manual clicks (identical to the old NWB). Export v2 sent back to the agent: green channel registered from S2AHiRes, capped watershed pseudo masks for GT without a NeRVE mask (user: watershed OK, not too big), clicks as NeuronCentroids. User (2026-10-30): the old wbfm tracker is expected to do badly on new data; that is the point of a tracker that generalizes. Weekend round: also lambd_obj 1 (transpose term only).
+
+## 2026-10-30 06:37 — decision
+
+Weekend rounds staged (89508b5, README barlow_track/scripts/scratch/round_wk1_src/README.md): round_wk1_<label> on all 12 GT recordings, fusion {visual_only, add} x lambd_obj {0, 0.67, 1} at 100 frames, 30 epochs, jitter auto, visnet_z_scale = voxel aspect (Zimmer 4.615, Samuel 3.889, samuel_184 5.833 (xy 0.3 in its NWB; check), Leifer 4.65, Flavell 1); 2 seeds on zimmer_1128, samuel, flavell_2022033001. round_wk1f30_<label>: the same at 30 frames, 2 seeds, those 3 recordings. 126 GPU training jobs, evals in CPU jobs. All 12 objectives preflighted; CPU smoke test of the Samuel fused config with lambd_obj 1 trained and scored (z_scale 3.889 reached the model). Leifer trains on the re-export project, scored on the old NWB. Not launched (the user launches).

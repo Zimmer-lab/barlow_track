@@ -1,5 +1,35 @@
 # Leifer NeRVE worm1: re-export from raw into a new NWB (with segmentation)
 
+## Built 2026-10-30 (export_leifer_nwb.py, validate_leifer_nwb.py, old_map_check.py)
+
+Output: `/lisc/.../barlow_track_revisions/leifer_reexport/Leifer_NeRVE_Worm1_reexport_A.nwb` (14.5 GB, 25 min,
+24 processes). Red only, images (1536, 632, 600, 32, 1) and NeRVE masks as
+`CalciumSeriesSegmentationUntracked` (1536, 632, 600, 32), one volume per gzip chunk. GT as per-neuron
+`NeuronCentroids` (snapped to the Hungarian-matched mask centroid, <= 2.6 um), `NeuronCentroidsManual`
+(clicks), `NeuronSegmentationID`; per-volume frame map and status in `processing/NeRVEExport/VolumeInfo`.
+
+Also `Leifer_NeRVE_Worm1_reexport_B.nwb` (15.5 GB, z rule B: each volume's own frames, nz 34, z = 0 at the
+top of the sweep, zero padded; same masks and GT, z shifted by the map). Validation logs:
+`~/.cache/barlow_scratch/leifer_export/validate_{A,B}.log`. Scoring (not run here, hours):
+`eval_accuracy.py --lab leifer --source nwb --nwb <new>.nwb --nwb_objects all --mode trained --weights
+<trial>/resnet50.pth --cluster labelprop --num_seeds 25 --track_device cpu`. With `--nwb_objects gt` only the
+matched 90% of GT is cropped (it needs a finite raw_segmentation_id), at the snapped positions, so it is
+not the old file's GT-only score; for that, keep scoring the old NWB.
+
+Findings that correct the exploration below:
+- Old z rule (measured plane by plane, `old_map_check.py`): keyed by the volume's frame count. Up sweeps
+  z = k is start + top - k with top = 29/30/30/31/31 for 30/31/32/33/34 frames; down sweeps start + skip + k
+  to the last frame, skip = 1/2/2 for 32/33/34 frames; zero planes after. This explains the "39 unexplained"
+  volumes. The old file stores the last volume (1535, a down sweep) z-flipped; the export does not.
+- Old file has one corrupted 632-px line in one plane of 39 volumes; the export takes the .dat.
+- Old file drops all GT of volumes 78, 405, 945, 1516 (208 clicks, plausible on the image); these are the
+  volumes where NeRVE blanked its detections (>= 200 objects). The export keeps them.
+- 9 pointStats files are corrupt in the release (tar copies are byte-identical): stacks 13, 189, 536, 625,
+  636, 679, 763, 1435, 1470. With the 4 zero-detection and 13 ERROR volumes, 26 volumes have empty masks.
+- Mask alignment: row = transformy, col = transformx, frame = start + transformz, all as stored (+-1 shifts
+  in each axis lower the in-mask red symmetrically).
+- Matching: costs above the cut-off are set constant, else the assignment trades close pairs for far ones.
+
 Status 2026-10-29: exploration only, nothing built. Written by an exploration agent, read-only on
 /lisc; checked by me only as far as summarised here. The scripts in `explore/` are the agent's checks;
 they expect `/lisc/.../barlow_track_paper/leifer_data/` and a scratch output folder. The NeRVE MATLAB

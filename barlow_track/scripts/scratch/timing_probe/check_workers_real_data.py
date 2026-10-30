@@ -55,7 +55,8 @@ def main():
         for a, b in zip(ref[e], par[e]):
             assert all(torch.equal(x, y) for x, y in zip(a, b)), f"epoch {e}: batches differ"
             n += 1
-    assert not torch.equal(ref[0][0][0], ref[1][0][0]), "epochs did not rotate the augmentation"
+    if args.epochs > 1:
+        assert not torch.equal(ref[0][0][0], ref[1][0][0]), "epochs did not rotate the augmentation"
     print(f"{args.label}: {n} batches identical with num_workers 0 and {args.workers}; "
           f"load time {t_ref:.1f} s vs {t_par:.1f} s", flush=True)
 

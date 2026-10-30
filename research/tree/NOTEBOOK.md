@@ -1852,3 +1852,49 @@ User launched the weekend rounds (round_wk1_*, round_wk1f30_*) on 2026-10-30. Sp
 - [ ] Speed: save per-epoch checkpoints and score several epochs of one trial, to pick shorter schedules
 - [ ] Speed: time full-video label propagation on GPU (--track_device cuda) in its own job vs CPU
 - [ ] Robustness: resume training from the last checkpoint on restart / Slurm requeue, with a test
+
+## 2026-10-30 09:55 — run
+
+Timing matrix: fused (add) and keypoints-only training, GPU vs 16 CPU threads, 20 frames x 1 epoch on samuel, zimmer_1128, samuel_137, flavell_2022033001, leifer_reexport, plus each objective eval on 16 CPU threads; to decide which jobs go to CPU nodes
+
+run r261030-356454 · pids 356454 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/timing_probe/matrix.log
+
+## 2026-10-30 10:02 — run
+
+Timing matrix rerun with the data phase split (8ae97da): fused and keypoints-only, GPU vs 16 CPU threads, 5 recordings, plus objective evals on 16 CPU threads. First result, Samuel fused GPU 16 steps: global augmentation 4.0 s of 6.1 s data, crop augment 1.4 s, volume read 0.4 s, forward+backward 3.4 s; the scipy full-volume warp outweighs the GPU compute
+
+run r261030-589527 · pids 589527 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/timing_probe/matrix.log
+
+## 2026-10-30 11:01 — result
+
+r261030-589527 partial (CPU fused zimmer eval, samuel_137/flavell/leifer CPU fused still running; GPU fused OOM'd next to the other job except Samuel/137). Per step: posonly fwd+bwd CPU16 1.0-1.7 s vs GPU 0.13-0.17 s (~8-10x); 30 epochs x 100 frames posonly on CPU16 ~1-1.5 h. Fused CPU16 backward 29-32 s/step (forward 2 s) vs GPU fwd+bwd 0.2 s on Samuel (~150x); Zimmer fused CPU16 ~38 s/step. GPU fused Samuel step: data 0.45 s (global augment 0.30) vs fwd+bwd 0.20 s. Samuel fused CPU16 eval: embed 989 s, labelprop 1027 s, 34 min.
+
+## 2026-10-30 11:35 — run
+
+Scaling probe (2243786 + run_scaling.sh): fused GPU Samuel with 4 DataLoader workers vs 0, and position-only CPU at 4/8/32 threads on Zimmer and Leifer. Before it: worker reads fixed (zarr ZipStore reopened per worker) and checked identical on 5 recordings
+
+run r261030-1366476 · pids 1366476 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/timing_probe/scaling.log
+
+## 2026-10-30 11:55 — result
+
+r261030-1366476 (scaling): position-only CPU per step fwd+bwd, Zimmer 4/8/16/28 threads 3.3/2.7/1.6/1.9 s, Leifer 2.3/1.3/1.2/1.0 s: saturates at 8-16 threads (28 shared cores with the GPU job's lanes). Fused GPU Samuel with 4 DataLoader workers: data/step 0.42 -> 0.06 s, epoch 22.4 -> 18.9 s at 20 frames (fixed per-epoch proxy 9 s dominates); ~1.9x per epoch projected at 100 frames.
+
+## 2026-10-30 12:11 — result
+
+Zimmer 1128 data loading, 32 items (one frame each, two views), cores 16-47: 0 workers 105-136 s (3.3-4.3 s/item), 2 workers 69 s, 8 workers 19 s, 16 workers 12 s, batches identical in every case. Workers parallelize across items, so they scale nearly linearly up to 16. Also corrected: Samuel 153 is the easy Samuel recording; 137 / 184 are the hardest (0.47 / 0.43 for the paper-ablation image-only network).
+
+## 2026-10-30 13:21 — decision
+
+Auto DataLoader workers for Slurm GPU training jobs (aab23eb), so the weekend jobs that start after the user pulls get them: num_workers 0 -> SLURM_CPUS_PER_TASK - 2 (6 on the weekend's 8 CPUs) for zarr-backed projects, probe batch with fallback to 0, global torch RNG restored. Samuel GPU: step-0 loss bit-identical to num_workers 0, val loss within GPU run-to-run noise (0.0025343 vs 0.0025359 / 0.0025351). Rounds become mixed in speed only, not in results. Template key train_gpu_job_cpus (default 8) for future rounds.
+
+## 2026-10-30 13:54 — result
+
+round_wk1 check: no training failures (all finished trials trained 30 epochs, 0.2-1.6 h), but every CPU objective eval on an NWB label without a LABS entry (samuel_137, samuel_184, five Flavell, leifer_reexport, wk1f30_flavell) died at start in eval_accuracy._check_args ('needs an explicit frame source'); ~12 trials so far marked FAILED in Ax. Samuel 153 rounds score (0.916 / 0.919 / f30 0.933). Fixed in 3e695bb, verified end to end on 30 frames of samuel_137, flavell_2022033001, leifer_reexport. Recovery: the user pulls (eval jobs import the code at start, so later evals succeed); after each round's dispatcher ends, rerun it with --skip_completed_grid_jobs to submit eval-only jobs for the trained-but-unscored trials. Not a second dispatcher while one runs (it would retrain unfinished trials).
+
+## 2026-10-30 14:26 — decision
+
+Staged round_snap1 (b6925cf, README round_snap1_src/README.md): epoch_snapshots [1, 3, 10, 20] + final 30, scored per snapshot in the CPU eval job (objective_snapshots), fusion {visual_only, add} x lambd_obj {0, 0.67} on zimmer_1128, samuel_137, flavell_2022033001, leifer_reexport, 16 GPU jobs, train_gpu_job_cpus 16. Asks: fewer-epoch training (speed goal b) and whether the transpose loss trains faster (goal d). Not launched: the user launches it.
+
+## 2026-10-30 16:17 — run
+
+Cluster epoch times with DataLoader workers (epoch_times_from_runs.py over round_wk1*/round_snap1_*, 53 finished 30-epoch x 100-frame jobs; s per epoch = training + val + proxy). 14 workers: Samuel 13-18 (A30), Zimmer 38-39 (A30) / 56 (L4), Leifer 35-45 (A30/L4) / 59-73 (T4), Flavell 62-70 (L4) / 93-104 (T4); a 30-epoch job takes 0.1-0.15 h (Samuel), 0.3-0.5 h (Zimmer, Leifer), 0.5-0.9 h (Flavell). Same GPU, 0 vs 6 vs 14 workers: Leifer L4 167-177 / 64 / 45, Samuel A30 27 / 16 / 13-18, Flavell L4 78-103 / 48-66 / 62-70. Epoch time now follows GPU type (A30 < L4 < T4), so jobs are compute-bound: serial augmentation per item (local, 0 workers) is Samuel 0.4 s, Flavell 1.0 s, Zimmer 3.4 s, i.e. 80 items / 14 workers = 2-19 s per epoch, under the GPU time. GPU-side warping is not worth it now (at most Zimmer's few seconds); the per-epoch matching proxy (local GPU 6-10 s on Samuel, roughly half its epoch) is the larger fixed cost. round_wk1_samuel_137's dispatcher stopped at 13:59 (3 eval failures in a row, the fixed NWB-label bug): needs the --skip_completed_grid_jobs rerun. round_wk1 Zimmer trials still pending in the queue after 6.5 h with the same Slurm request as round_snap1's running Zimmer jobs. First snapshot records (samuel_137 trial 0, visual_only lo 0): epoch 1 0.885, 3 0.883, 10 0.893, 20 0.877, 30 0.852.

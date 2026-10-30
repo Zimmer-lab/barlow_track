@@ -1622,3 +1622,184 @@ Ax (Bayesian) mode already scores trials on full-video tracking accuracy in CPU 
 ## 2026-10-29 19:35 — decision
 
 Distilled the 2026-10-28/29 position-only work into the tree: filled and finished [[EVD - Position-only ViSNet networks with and without the RBF fix on Zimmer, Flavell and Samuel]] (high); new evidence on GT-free jitter, augmentation dead ends, lambd_obj in position-only networks, the ViSNet cutoff and CPU training cost; new low-confidence claim [[CLM - A position-only network tracks within a few points of the best image or fused network]]; Findings line in ideas/barlowtrack.md. Issue i261028-2's three notes still need judging with the user.
+
+## 2026-10-29 19:42 — run
+
+fDNC baseline on zimmer_1128 (started by the fDNC subagent, CPU only): fdnc_track_and_score.py, 5 template frames, four axis orientations (default / swap / mirror / swap_mirror) in parallel, to find which coordinate convention the pretrained fDNC model expects
+
+run r261029-4117569 · pids 4117569, 4117570, 4117571, 4117572 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/fdnc/logs/zimmer_1128_default.log, /home/charles/.cache/barlow_scratch/fdnc/logs/zimmer_1128_mirror.log, /home/charles/.cache/barlow_scratch/fdnc/logs/zimmer_1128_swap.log, /home/charles/.cache/barlow_scratch/fdnc/logs/zimmer_1128_swap_mirror.log · for [[EVD - Published trackers run on the shared NWB benchmark]]
+
+## 2026-10-29 19:45 — decision
+
+Keypoints reach ViSNet in voxel units scaled by one scalar (superglue.normalize_keypoints), so on Zimmer z is compressed 4.6x relative to physical units (1.5 um z planes, 0.325 um xy pixels; the other labs' project physical_units are 'CHANGE ME' placeholders). Every ViSNet network so far, fused and position-only, saw this metric. Found by the encoder literature agent, confirmed in the code. New opt-in visnet_z_scale (d9cfd1a; off by default, checked in load mismatches). Possible explanation for the dataset-dependent cutoff_nn result.
+
+## 2026-10-29 19:45 — run
+
+Batch 22 (d152ab3): position-only visnet_z_scale sweep (Zimmer 1 / 1.55 / 3 / 4.6, Samuel 1 / 2.9 / 5, Flavell 1 / 2 / 4) at the batch-18 base with jitter auto, seeds 43 / 44, epoch-14 proxy, one worker beside batch 20
+
+run r261029-4126504 · pids 4126504 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch22.log · for [[QUE - Does adding neuron position information improve tracking]]
+
+## 2026-10-29 19:46 — idea
+
+Revision literature brainstorm in docs/brainstorm/revision_literature/ (688ea7b): four agent reports plus a ranked shortlist. Kept out of the tree as the user asked; ideas become planned notes only if picked. Confirmed in code: voxel-unit keypoints (z squashed 4.6x on Zimmer; visnet_z_scale d9cfd1a) and the unused alpha in run_label_propagation.
+
+## 2026-10-29 19:48 — run
+
+fDNC baseline follow-ups (fDNC subagent, CPU only): zimmer_1128 with rescaled coordinates in four orientations, and samuel 153 (NWB) in four orientations, after the first zimmer_1128 orientation runs
+
+run r261029-4128796 · pids 4128796, 4128797, 4128798, 4128799, 4129942, 4129943 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/fdnc/logs/zimmer_1128_default_rescaled.log, /home/charles/.cache/barlow_scratch/fdnc/logs/samuel_default_rescaled.log · for [[EVD - Published trackers run on the shared NWB benchmark]]
+
+## 2026-10-29 19:49 — run
+
+r261029-4117569 interim (cde97bb, fdnc_baseline/): the published fDNC model (model.bin) runs on CPU with PYTHONPATH only, ~60 ms per frame per template. zimmer_1128 full video, one template, all detections, our nandist scoring: 0.24-0.25 with wbfm's zimmer2leifer axes, 0.43 with x/y swapped; ~0.98 one frame from the template, decaying within 10-20 frames. fDNC is not scale-invariant: the Zimmer cloud is ~1.6x larger than fDNC's reference worms; per-frame checks give 0.63 at scale 0.7. Rescaled (GT-free, reference-RMS) full-video runs on zimmer_1128 and samuel 153 still running (r261029-4128796). The axis convention is picked with GT, so the best of four favours fDNC. Our network: ~0.97.
+
+## 2026-10-29 19:54 — run
+
+r261029-4128796 partial: fDNC on samuel 153 (NWB GT objects, GT-free size rescale 0.969), full video, single template: swap 0.809 (template 10) / 0.739 (266), swap_mirror 0.788, mirror 0.505 / 0.438, default 0.498 / 0.412; ours ~0.95. fDNC's own mean match probability (~0.79 for the swap conventions vs ~0.61) picks the best axis convention without GT. Rescaled zimmer_1128 and the 5-template votes still running. sbatch for all nine recordings now passes --rescale ref (not submitted).
+
+## 2026-10-29 19:56 — run
+
+r261029-4128796: fDNC zimmer_1128 rescaled (GT-free factor 0.624), template 10, full video, all detections: swap 0.615, swap_mirror 0.549, mirror 0.450, default 0.443 (ours ~0.97). Samuel 153 rescaled, single templates: best 0.809-0.835 (swap / swap_mirror). On both datasets fDNC's mean match confidence ranks the axis conventions as GT does, so the most-confident convention is a GT-free choice. 5-template votes still running.
+
+## 2026-10-29 19:57 — decision
+
+User (2026-10-29): BarlowTrack was co-submitted with ASCENT (Lu lab) because the two are so similar, so ASCENT is concurrent work, not missed prior work; the literature agents' novelty-gap framing is wrong. Brainstorm README corrected.
+
+## 2026-10-29 19:59 — ask
+
+ASCENT (Lu lab) is co-submitted with BarlowTrack. It has public code, trains per recording and reports 95.9% on our Leifer recording, so it could be run on the shared NWB benchmark with our metric, next to fDNC.
+
+- [x] ask a261029-2 · on [[EVD - Published trackers run on the shared NWB benchmark]] · blocks [[EVD - Published trackers run on the shared NWB benchmark]] · Run ASCENT on our benchmark next to fDNC, or only cite it as concurrent work?
+
+## 2026-10-29 20:00 — run
+
+r261029-4117569 / r261029-4128796 (fDNC Samuel 153, GT-free rescale): a five-template vote does not help, 0.832 with swap / swap_mirror (the conventions fDNC is most confident in) and 0.48 with the other two; the best single template is 0.835 (swap_mirror, frame 532). Ours is ~0.95. The Zimmer 1128 multi-template runs are still going, writing to ~/.cache/barlow_scratch/fdnc/fdnc_results.jsonl.
+
+## 2026-10-29 20:07 — run
+
+fDNC Zimmer 1128 (r261029-4128796 et al.), more templates: with the GT-free rescale and swap / swap_mirror, templates 333 and 666 give 0.58-0.61; template 10 with swap stays best at 0.615. Without the rescale late templates are much worse (1250: 0.21-0.27, 195 objects, many extra detections; 1660: 0.14-0.16). Ours ~0.97.
+
+## 2026-10-29 20:13 — answer
+
+Not for now: reviewers did not ask for ASCENT. Cite it as concurrent work.
+
+answered a261029-2
+
+## 2026-10-29 20:13 — decision
+
+Competitor scope (user, 2026-10-29): no ASCENT for now, since reviewers did not ask for it. ZephIR needs manual annotation of reference frames. Option the user raised: run the original wbfm tracker on the non-Zimmer recordings. The Flavell (5) and Samuel 153 projects already have step 1 (segmentation); steps 2-3 (SuperGlue tracklets, fDNC-template global matching, the project's snakemake) were never run there. Leifer and Samuel 137 / 184 also lack segmentation metadata (a261029-1).
+
+## 2026-10-29 20:18 — decision
+
+wbfm tracker baseline plan (user: build new projects from the NWB files, don't touch the existing ones). wbfm/scripts/0-create_new_project_from_nwb.py (sacred: nwb_file, project_dir) builds the project, unpacks the videos and masks to zarr, and recalculates metadata from the masks. Pipeline to combine_tracking_and_tracklets: 2a build_frame_objects, 2b match_frame_pairs (SuperGlue), 2c tracklets, 3a track_time_independent (SuperGlue against a template unless use_barlow_network), 3b combine. cluster_config asks for a GPU on 2a, 2b, 2c and 3a, but the code only uses CUDA if it is available (superglue.py:415) and runs on CPU otherwise, so a CPU-only cluster_config should work, only slower. Not yet tested.
+
+## 2026-10-29 20:36 — run
+
+r261029-4126504 (batch 22, visnet_z_scale), seed 43 epoch-14 proxy: Zimmer 1 / 1.55 / 3 / 4.6 = .762 / .778 / .823 / .865; Samuel 1 / 2.9 / 5 = .548 / .848 / .865; Flavell 1 / 2 = .785 / .775 (4 running). Undoing the z squash before ViSNet gains +0.10 on Zimmer and +0.32 on Samuel, far above seed noise (~0.04), still rising at the top of the range; flat on Flavell. Seed 44 still to come. Proxy only, so batch 23 checks the full video.
+
+for [[QUE - Does adding neuron position information improve tracking]]
+
+## 2026-10-29 20:36 — run
+
+Batch 23 (batch23.sh, 3a60): larger visnet_z_scale (Zimmer 6 / 8, Samuel 8 / 12) and full-video accuracy at z_scale 1 vs the batch-22 best (Zimmer 4.6, Samuel 5), seed 43. Waits for batch 22.
+
+run r261029-4158341 · pids 4158341 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch23.log · for [[QUE - Does adding neuron position information improve tracking]]
+
+## 2026-10-29 20:52 — run
+
+wbfm tracker baseline, Samuel 153 (e7c305d run_wbfm_tracker.py, local, CPU only): build a new project from 153.nwb under barlow_track_revisions/wbfm_tracker_baseline/samuel/ (user OK'd the location), run steps 2a-3b with default configs, score against the NWB GT. Also times the CPU run. The Samuel NWB masks hold only the ~97 GT neurons (98 GT), so no distractor objects, the same input our Samuel projects had.
+
+run r261029-4167392 · pids 4167392 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/wbfm_tracker/samuel.log · for [[EVD - Published trackers run on the shared NWB benchmark]]
+
+## 2026-10-29 20:53 — decision
+
+New sub-project (user, 2026-10-29): re-export the Leifer NeRVE worm1 recording from raw into a new NWB with a segmentation, so Leifer can join the per-recording round and the wbfm-tracker baseline (fixes i261023-2's missing metadata). Raw data found: leifer_data/Nguyen2017NeuronTracking/worm1/ (sCMOS_Frames_U16_1200x600.dat 73 GB, hiResData.mat, alignments.mat, outputFiles/PointsStats*.mat, manualSummary.mat); Leifer's MATLAB code is listed in files.txt inside the 352 GB tar. The existing Leifer_NeRVE_Worm1.nwb (someone else's export, video only) is the working example. A read-only exploration agent is mapping the format now; the real export waits for the next session.
+
+## 2026-10-29 20:54 — run
+
+Build the other seven wbfm-tracker baseline projects from their NWBs, create only (create_all_projects.sh): Samuel 137 / 184, Flavell x5, under barlow_track_revisions/wbfm_tracker_baseline/<label>/. The user runs the tracker on them with snakemake on the cluster. Note: samuel 184-004.nwb is only 0.15 GB for a 3002-frame video, so it may use external links; check its new project's data loads.
+
+run r261029-4169997 · pids 4169997 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/wbfm_tracker/create_all.log · for [[EVD - Published trackers run on the shared NWB benchmark]]
+
+## 2026-10-29 20:58 — run
+
+r261029-4167392 built the Samuel 153 project (wbfm_tracker_baseline/samuel/153/) but step 2a failed on import: after project creation, pytorch_lightning raises TypeError (pip's vendored typing_extensions got loaded); local env only. Fixed by importing pytorch_lightning first (14b581f). Rerun of the steps, CPU only, on the existing project.
+
+run r261029-4174234 · pids 4174234 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/wbfm_tracker/samuel.log · for [[EVD - Published trackers run on the shared NWB benchmark]]
+
+## 2026-10-29 21:05 — run
+
+r261029-4174234 failed in 2a after 4m50s: 96 of 120923 objects in the new Samuel 153 metadata are one-voxel, zero-brightness masks whose brightness-weighted centroid is (nan, nan, nan); wbfm's 2D encoder does int(z). Fix (67b1643): bbox-centre centroid for those objects, original kept as metadata_before_centroid_fix.pickle; applied by run_wbfm_tracker.py to every new project. Rerun, CPU only.
+
+run r261029-4180779 · pids 4180779 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/wbfm_tracker/samuel.log · for [[EVD - Published trackers run on the shared NWB benchmark]]
+
+## 2026-10-29 21:07 — decision
+
+Deferred to tomorrow (user): fix zero-brightness NaN centroids in wbfm itself. utils_metadata.py:76-78 (regionprops weighted_centroid, plain volume) and the props path at :92 (weighted_centroid via regionprops_table, used by recalculate_metadata_from_config) give (nan, nan, nan) when an object's red voxels are all 0; fall back to the geometric centroid. Then drop the barlow_track-side workaround (run_wbfm_tracker.fix_nonfinite_centroids, 67b1643) or keep it only for already-built projects.
+
+- [ ] Fix NaN weighted centroids for zero-brightness objects in wbfm utils_metadata.py
+- [ ] Check all eight wbfm_tracker_baseline projects have the centroid fix before telling the user the folder is ready
+
+## 2026-10-29 21:09 — idea
+
+Leifer re-export exploration done (b0c2763, barlow_track/scripts/scratch/leifer_export/README.md): NeRVE saved real masks for every detection (~117 per volume, CLstraight/pointStats*.mat baseImg + transform lookups back to raw), verified against raw intensities; GT is manualSummary.manualPoints, as in the old NWB; red is frame[:, :632].T of the .dat. Plan and risks in the README. Also: the old NWB is chunked 48 volumes deep, uncompressed, likely why Leifer evals take hours.
+
+- [ ] Leifer export: choose the z rule (old 32-plane rule for comparability, or per-volume frames, nz 34)
+
+## 2026-10-29 21:35 — run
+
+r261029-4126504 (batch 22) done, seed 44 and the rest: b22_flavell_zs4.0_s43: 0.680;b22_zimmer_zs1.0_s44: 0.693;b22_zimmer_zs1.55_s44: 0.735;b22_zimmer_zs3.0_s44: 0.784;b22_zimmer_zs4.6_s44: 0.802;b22_samuel_zs1.0_s44: 0.611;b22_samuel_zs2.9_s44: 0.917;b22_samuel_zs5.0_s44: 0.918;b22_flavell_zs1.0_s44: 0.727;b22_flavell_zs2.0_s44: 0.739;b22_flavell_zs4.0_s44: 0.610;
+
+## 2026-10-29 21:35 — run
+
+Batch 22 conclusion (proxy, 2 seeds): visnet_z_scale gains replicate. Zimmer 1 -> 4.6: +0.10 / +0.11 (s43 / s44). Samuel 1 -> 5: +0.32 / +0.31, with 2.9 already almost as good. Flavell: 2 is flat (-0.01 / +0.01) and 4 hurts (-0.10 / -0.12); Flavell's voxels are probably near-isotropic already. Batch 23 (r261029-4158341, now running) checks the full video.
+
+for [[QUE - Does adding neuron position information improve tracking]]
+
+## 2026-10-29 22:01 — run
+
+r261029-4180779 (wbfm tracker, Samuel 153, CPU only, local 56 cores): 2a 317 s, 2b SuperGlue frame pairs 1018 s, 2c 71 s; 3a SuperGlue against the template is running at ~3.4 frames/s (~7 min). So the wbfm tracker runs without a GPU at about 25 min per recording, and the cluster snakemake can use a CPU-only cluster_config. Still running: 3a, 3b, scoring.
+
+for [[EVD - Published trackers run on the shared NWB benchmark]]
+
+## 2026-10-30 01:08 — decision
+
+Leifer re-export started as a subagent (user, 2026-10-30). Decisions: z rule A first (the old file's 32-plane rule, so images stay pixel-identical and GT-only scores comparable), B later behind a flag; red only; NeRVE's own masks as CalciumSeriesSegmentationUntracked; GT from manualPoints, NeuronCentroids snapped to matched mask centroids (manual clicks kept separately) so eval's 0.5-voxel GT-to-mask mapping works; one volume per gzip chunk. Output: barlow_track_revisions/leifer_reexport/.
+
+## 2026-10-30 01:08 — run
+
+wbfm tracker, Samuel 153 (r261029-4180779), CPU only: accuracy 0.170 (gt_valid matching 0.173), 95 of 98 GT neurons assigned a column. Steps: 2a 317 s, 2b 1018 s, 2c 71 s, 3a 4402 s, 3b 4492 s (2.9 h in total; 3a's first progress bar was not the whole step). 0.17 is far below fDNC's 0.83 on the same recording, so the scoring may be wrong (ID spaces) before it says anything about the tracker; check first. Also: samuel_137 / 184 were built before the centroid fix; apply it.
+
+## 2026-10-30 01:10 — run
+
+Batch 23 so far (r261029-4158341, seed 43 proxy): Zimmer z_scale 6 0.874 (4.6 was 0.865), Samuel 8 0.794 and 12 0.551 (5 was 0.865), so the optimum is near the voxel aspect: Zimmer ~4.6-6, Samuel ~3-5. Zimmer z_scale 8 ran out of GPU memory beside batch 21 (rerun queued after batch 23). Full video, Zimmer z_scale 1: 0.922; the 4.6 eval is running.
+
+## 2026-10-30 01:10 — run
+
+Rerun of b23_zimmer_zs8.0_s43 (OOM), after batch 23 ends.
+
+run r261030-102486 · pids 102486 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/posonly_fast/batch23_retry.log
+
+## 2026-10-30 01:10 — run
+
+Samuel 137 / 184 wbfm-tracker projects got the centroid fix afterwards (137: 600 objects, 184: 0). The Samuel NWB masks keep one label per GT neuron over time (99% of neurons), i.e. they are tracked masks; neither tracker reads mask labels, but keep it in mind for any label-based shortcut.
+
+## 2026-10-30 01:10 — decision
+
+wbfm_tracker_baseline folder ready for the user's snakemake: 8 projects (samuel, samuel_137, samuel_184, flavell x5) with the centroid fix; each snakemake/ has cluster_config_cpu_only.yaml next to the original (GPU gres replaced by the defaults). Samuel 153 already has tracks (0.170).
+
+## 2026-10-30 02:56 — run
+
+Leifer re-export done (subagent, 0314776): Leifer_NeRVE_Worm1_reexport_A.nwb / _B.nwb, validated (validate_A.log: 1496 / 1536 volumes pixel-identical, the rest explained; masks 117.5 per volume, in-mask red 1009 vs 106; 89.9% of GT matched; loads in ProjectData with raw_segmentation). Benchmark label leifer_reexport (b06d486). This answers the Leifer part of a261029-1 and works around i261023-2 (missing metadata). Building its wbfm project now (create only), for the per-recording round and the wbfm-tracker baseline.
+
+run r261030-158650 · pids 158650 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/wbfm_tracker/leifer_reexport_create.log
+
+## 2026-10-30 03:27 — run
+
+r261030-158650: wbfm project from the Leifer re-export built in 31 min (wbfm_tracker_baseline/leifer_reexport/Leifer_NeRVE_Worm1_reexport_A/, metadata recalculated from the NeRVE masks, no NaN centroids), with cluster_config_cpu_only.yaml. The folder now holds 9 projects for the user's snakemake.
+
+## 2026-10-30 03:28 — run
+
+Batch 20 done (r261029-4011812 / r261029-4053272), Zimmer 100 frames, epoch-14 proxy, seeds 43 / 44: image-only lambd_obj 0.67 vs 0 = .617 / .444 vs .482 / .390 (+0.14 / +0.05); fused add 0.67 vs 0 = .687 / .626 vs .692 / .647 (-0.01 / -0.02). So the transpose term speeds up image-only training but not fused (position-dominated) training. Batch 21 (r261029-4059380), Samuel 153 image-only, 30 epochs, proxy at epoch 29: lambd_obj 0.67 vs 0 at 30 frames .559 / .499 vs .384 / .330 (+0.18 / +0.17), at 100 frames .556 / .549 vs .396 / .402 (+0.16 / +0.15). The gap did not close by epoch 29 and 30-frame 0.67 matches 100-frame 0.67: a data-efficiency and speed benefit for image networks, both seeds (goal d). Zimmer 40-epoch full-video cells still running.
+
+for [[EVD - Loss-term ablation where accuracy is not saturated]]

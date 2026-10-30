@@ -45,10 +45,11 @@ def main():
     ap.add_argument('--eval_device', default='cpu', choices=['cpu', 'cuda'])
     ap.add_argument('--set', nargs='*', default=[], metavar='KEY=VALUE',
                     help='config overrides, values parsed as YAML (e.g. num_workers=4)')
+    ap.add_argument('--tag', default=None, help='run-name suffix instead of the --set text')
     args = ap.parse_args()
 
     name = f"{args.label}_{args.variant}_{args.device}{args.threads}_f{args.frames}e{args.epochs}"
-    name += ''.join(f"_{kv.replace('=', '')}" for kv in args.set)
+    name += f"_{args.tag}" if args.tag else ''.join(f"_{kv.replace('=', '')}" for kv in args.set)
     run_dir = OUT / name
     (run_dir / 'log').mkdir(parents=True, exist_ok=True)
     (run_dir / 'checkpoints').mkdir(exist_ok=True)

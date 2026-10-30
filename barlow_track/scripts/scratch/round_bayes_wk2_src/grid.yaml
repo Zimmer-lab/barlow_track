@@ -1,0 +1,62 @@
+# round_bayes_wk2: one wide Bayesian (Ax) search per recording, scored by full-video tracking
+# accuracy (objective: accuracy) in a CPU-only job. The weekend run that narrows the space
+# for the next 3-day and weekend runs (the user, 2026-10-30): architecture (fusion, self
+# layers) should come out shared across recordings; lr, training length, frames and
+# augmentation may differ. Launch WITHOUT --direct_parameter_sweep, with --total_budget.
+# Left out: real frame pairs (pair_p: lowered the proxy in every cell, its filter was tuned on
+# GT) and keypoint-only geometry (bend / axis scale / cut need apply_to_volume false).
+objective_cpu_job: true
+objective_minutes: 1440
+train_hours: 48
+train_gpu_job_cpus: 16
+max_consecutive_failures: 10
+hyperparameters:
+  # Architecture: the part that should agree across recordings
+  - name: fusion
+    type: choice
+    values: [visual_only, add]
+  - name: self_layers
+    type: choice
+    values: [0, 1, 2]
+    value_type: int
+    is_ordered: true
+  # Training
+  - name: lambd_obj
+    type: range
+    bounds: [0.0, 1.0]
+  - name: lr
+    type: range
+    bounds: [1.0e-5, 3.0e-4]
+    log_scale: true
+  - name: epochs
+    type: range
+    bounds: [2, 30]
+    value_type: int
+    log_scale: true
+  - name: num_frames
+    type: range
+    bounds: [30, 500]
+    value_type: int
+    log_scale: true
+  # Augmentation (all GT-free)
+  - name: global_augment.max_degrees_z
+    type: range
+    bounds: [0.0, 180.0]
+  - name: global_augment.scale_jitter
+    type: range
+    bounds: [0.0, 0.25]
+  - name: global_augment.elastic_scale
+    type: range
+    bounds: [0.0, 1.5]
+  - name: crop_photometric.crop_degrees_z
+    type: range
+    bounds: [0.0, 180.0]
+  - name: crop_photometric.p_noise
+    type: range
+    bounds: [0.0, 0.5]
+  - name: position_augment.dropout_p
+    type: range
+    bounds: [0.0, 0.3]
+  - name: position_augment.spurious_p
+    type: range
+    bounds: [0.0, 0.3]

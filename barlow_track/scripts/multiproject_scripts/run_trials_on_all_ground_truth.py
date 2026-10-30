@@ -69,12 +69,13 @@ DATASETS = {
     "samuel_137": dict(source="nwb", nwb=os.path.join(_PAPER_OTHER, "samuel_data/137.nwb")),
     "samuel_184": dict(source="nwb",
                        nwb=os.path.join(_PAPER_OTHER, "samuel_data/thresholded_segmentation/184-004.nwb")),
-    # The same Leifer recording re-exported from raw with NeRVE's masks of every detection
-    # (scratch/leifer_export; old file's z rule). Score it with --nwb_objects all; GT-only
-    # scores stay on "leifer" (here GT is snapped to matched masks and 10% is unmatched).
+    # The same Leifer recording re-exported from raw (scratch/leifer_export, A2): red and
+    # green, NeRVE's masks of every detection plus capped watershed masks for GT clicks NeRVE
+    # missed, the full manual GT as clicks. Score it with --nwb_objects all
+    # --nwb_gt_mapping segmentation_id; GT-only scores of the old file stay on "leifer".
     "leifer_reexport": dict(source="nwb", nwb=(
         "/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/leifer_reexport/"
-        "Leifer_NeRVE_Worm1_reexport_A.nwb")),
+        "Leifer_NeRVE_Worm1_reexport_A2.nwb")),
 }
 
 # eval_accuracy.py addresses projects by lab; nwb-source datasets reuse the

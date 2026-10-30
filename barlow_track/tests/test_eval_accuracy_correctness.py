@@ -282,3 +282,16 @@ def test_nwb_gt_mapping_by_segmentation_id_keeps_clicks_off_the_mask_centroid():
     _, by_id = _nwb_all_objects(nwb, arrays, [0], gt_mapping='segmentation_id')
     assert np.array_equal(by_centroid[0], [np.nan, 1007, np.nan], equal_nan=True)
     assert np.array_equal(by_id[0], [3, 1007, np.nan], equal_nan=True)
+
+
+def test_trained_mode_on_an_nwb_label_without_a_lab_entry_reads_frames_from_the_gt_nwb():
+    # The sweep objective (evaluate_trained_checkpoint) passes nwb=None and gt=<the NWB> for
+    # recordings LABS does not know (samuel_137, flavell_2022..., leifer_reexport); every
+    # round_wk1 CPU eval on them died in _check_args before this
+    from types import SimpleNamespace
+    from barlow_track.scripts.eval_accuracy import _check_args
+    args = SimpleNamespace(mode='trained', weights='w.pth', lab='samuel_137', source='nwb',
+                           nwb=None, project='p/project_config.yaml', gt='x.nwb')
+    _check_args(args)
+    with pytest.raises(SystemExit):
+        _check_args(SimpleNamespace(**{**vars(args), 'gt': None}))

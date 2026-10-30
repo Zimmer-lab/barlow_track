@@ -581,7 +581,8 @@ def _check_args(args):
         if not args.weights:
             raise SystemExit('--mode trained requires --weights')
         if args.source == 'nwb':
-            missing = not (args.nwb or spec.get('gt'))
+            # run_eval reads the frames from args.nwb or, failing that, the GT NWB
+            missing = not (args.nwb or args.gt or spec.get('gt'))
         else:
             missing = not (args.project or spec.get('project'))
         if missing or not (args.gt or spec.get('gt')):

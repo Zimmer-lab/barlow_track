@@ -13,6 +13,7 @@ extraction; those are position-agnostic.
 Legacy classes are untouched; use `VolumeCoordsDataModule` to opt in.
 """
 import contextlib
+import os
 import logging
 import random
 import time
@@ -469,8 +470,9 @@ def get_centroids_for_volume(project_data, t):
     return zxy, seg_ids
 
 
-def load_volume(project_data, t):
-    vol = project_data.red_data[t, ...]
+def load_volume(project_data, t, red=None):
+    """Red volume t as float32; red (default project_data.red_data) is the array to read."""
+    vol = (project_data.red_data if red is None else red)[t, ...]
     if hasattr(vol, 'compute'):
         vol = vol.compute()
     return np.asarray(vol, dtype=np.float32)
@@ -625,6 +627,28 @@ class VolumeCoordsDataset(Dataset):
         # Wall seconds per item phase when a dict (the trainer's timing_log), else off.
         # Only accumulates in this process, i.e. with num_workers 0.
         self.timings = None
+        # DataLoader workers reopen a zarr ZipStore themselves (see _red_data)
+        self._pid, self._worker_red = os.getpid(), None
+
+    def _load_volume(self, t):
+        red = self._red_data()
+        return load_volume(self.project_data, t) if red is None else load_volume(self.project_data, t, red=red)
+
+    def _red_data(self):
+        """None (load_volume reads project_data.red_data), or in a forked DataLoader worker
+        its own reopened copy when red_data is a zarr ZipStore: forked workers share the
+        parent's zip file handle and seek position, so concurrent reads interleave
+        (BadZipFile 'Overlapped entries')."""
+        if os.getpid() == self._pid:
+            return None
+        red = self.project_data.red_data
+        import zarr
+        if not isinstance(getattr(red, 'store', None), zarr.storage.ZipStore):
+            return red
+        if self._worker_red is None or self._worker_red[0] != os.getpid():
+            store = zarr.storage.ZipStore(red.store.path, mode='r')
+            self._worker_red = (os.getpid(), zarr.open_array(store, mode='r', path=red.path))
+        return self._worker_red[1]
 
     def _lap(self, phase, t0):
         """Charge the time since t0 to phase (if timing is on); returns now."""
@@ -710,7 +734,7 @@ class VolumeCoordsDataset(Dataset):
         # A shape-only stand-in when keypoints_only: _augmented_view reads only
         # volume.shape on that path
         volume = np.empty(self._volume_shape, dtype=np.float32) if self.keypoints_only \
-            else load_volume(self.project_data, t)
+            else self._load_volume(t)
         self._lap('load_volume', t0)
         points = self._centroids[idx].astype(float)
         np_seed, torch_seed = self._item_seeds(idx)
@@ -724,7 +748,7 @@ class VolumeCoordsDataset(Dataset):
             t2, points2, base_ids2 = self._pairs[idx][self.rng.randint(len(self._pairs[idx]))]
             if not self.keypoints_only:
                 t0 = time.perf_counter()
-                volume2 = load_volume(self.project_data, t2)
+                volume2 = self._load_volume(t2)
                 self._lap('load_volume', t0)
         with _seeded_torch_rng(torch_seed):
             y1, k1, i1 = self._augmented_view(volume, points, view=0)

@@ -43,9 +43,12 @@ def main():
     ap.add_argument('--epochs', type=int, default=1)
     ap.add_argument('--eval', action='store_true', help="score the checkpoint as the round's objective")
     ap.add_argument('--eval_device', default='cpu', choices=['cpu', 'cuda'])
+    ap.add_argument('--set', nargs='*', default=[], metavar='KEY=VALUE',
+                    help='config overrides, values parsed as YAML (e.g. num_workers=4)')
     args = ap.parse_args()
 
     name = f"{args.label}_{args.variant}_{args.device}{args.threads}_f{args.frames}e{args.epochs}"
+    name += ''.join(f"_{kv.replace('=', '')}" for kv in args.set)
     run_dir = OUT / name
     (run_dir / 'log').mkdir(parents=True, exist_ok=True)
     (run_dir / 'checkpoints').mkdir(exist_ok=True)
@@ -56,6 +59,9 @@ def main():
     if args.variant == 'posonly':
         # keypoints_only reads no volume, so the global augmentation moves keypoints only
         cfg['global_augment'] = dict(cfg.get('global_augment') or {}, apply_to_volume=False)
+    for kv in args.set:
+        k, v = kv.split('=', 1)
+        cfg[k] = yaml.safe_load(v)
     (run_dir / 'train_config.yaml').write_text(yaml.safe_dump(cfg, sort_keys=True))
 
     threads = str(args.threads)

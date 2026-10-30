@@ -274,6 +274,27 @@ def test_augmentation_does_not_depend_on_worker_count():
     assert all(torch.equal(a, b) for a, b in zip(batches[0][0], batches[2][0]))
 
 
+def test_reused_loader_with_workers_matches_no_workers_across_epochs():
+    # The trainer builds the train loader once and calls set_epoch before each epoch;
+    # workers (forked per epoch) must see the new epoch, and match num_workers 0
+    project = _FakeProject()
+    epochs = {}
+    for num_workers in (0, 2):
+        dm = VolumeCoordsDataModule(project_data=project, num_frames=3, batch_size=1,
+                                    train_fraction=0.66, val_fraction=0.33,
+                                    seed=0, num_workers=num_workers, **_AUG)
+        dm.setup()
+        loader = dm.train_dataloader()
+        epochs[num_workers] = []
+        for epoch in range(2):
+            dm.set_epoch(epoch)
+            epochs[num_workers].append(list(loader))
+    for e in range(2):
+        for a, b in zip(epochs[0][e], epochs[2][e]):
+            assert all(torch.equal(x, y) for x, y in zip(a, b))
+    assert not torch.equal(epochs[2][0][0][0], epochs[2][1][0][0])
+
+
 def test_split_is_fixed_by_the_seed():
     project = _FakeProject()
 

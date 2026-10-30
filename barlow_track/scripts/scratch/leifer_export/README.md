@@ -1,5 +1,34 @@
 # Leifer NeRVE worm1: re-export from raw into a new NWB (with segmentation)
 
+## A2, built 2026-10-30 (default output of export_leifer_nwb.py now)
+
+Output: `/lisc/.../barlow_track_revisions/leifer_reexport/Leifer_NeRVE_Worm1_reexport_A2.nwb` (26.5 GB, 52 min:
+masks 1.5 min, pseudo masks 10 min, images 36 min, 24 processes). z rule A (old 32-plane rule, volume 1535
+stored correctly, not z-flipped like the old file). Images (1536, 632, 600, 32, 2), channel 0 = red (tagRFP),
+channel 1 = green (GCaMP6s) registered to red; chunks (1, 632, 600, 32, 1), gzip 4. A and B untouched.
+Validation log: `~/.cache/barlow_scratch/leifer_export/validate_A2.log`.
+
+- Green: `frame[:, 634:1200].T` warped onto red with a projective transform fit to
+  `alignments.S2AHiRes` Aall -> Sall (as NeRVE's fitgeotrans(..., 'projective') + imwarp), control points
+  read as MATLAB (x = col, y = row), bilinear, 0 outside. `green_orientation_check.py` scores the
+  alternatives (red-green correlation near NeRVE masks, in/out-mask green; 4 volumes, 65 planes):
+  projective 0.698 / 2.32 and affine 0.699 / 2.32 tie; red +1 px (1-based points) 0.667; frame offset
+  -1 / +1 0.573 / 0.531; flips 0.19 / 0.17; no warp 0.12; rot180 0.10; control points as (row, col) 0.07.
+  Fit residual rms 1.5 px (max 4.4). Sub-pixel shift tests in validate peak at 0 (within 0.5 px).
+- Segmentation: NeRVE masks (labels = pointIdx, < 1000) plus a pseudo mask for every GT click without a
+  matched NeRVE mask, label 1000 + GT neuron index. Pseudo mask: local skimage watershed on the smoothed
+  red image (gaussian sigma (1, 1, 0.5)), seeded at the clicks, each region restricted to its own allowed
+  set = ellipsoid of 2.0 um (xy and z, grid 0.3226 / 1.5 um) & not NeRVE & smoothed red >= bg + 0.5 (peak
+  - bg); fallback to ellipsoid & background when that is empty; seed moved to the nearest allowed voxel
+  when the click is in a NeRVE mask. wbfm's `segment_from_centroids_using_watershed` not used (needs a
+  dask client and floods the whole volume from all seeds). 12019 pseudo masks, voxels median 94 / p90 162
+  / max 234 vs NeRVE 113 / 185 / 699. Table `processing/NeRVEExport/PseudoMasks`.
+- GT: `NeuronCentroids` = raw manual clicks (no snapping), all 1536 volumes (incl. the 208 clicks of
+  volumes 78, 405, 945, 1516 the old file drops); `NeuronSegmentationID` finite for every GT point (matched
+  NeRVE label, else pseudo label). `NeuronCentroidsManual` removed (the wbfm loader does not read it).
+- Opt-in flags reproduce the old file's choices: `--old_last_volume` (1535 z-flipped),
+  `--omit_old_missing_clicks`; `--channels red` for red only.
+
 ## Built 2026-10-30 (export_leifer_nwb.py, validate_leifer_nwb.py, old_map_check.py)
 
 Output: `/lisc/.../barlow_track_revisions/leifer_reexport/Leifer_NeRVE_Worm1_reexport_A.nwb` (14.5 GB, 25 min,

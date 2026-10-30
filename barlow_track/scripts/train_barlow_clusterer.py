@@ -52,6 +52,46 @@ def _warn_unread_config_keys(args):
         logging.warning(f"Config key batch_size={args.batch_size!r} is ignored: a batch is one volume")
 
 
+class _PhaseTimer:
+    """timing_log (default off): wall seconds per training phase, printed once per epoch.
+
+    Synchronizes CUDA at each phase boundary so GPU time lands in the phase that queued it
+    (this slows a GPU run slightly, hence off by default).
+    """
+
+    def __init__(self, enabled, device):
+        self.enabled = enabled
+        self.sync = enabled and device.type == 'cuda'
+        self.totals, self.counts = {}, {}
+        self._t = None
+
+    def start(self):
+        if self.enabled:
+            if self.sync:
+                torch.cuda.synchronize()
+            self._t = time.perf_counter()
+
+    def lap(self, phase):
+        """Charge the time since the last start/lap to phase."""
+        if not self.enabled:
+            return
+        if self.sync:
+            torch.cuda.synchronize()
+        now = time.perf_counter()
+        self.totals[phase] = self.totals.get(phase, 0.0) + now - self._t
+        self.counts[phase] = self.counts.get(phase, 0) + 1
+        self._t = now
+
+    def report(self, epoch):
+        if not self.enabled:
+            return
+        stats = dict(timing_epoch=epoch, threads=torch.get_num_threads(),
+                     **{f"{k}_s": round(v, 2) for k, v in self.totals.items()},
+                     **{f"{k}_n": n for k, n in self.counts.items()})
+        print(json.dumps(stats), flush=True)
+        self.totals, self.counts = {}, {}
+
+
 def train_barlow_network(args):
     _warn_unread_config_keys(args)
 
@@ -203,12 +243,16 @@ def train_barlow_network(args):
     # pairs. reaugment_each_epoch advances it; off by default to keep existing runs
     # reproducible. The legacy crop pipeline draws from the global RNG and needs nothing.
     reaugment = bool(getattr(args, 'reaugment_each_epoch', False)) and use_position
+    timer = _PhaseTimer(bool(getattr(args, 'timing_log', False)), gpu)
     try:
         for epoch in range(0, args.epochs):
             if reaugment:
                 data_module.set_epoch(epoch)
+            timer.start()
             for step, batch in enumerate(loader, start=epoch * len(loader)):
+                timer.lap('data')
                 loss, loss_original, loss_transpose, loss_match = _run_forward(model, batch, gpu, use_position)
+                timer.lap('forward')
 
                 # Crash on non-finite loss: stepping on NaN poisons the whole
                 # model (gate and all) and wastes the trial producing a
@@ -241,6 +285,7 @@ def train_barlow_network(args):
                     optimizer.zero_grad(set_to_none=True)
                 else:
                     num_skipped_batches += 1
+                timer.lap('backward')
 
                 if step % args.print_freq == 0 or step == 0:
                     if args.rank == 0:
@@ -300,6 +345,7 @@ def train_barlow_network(args):
                                     fig = visualize_model_performance(c, save_fname=save_fname, vmin=-0.5, vmax=1)
                                     if run is not None:
                                         run.log({"chart": fig})
+                    timer.lap('print_probe')
 
             if args.rank == 0:
                 # save checkpoint
@@ -333,8 +379,9 @@ def train_barlow_network(args):
                         run.log({"validation_chart": fig})
                 if val_eval_mode:
                     model.train()
+                timer.lap('checkpoint_and_val_loss')
 
-                val_losses = {"val_loss": val_loss, "val_loss_original": val_loss_original, "val_loss_transpose": val_loss_transpose}
+                val_losses ={"val_loss": val_loss, "val_loss_original": val_loss_original, "val_loss_transpose": val_loss_transpose}
                 # val_loss is a sum over val batches; the mean compares across
                 # runs with different numbers of val frames.
                 val_losses["mean_batch_loss"] = val_loss / num_val_batches if num_val_batches else float('nan')
@@ -348,6 +395,7 @@ def train_barlow_network(args):
                     val_losses.update({f"val_{k}": v for k, v in _diag.items()})
                 except (RuntimeError, ValueError, AttributeError, StopIteration) as e:
                     logging.warning(f"Descriptor diagnostics failed: {e}")
+                timer.lap('val_diagnostics')
                 # Tracking proxy on frames training never sampled (val_matching.py);
                 # off unless val_match_frames > 0. Draws no random numbers.
                 if match_frames:
@@ -363,6 +411,8 @@ def train_barlow_network(args):
                         val_losses["val_match_pairs"] = n_pairs
                     except (RuntimeError, ValueError, KeyError, IndexError, AttributeError) as e:
                         logging.warning(f"Frame-pair matching accuracy failed: {e}")
+                timer.lap('val_match_proxy')
+                timer.report(epoch)
                 if run is not None:
                     run.log(val_losses)
                 # Printing

@@ -15,6 +15,7 @@ Legacy classes are untouched; use `VolumeCoordsDataModule` to opt in.
 import contextlib
 import logging
 import random
+import time
 from typing import Optional
 
 import numpy as np
@@ -621,6 +622,17 @@ class VolumeCoordsDataset(Dataset):
             except ValueError:
                 self.position_args['jitter_std'] = self._jitter_from_stats(js)
         self._pairs = self._real_pairs() if self.position_args.get('pair_p') else None
+        # Wall seconds per item phase when a dict (the trainer's timing_log), else off.
+        # Only accumulates in this process, i.e. with num_workers 0.
+        self.timings = None
+
+    def _lap(self, phase, t0):
+        """Charge the time since t0 to phase (if timing is on); returns now."""
+        if self.timings is None:
+            return t0
+        now = time.perf_counter()
+        self.timings[phase] = self.timings.get(phase, 0.0) + now - t0
+        return now
 
     def _real_pairs(self, min_frac=0.15, min_matches=8):
         """Per frame, the usable (t + lag, its centroids, frame-t row per row or -1) for lag in
@@ -694,10 +706,12 @@ class VolumeCoordsDataset(Dataset):
 
     def __getitem__(self, idx):
         t = int(self.frame_indices[idx])
+        t0 = time.perf_counter()
         # A shape-only stand-in when keypoints_only: _augmented_view reads only
         # volume.shape on that path
         volume = np.empty(self._volume_shape, dtype=np.float32) if self.keypoints_only \
             else load_volume(self.project_data, t)
+        self._lap('load_volume', t0)
         points = self._centroids[idx].astype(float)
         np_seed, torch_seed = self._item_seeds(idx)
         # Fresh, index-specific RNGs (see class docstring): the two views still
@@ -709,13 +723,16 @@ class VolumeCoordsDataset(Dataset):
         if self._pairs is not None and self.rng.random() < self.position_args['pair_p'] and self._pairs[idx]:
             t2, points2, base_ids2 = self._pairs[idx][self.rng.randint(len(self._pairs[idx]))]
             if not self.keypoints_only:
+                t0 = time.perf_counter()
                 volume2 = load_volume(self.project_data, t2)
+                self._lap('load_volume', t0)
         with _seeded_torch_rng(torch_seed):
             y1, k1, i1 = self._augmented_view(volume, points, view=0)
             y2, k2, i2 = self._augmented_view(volume2, points2, view=1, base_ids=base_ids2)
         return y1, y2, k1, k2, i1, i2
 
     def _augmented_view(self, volume, points, view=0, base_ids=None):
+        t0 = time.perf_counter()
         affine_args, elastic_args = split_global_args(self.global_args)
         to_volume = bool(self.global_args.get('apply_to_volume', True))
         # Segmentation errors happen in the frame, before any motion; ids map rows
@@ -734,6 +751,7 @@ class VolumeCoordsDataset(Dataset):
             vol_aug, pts_aug = apply_global_affine(volume, points, R, t_vec, field=field)
         else:
             vol_aug, pts_aug = volume, transform_points(points, volume.shape, R, t_vec, field=field)
+        t0 = self._lap('global_augment', t0)
         # Position-only jitter: shift crop centers AND keypoints together
         # (keypoints only when the volume stays put)
         pts_aug = apply_position_jitter(pts_aug, self.rng,
@@ -767,11 +785,13 @@ class VolumeCoordsDataset(Dataset):
         )
         crop_pts = pts_kept if to_volume else (points[keep_idx] if len(keep_idx) else points[:0])
         keep_ids = ids[keep_idx] if len(keep_idx) else keep_idx
+        t0 = self._lap('keypoint_augment', t0)
         if self.keypoints_only:
             kpts = torch.from_numpy(np.asarray(pts_kept, dtype=np.float32))
             return (torch.zeros((len(pts_kept), 1, 1, 1, 1)), self._normalize(kpts, vol_aug.shape),
                     torch.as_tensor(np.asarray(keep_ids, dtype=np.int64)))
         crops = extract_crops(vol_aug, crop_pts, self.target_sz)
+        t0 = self._lap('extract_crops', t0)
         # 4D (N,Z,X,Y) with N as the channel dim, exactly like the legacy
         # NeuronAugmentedImagePairDataset path (torchio Image convention)
         if len(crops) == 0:
@@ -781,6 +801,7 @@ class VolumeCoordsDataset(Dataset):
         if not torch.is_tensor(x):
             x = torch.as_tensor(np.asarray(x))
         x = x.float().unsqueeze(1)  # (N,1,Z,X,Y)
+        self._lap('crop_augment', t0)
         kpts = torch.from_numpy(np.asarray(pts_kept, dtype=np.float32))
         kpts = self._normalize(kpts, vol_aug.shape)
         return x, kpts, torch.as_tensor(np.asarray(keep_ids, dtype=np.int64))

@@ -82,6 +82,16 @@ class _PhaseTimer:
         self.counts[phase] = self.counts.get(phase, 0) + 1
         self._t = now
 
+    def add_items(self, prefix, data_module):
+        """Move the position dataset's per-item phase times (load, augmentation, crops) in
+        under prefix; they are a breakdown of 'data' (train) or the val phases, not extra."""
+        item_times = getattr(getattr(data_module, 'alldata', None), 'timings', None)
+        if not self.enabled or item_times is None:
+            return
+        for k, v in item_times.items():
+            self.totals[f"{prefix}_{k}"] = self.totals.get(f"{prefix}_{k}", 0.0) + v
+        item_times.clear()
+
     def report(self, epoch):
         if not self.enabled:
             return
@@ -244,6 +254,9 @@ def train_barlow_network(args):
     # reproducible. The legacy crop pipeline draws from the global RNG and needs nothing.
     reaugment = bool(getattr(args, 'reaugment_each_epoch', False)) and use_position
     timer = _PhaseTimer(bool(getattr(args, 'timing_log', False)), gpu)
+    if timer.enabled and use_position:
+        # Splits 'data' into volume reading, augmentation and crop phases (num_workers 0 only)
+        data_module.alldata.timings = {}
     try:
         for epoch in range(0, args.epochs):
             if reaugment:
@@ -346,6 +359,7 @@ def train_barlow_network(args):
                                     if run is not None:
                                         run.log({"chart": fig})
                     timer.lap('print_probe')
+            timer.add_items('train_item', data_module)
 
             if args.rank == 0:
                 # save checkpoint
@@ -412,6 +426,7 @@ def train_barlow_network(args):
                     except (RuntimeError, ValueError, KeyError, IndexError, AttributeError) as e:
                         logging.warning(f"Frame-pair matching accuracy failed: {e}")
                 timer.lap('val_match_proxy')
+                timer.add_items('val_item', data_module)
                 timer.report(epoch)
                 if run is not None:
                     run.log(val_losses)

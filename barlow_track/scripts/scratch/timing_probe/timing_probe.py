@@ -53,6 +53,9 @@ def main():
     cfg = yaml.safe_load((rnd / 'train_config.yaml').read_text())
     cfg.update(VARIANTS[args.variant], epochs=args.epochs, num_frames=args.frames, timing_log=True,
                project_dir=str(run_dir), wandb_name=None)
+    if args.variant == 'posonly':
+        # keypoints_only reads no volume, so the global augmentation moves keypoints only
+        cfg['global_augment'] = dict(cfg.get('global_augment') or {}, apply_to_volume=False)
     (run_dir / 'train_config.yaml').write_text(yaml.safe_dump(cfg, sort_keys=True))
 
     threads = str(args.threads)

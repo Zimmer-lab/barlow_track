@@ -136,7 +136,9 @@ def train_job_params(hyperparameter_args, job_name=None):
         params.update(cpus_per_task=int(h.get('train_cpu_job_cpus', 16)),
                       slurm_mem=str(h.get('train_cpu_job_mem', '64G')))
     else:
-        params.update(cpus_per_task=8, slurm_mem="128G", slurm_gres="gpu:1",
+        # train_gpu_job_cpus: training uses cpus - 2 DataLoader workers (train_barlow_clusterer
+        # _auto_num_workers); the T4 nodes have 32-64 cores, the others 64-128
+        params.update(cpus_per_task=int(h.get('train_gpu_job_cpus', 8)), slurm_mem="128G", slurm_gres="gpu:1",
                       slurm_constraint="l40s|a30|t4|l4")
     return params
 

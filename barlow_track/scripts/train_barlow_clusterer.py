@@ -52,6 +52,45 @@ def _warn_unread_config_keys(args):
         logging.warning(f"Config key batch_size={args.batch_size!r} is ignored: a batch is one volume")
 
 
+def _auto_num_workers(args, data_module):
+    """DataLoader workers for the position pipeline (on unless num_workers_auto: false).
+
+    A config's num_workers > 0 is used as is. With 0 (the default), a Slurm GPU job that
+    crops volumes from a zarr store gets SLURM_CPUS_PER_TASK - 2 workers: the
+    full-volume augmentation, not the GPU, bounds those epochs (Zimmer ~3.5 s per item
+    without workers), and the views are identical with any worker count (per-item seeds;
+    check_workers_real_data.py on five recordings). Anything else keeps 0: CPU jobs
+    need their cores for torch, keypoints_only reads no volume, and other stores (h5 /
+    NWB) are not safe to read from forked workers. One batch is drawn with workers first;
+    if that fails (e.g. a small /dev/shm) training falls back to 0. The global torch RNG
+    is restored after that draw, so the run matches num_workers 0.
+    """
+    n = int(getattr(args, 'num_workers', 0) or 0)
+    cpus = os.getenv('SLURM_CPUS_PER_TASK')
+    if n > 0 or not bool(getattr(args, 'num_workers_auto', True)) or not cpus \
+            or not torch.cuda.is_available() or _keypoints_only(args):
+        return n
+    import zarr
+    red = data_module.alldata.project_data.red_data
+    if not isinstance(red, zarr.Array):
+        print(f"num_workers 0: red_data is {type(red).__name__}, not a zarr array", flush=True)
+        return 0
+    n = max(int(cpus) - 2, 0)
+    if n == 0:
+        return 0
+    rng_state = torch.get_rng_state()
+    data_module.num_workers = n
+    try:
+        next(iter(data_module.train_dataloader()))
+    except Exception as e:
+        logging.warning(f"DataLoader with {n} workers failed ({e!r}); training with num_workers 0")
+        n = 0
+    finally:
+        torch.set_rng_state(rng_state)
+    print(f"num_workers {n} (SLURM_CPUS_PER_TASK={cpus})", flush=True)
+    return n
+
+
 class _PhaseTimer:
     """timing_log (default off): wall seconds per training phase, printed once per epoch.
 
@@ -149,6 +188,8 @@ def train_barlow_network(args):
                                                 val_fraction=args.val_fraction,
                                                 crop_kwargs=dict(target_sz=target_sz), transform_args=args)
     data_module.setup()
+    if use_position:
+        data_module.num_workers = _auto_num_workers(args, data_module)
     loader = data_module.train_dataloader()
     cuda_index = os.getenv("CUDA_VISIBLE_DEVICES", 0)
     gpu = torch.device(f"cuda:{cuda_index}" if torch.cuda.is_available() else "cpu")

@@ -1843,3 +1843,12 @@ Decision (user, 2026-10-30): test (and train) under the conditions of a new reco
 ## 2026-10-30 08:56 — run
 
 r261030-309374: Leifer A2 wbfm project built (metadata.pickle written, centroid fix applied; cluster_config_cpu_only.yaml added). round_wk1_leifer_reexport can launch (41bec69).
+
+## 2026-10-30 09:40 — decision
+
+User launched the weekend rounds (round_wk1_*, round_wk1f30_*) on 2026-10-30. Speed / robustness plan agreed for next week (the user): DataLoader workers only with tests of reproducibility; mixed precision deferred; fewer epochs, benchmarking intermediate checkpoints; label propagation uses a full CPU per seed, so try it on GPU (--track_device cuda exists; it OOMed next to the trained model on 12 GB) rather than parallel seeds; training resume from checkpoints (the wbfm snakemake steps already restart).
+
+- [ ] Speed: DataLoader num_workers > 0 for crop training, with a test that augmented batches are identical to num_workers 0 for a fixed seed
+- [ ] Speed: save per-epoch checkpoints and score several epochs of one trial, to pick shorter schedules
+- [ ] Speed: time full-video label propagation on GPU (--track_device cuda) in its own job vs CPU
+- [ ] Robustness: resume training from the last checkpoint on restart / Slurm requeue, with a test

@@ -1811,3 +1811,9 @@ eval_accuracy --nwb_gt_mapping segmentation_id (opt-in, default centroid) maps G
 ## 2026-10-30 06:37 — decision
 
 Weekend rounds staged (89508b5, README barlow_track/scripts/scratch/round_wk1_src/README.md): round_wk1_<label> on all 12 GT recordings, fusion {visual_only, add} x lambd_obj {0, 0.67, 1} at 100 frames, 30 epochs, jitter auto, visnet_z_scale = voxel aspect (Zimmer 4.615, Samuel 3.889, samuel_184 5.833 (xy 0.3 in its NWB; check), Leifer 4.65, Flavell 1); 2 seeds on zimmer_1128, samuel, flavell_2022033001. round_wk1f30_<label>: the same at 30 frames, 2 seeds, those 3 recordings. 126 GPU training jobs, evals in CPU jobs. All 12 objectives preflighted; CPU smoke test of the Samuel fused config with lambd_obj 1 trained and scored (z_scale 3.889 reached the model). Leifer trains on the re-export project, scored on the old NWB. Not launched (the user launches).
+
+## 2026-10-30 06:46 — decision
+
+Decision (user, 2026-10-30): train on every mask the data has, including the GT-seeded watershed masks in the Leifer re-export v2, as already happens on Samuel (all masks GT-seeded). So round_wk1_leifer must train on a wbfm project built from the v2 NWB (Leifer_NeRVE_Worm1_reexport_A2.nwb, being built), not the v1 NeRVE-only project; the Leifer round waits for it.
+
+- [ ] When Leifer v2 is validated: point leifer_reexport (run_trials DATASETS) at A2, build its wbfm project, set TRAIN_PROJECTS['leifer'] to it, regenerate round_wk1_leifer, update the round README

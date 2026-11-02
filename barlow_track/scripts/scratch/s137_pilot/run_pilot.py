@@ -35,6 +35,9 @@ VARIANTS = {
     'lambd0_seed2': {'seed': 2, 'lambd_obj': 0.0},
     'lambd1_seed2': {'seed': 2, 'lambd_obj': 1.0},
     'reaug_seed2': {'seed': 2, 'reaugment_each_epoch': True},
+    'lambd0_seed3': {'seed': 3, 'lambd_obj': 0.0},
+    'lambd1_seed3': {'seed': 3, 'lambd_obj': 1.0},
+    'reaug_seed3': {'seed': 3, 'reaugment_each_epoch': True},
 }
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 

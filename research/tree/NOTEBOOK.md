@@ -2140,3 +2140,31 @@ Sweep state 19:54 (user away until ~Fri): wk3 Flavell x4 and Samuel x2 running c
 
 - [ ] On return: check zimmer_1210 and wk1 grid dispatchers started; tally wk3 per-recording bests with best_of_table.py
 - [ ] Decide wrapper default memory (96G) or cheap preflight for Zimmer projects (i261102-1)
+
+## 2026-11-02 21:07 — result
+
+Samuel 137 pilot, first two scores (r261102-365990, CPU objective as the sweep): base (trial 63 config and seed) 0.920, base_seed2 0.884. Trial 63 scored 0.931 in the sweep. A 3.6 pt spread between two retrains of one config is larger than any lambd_obj effect the wk2 partial dependence shows (0.004), so single runs per variant cannot answer QUE object-space loss; and trial 63's 0.931 is the best of ~80 noisy draws, so expect regression to the mean in any retrain. Added seed-paired variants (0869829) and a 4th stream.
+
+## 2026-11-02 21:07 — run
+
+Samuel 137 pilot stream d: base_seed3, lambd0_seed2, reaug_seed2 (run_pilot.py 0869829; seed-2 variants pair with base_seed2)
+
+run r261102-2656039 · pids 2656039 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/s137_pilot/stream_d.log
+
+## 2026-11-02 21:08 — result
+
+Samuel 137 pilot (r261102-365990): lambd0 (lambd_obj 0, trial 63's seed) 0.893 vs base at the same seed 0.920: -2.7 pt, inside the 3.6 pt seed spread (base_seed2 0.884). Not conclusive; lambd0_seed2 (r261102-2656039) pairs with base_seed2.
+
+## 2026-11-02 21:20 — run
+
+Labelprop seed noise on Samuel 137 (user asked whether more labelprop seeds would shrink the 3.6 pt base vs base_seed2 spread): re-track the cached embeddings of base and base_seed2 at labelprop seed 1 and 2 (25 seeds) and seed 0 with 100 seeds (s137_pilot/lp_seeds.py 32ce9cf, CPU only, CUDA hidden: the first launch OOM'd loading the checkpoint onto the full GPU)
+
+run r261102-77194 · pids 77194, 79170 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/53a39840-2ccb-4fa4-8a78-2b0160b71611/scratchpad/lpseeds/base.log, /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/53a39840-2ccb-4fa4-8a78-2b0160b71611/scratchpad/lpseeds/base_seed2.log
+
+## 2026-11-02 22:55 — result
+
+Labelprop seed noise on Samuel 137 (r261102-77194, lp_seeds.py 32ce9cf, cached embeddings). base: lp seed 0/1/2 at 25 seeds 0.920/0.927/0.927, 100 seeds 0.928. base_seed2: 0.884/0.878/0.876, 100 seeds 0.884. Labelprop seed spread within a network ~0.8 pt; 100 seeds lands at or above the 25-seed mean (+0.3, +0.5 pt) for 4x the time (64 vs 16 min). The two training seeds differ by 4.4 pt at 100 seeds: the spread is training-seed variance, not labelprop. The local retrain of trial 63 at 100 seeds (0.928) reproduces its sweep score (0.931); base's original 0.920 was a low labelprop draw.
+
+## 2026-11-03 00:02 — result
+
+Samuel 137 pilot (r261102-2656039): base_seed3 0.872. Trial 63's config over three training seeds: 0.920 (its own seed; 0.928 at 100 labelprop seeds), 0.884, 0.872; mean 0.892, sd ~2.5 pt. Trial 63's 0.931 was largely a lucky training seed: the sweep's best trial overstates its config by ~3-4 pt. lambd0 (0.893, trial 63's seed) sits at the config's seed mean.

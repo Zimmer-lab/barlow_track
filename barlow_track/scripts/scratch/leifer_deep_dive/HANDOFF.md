@@ -76,6 +76,10 @@ mask. Code: `barlow_track/scripts/eval_accuracy.py` `_nwb_all_objects`, `run_eva
    - Errors flicker (runs of median 1-2 frames, longest ~17), not identity swaps: frame by
      frame the tracker picks the neighbouring mask instead of the GT one.
    - The 26 frames without NeRVE masks score 0.43 (frames 1524+ 0.05).
+   - The offset is mostly in z: |dz| median 2.18 um (1.45 planes) vs dxy median 1.55 um; 61%
+     of stealing masks are offset more in z than xy and 30% sit within 1 um in xy, i.e.
+     stacked right above or below the GT mask. Baseline (all non-GT masks within 4 um of a GT
+     mask): 41% mostly-z, |dz| 1.56 / dxy 2.09 um. This points to NeRVE splitting cells in z.
    **Main open question:** are the stealing masks NeRVE splits of the same cell (e.g. z-adjacent
    pieces; then the GT is arguably fine and the segmentation should merge them, or the scoring
    should accept either piece) or genuine touching neighbours (then the tracker has a real

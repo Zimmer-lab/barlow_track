@@ -9,6 +9,7 @@ with the round's template: source nwb, GT objects, 137.nwb, labelprop 25 seeds, 
   lambd0       lambd_obj 0: feature-space term only, no object term (the sweep never sampled < 0.1)
   lambd1       lambd_obj 1: object term only
   reaug        reaugment_each_epoch true (i261027-1, a261027-1)
+  *_seed2/3    the same at another seed (seed 2 variants pair with base_seed2)
 
     python barlow_track/scripts/scratch/s137_pilot/run_pilot.py --variants base lambd0 reaug
 """
@@ -29,6 +30,11 @@ VARIANTS = {
     'lambd0': {'lambd_obj': 0.0},
     'lambd1': {'lambd_obj': 1.0},
     'reaug': {'reaugment_each_epoch': True},
+    # Seed noise turned out large (base 0.920 vs base_seed2 0.884), so more seeds, paired by seed
+    'base_seed3': {'seed': 3},
+    'lambd0_seed2': {'seed': 2, 'lambd_obj': 0.0},
+    'lambd1_seed2': {'seed': 2, 'lambd_obj': 1.0},
+    'reaug_seed2': {'seed': 2, 'reaugment_each_epoch': True},
 }
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 

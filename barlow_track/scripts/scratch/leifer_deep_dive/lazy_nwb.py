@@ -19,11 +19,19 @@ def _lazy_squeeze():
             a = da.from_array(a, chunks=(1,) + tuple(a.shape[1:]))
         return orig(a, *args, **kwargs)
 
-    da.squeeze = squeeze
+    # wbfm then calls da.from_array on the squeezed result, which refuses a dask array
+    orig_from_array = da.from_array
+
+    def from_array(x, *args, **kwargs):
+        if isinstance(x, da.Array):
+            return x.rechunk(kwargs['chunks']) if 'chunks' in kwargs else x
+        return orig_from_array(x, *args, **kwargs)
+
+    da.squeeze, da.from_array = squeeze, from_array
     try:
         yield
     finally:
-        da.squeeze = orig
+        da.squeeze, da.from_array = orig, orig_from_array
 
 
 def load_nwb_project(path):

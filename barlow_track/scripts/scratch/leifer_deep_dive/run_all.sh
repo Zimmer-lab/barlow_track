@@ -8,7 +8,8 @@ EMB=$1
 OUT=$2
 HERE=barlow_track/scripts/scratch/leifer_deep_dive
 PY=/home/charles/anaconda3/envs/wbfm/bin/python
-export CUDA_VISIBLE_DEVICES= NUMBA_CACHE_DIR=$HOME/.cache/barlow_scratch/numba_cache MPLCONFIGDIR=$HOME/.cache/barlow_scratch/mpl
+export CUDA_VISIBLE_DEVICES= NUMBA_CACHE_DIR=${NUMBA_CACHE_DIR:-$HOME/.cache/barlow_scratch/numba_cache} \
+  MPLCONFIGDIR=${MPLCONFIGDIR:-$HOME/.cache/barlow_scratch/mpl}
 mkdir -p "$OUT"
 
 step() {  # name, cap in GB, command...

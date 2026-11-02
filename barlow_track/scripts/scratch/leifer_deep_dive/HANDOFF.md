@@ -64,10 +64,22 @@ mask. Code: `barlow_track/scripts/eval_accuracy.py` `_nwb_all_objects`, `run_eva
    offset cases). Only 6.8% of pseudo masks have a non-GT NeRVE mask within 3 um.
 5. Trial 57 embeddings, kNN from other frames (6000 GT queries, 10 NN): same neuron 0.882,
    non-GT detection 0.094, another GT neuron 0.024. Confusions are mostly with non-GT masks.
-6. Re-tracking trial 57 from its cached embeddings with only some rows (decompose_errors.py):
-   **running at handoff time**, see below. The deciding comparison: `gt` subset back near
-   0.97 means the non-GT detections cost the points; still ~0.88 means crops at mask centroids,
-   the GT mapping or the GT itself.
+6. **The non-GT detections cost the ~9 points** (decompose_errors.py on trial 57's cached
+   embeddings, run r261102-3204514): every detection 0.880, GT masks only **0.9665** (0.976 on
+   NeRVE-mask GT, 0.881 on pseudo-mask GT), NeRVE masks only 0.884. So images, crops at mask
+   centroids and the GT mapping are fine; the pseudo masks are not the problem.
+   - 10,700 of 12,113 mismatches go to a non-GT mask, 1,413 to another GT neuron.
+   - Concentrated: the worst 10 neurons hold 41% of errors. neuron_013/076/044/049/032/024
+     score 0.48-0.69 with every detection but 0.95-0.99 GT-only.
+   - The stealing mask sits right next to the true one: centroid distance median 2.84 um
+     (59% < 3 um; GT-to-GT nearest 4.59 um), median 93 voxels, 11% contain a GT click.
+   - Errors flicker (runs of median 1-2 frames, longest ~17), not identity swaps: frame by
+     frame the tracker picks the neighbouring mask instead of the GT one.
+   - The 26 frames without NeRVE masks score 0.43 (frames 1524+ 0.05).
+   **Main open question:** are the stealing masks NeRVE splits of the same cell (e.g. z-adjacent
+   pieces; then the GT is arguably fine and the segmentation should merge them, or the scoring
+   should accept either piece) or genuine touching neighbours (then the tracker has a real
+   discrimination problem). Look at a few in napari (neuron_044: 82% within 3 um).
 
 ## Open ideas, not yet checked
 

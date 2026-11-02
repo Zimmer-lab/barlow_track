@@ -19,9 +19,9 @@ UM = np.array([1.5, 0.3226, 0.3226])  # z, x, y
 
 
 def _load():
-    from wbfm.utils.projects.finished_project_data import ProjectData
     from barlow_track.scripts.eval_accuracy import _load_nwb_arrays
-    p = ProjectData.load_final_project_data(NWB, allow_hybrid_loading=True, verbose=0)
+    from barlow_track.scripts.scratch.leifer_deep_dive.lazy_nwb import load_nwb_project
+    p = load_nwb_project(NWB)
     return p, _load_nwb_arrays(p)
 
 

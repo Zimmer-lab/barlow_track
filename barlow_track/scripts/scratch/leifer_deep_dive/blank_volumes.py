@@ -16,9 +16,9 @@ BLANK = [78, 405, 945, 1516]
 
 
 def main():
-    from wbfm.utils.projects.finished_project_data import ProjectData
     from barlow_track.scripts.eval_accuracy import _load_nwb_arrays
-    p = ProjectData.load_final_project_data(NWB, allow_hybrid_loading=True, verbose=0)
+    from barlow_track.scripts.scratch.leifer_deep_dive.lazy_nwb import load_nwb_project
+    p = load_nwb_project(NWB)
     A = _load_nwb_arrays(p)
     print(f"{'t':>5s} {'masks':>5s} {'clicks':>6s} {'mean':>6s} {'p99':>6s} {'max':>6s} {'zero%':>6s} "
           f"{'corr_prev':>9s} {'click/bg':>8s} {'click>p90%':>10s}  plane means (every 4th)")

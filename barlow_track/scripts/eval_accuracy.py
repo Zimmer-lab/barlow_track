@@ -30,6 +30,11 @@ import time
 from collections import defaultdict
 from types import SimpleNamespace
 
+# Headless NWB loads keep the segmentation lazy (wbfm reads one volume at a time instead of the
+# whole array: 35 GB for the Leifer re-export, 7 GB for Flavell, on every ProjectData load).
+# Ignored by wbfm versions without the flag; set WBFM_NWB_LAZY_SEGMENTATION=0 to turn it off.
+os.environ.setdefault('WBFM_NWB_LAZY_SEGMENTATION', '1')
+
 import numpy as np
 import torch
 

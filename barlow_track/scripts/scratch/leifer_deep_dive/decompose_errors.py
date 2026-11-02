@@ -132,13 +132,13 @@ def main():
     ap.add_argument('--out', required=True)
     args = ap.parse_args()
     from barlow_track.scripts.eval_accuracy import _load_cached_embeddings, _load_nwb_arrays
-    from wbfm.utils.projects.finished_project_data import ProjectData
+    from barlow_track.scripts.scratch.leifer_deep_dive.lazy_nwb import load_nwb_project
     os.makedirs(args.out, exist_ok=True)
 
     X, _, l2t, n_frames = _load_cached_embeddings(args.emb)
     lab = np.array([l2t[i][1] for i in range(len(X))])
     tt = np.array([l2t[i][0] for i in range(len(X))])
-    src = ProjectData.load_final_project_data(args.nwb, allow_hybrid_loading=True, verbose=0)
+    src = load_nwb_project(args.nwb)
     arrays = _load_nwb_arrays(src)
     names = arrays['neurons']
     all_labels_at = {}

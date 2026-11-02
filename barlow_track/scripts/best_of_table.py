@@ -51,7 +51,6 @@ ALL_ROWS = [*ZIMMER_RECORDINGS.values(), 'Flavell 2022-03-31-01 (project segment
             *(f'Flavell {d} (GT objects)' for d in FLAVELL_RECORDINGS),
             'Leifer NeRVE worm 1 re-export (every detection)', 'Leifer NeRVE worm 1 (GT objects)',
             'Leifer NeRVE worm 1 re-export (GT objects)',
-            *(f'Samuel {r} (every detection)' for r in ('137', '153', '184-004')),
             *(f'Samuel {r} (GT objects)' for r in ('137', '153', '184-004'))]
 
 
@@ -106,7 +105,12 @@ def dataset_of(rec):
     if lab == 'samuel':
         if source == 'project':
             return None, 'samuel project segmentation (redundant with GT objects)'
-        return f"Samuel {_stem(gt).replace('.nwb', '') or '153'} ({_objects(rec)})", None
+        if (rec.get('nwb_objects') or 'gt') != 'gt':
+            # Samuel segmentations hold only the GT neurons (plain and thresholded NWBs alike), so
+            # there is no every-detection score; nwb_objects all drops 76% of GT positions that sit
+            # off a mask centroid (notebook 2026-10-28)
+            return None, 'samuel nwb_objects all (segmentation is GT-only; drops most GT)'
+        return f"Samuel {_stem(gt).replace('.nwb', '') or '153'} (GT objects)", None
     return None, f'unknown lab {lab!r}'
 
 
@@ -223,7 +227,8 @@ def render(best, skipped, n_records):
              f"(label propagation) in the cluster rounds and the local scratch results ({n_records} records). "
              "Each cell is the best accuracy, the record's tag and where it came from (cluster round or local).",
              "", "Tracking every detection (project segmentation, or every mask of the NWB) where a recording "
-             "has that score; recordings scored only on GT objects (oracle detections) are marked so.", "",
+             "has that score; recordings scored only on GT objects (oracle detections) are marked so (Samuel: "
+             "its segmentations hold only the GT neurons, so GT objects is the only score).", "",
              *_table(main, best),
              "", "## GT objects only (not the number to report)", "",
              "Oracle detections (only the GT neurons' masks or clicks) for recordings that also have an "

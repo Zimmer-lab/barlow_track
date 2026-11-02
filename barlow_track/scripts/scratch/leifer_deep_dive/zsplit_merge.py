@@ -193,9 +193,30 @@ def cmd_track(args):
     report(col_gt.values.astype(float), col_pr.values.astype(float), list(col_gt.columns), new_labels_at)
 
 
+def cmd_compare(args):
+    """Merged runs score fewer GT cells (GT neurons merged together drop out), so compare on the
+    same cells: the baseline restricted to the cells a merged run still scores."""
+    b = np.load(args.baseline_cells)
+    Gb, Pb = b['G'], b['P']
+    ok_b = np.isfinite(Gb) & (Gb == Pb)
+    print(f"baseline: {np.isfinite(Gb).sum()} cells, accuracy {ok_b.sum() / np.isfinite(Gb).sum():.4f}")
+    for f in sorted(os.listdir(args.out)):
+        if not (f.startswith('merge_') and f.endswith('_cells.npz')):
+            continue
+        m = np.load(os.path.join(args.out, f))
+        assert list(m['names']) == list(b['names'])
+        Gm, Pm = m['G'], m['P']
+        T = min(len(Gm), len(Gb))
+        vm = np.isfinite(Gm[:T])
+        ok_m = vm & (Gm[:T] == Pm[:T])
+        print(f"{f[:-10]}: {vm.sum()} cells, accuracy {ok_m.sum() / vm.sum():.4f}; baseline on the same cells "
+              f"{ok_b[:T][vm].sum() / vm.sum():.4f}; cells dropped {np.isfinite(Gb[:T]).sum() - vm.sum()}, "
+              f"baseline accuracy on them {ok_b[:T][np.isfinite(Gb[:T]) & ~vm].sum() / max((np.isfinite(Gb[:T]) & ~vm).sum(), 1):.4f}")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['pairs', 'track'])
+    ap.add_argument('cmd', choices=['pairs', 'track', 'compare'])
     ap.add_argument('--out', required=True)
     ap.add_argument('--workers', type=int, default=8)
     ap.add_argument('--emb')
@@ -208,7 +229,7 @@ def main():
     ap.add_argument('--seed', type=int, default=0)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
-    {'pairs': cmd_pairs, 'track': cmd_track}[args.cmd](args)
+    {'pairs': cmd_pairs, 'track': cmd_track, 'compare': cmd_compare}[args.cmd](args)
 
 
 if __name__ == '__main__':

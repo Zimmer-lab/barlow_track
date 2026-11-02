@@ -39,6 +39,9 @@ def run_variant(name):
     os.makedirs(os.path.join(d, 'checkpoints'), exist_ok=True)
     cfg = yaml.safe_load(open(os.path.join(TRIAL, 'train_config.yaml')))
     cfg = copy.deepcopy(cfg)
+    # Local runs: 4 DataLoader workers (data-bound at 0; step-0 loss bit-identical and val loss
+    # within run-to-run noise, notebook 2026-10-30, aab23eb). Every variant gets it, so they compare.
+    cfg['num_workers'] = 4
     cfg.update(VARIANTS[name])
     cfg['project_dir'] = d
     cfg['wandb_name'] = f's137_pilot_{name}'

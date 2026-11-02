@@ -85,6 +85,16 @@ mask. Code: `barlow_track/scripts/eval_accuracy.py` `_nwb_all_objects`, `run_eva
    should accept either piece) or genuine touching neighbours (then the tracker has a real
    discrimination problem). Look at a few in napari (neuron_044: 82% within 3 um).
 
+7. **Merging z-stacked masks (GT-free rule) would recover ~4.5 points** (zsplit_merge.py, run
+   r261102-3403676). Masks in vertical voxel contact (contact / smaller mask's largest plane
+   >= 0.3) merged per frame, re-tracked from trial 57's cached embeddings: 0.894 -> 0.942 on the
+   same GT cells (mean row; 0.938 largest-piece row; threshold 0.5: 0.890 -> 0.928). 60% of the
+   stealing masks are in such contact with the GT mask (48% at 0.5). The gain is about the size of
+   the baseline mismatches that merging turns into hits (5.4 pt), i.e. it measures how much of the
+   loss is "picked the stacked piece", not a better tracker. The rule also merges two annotated
+   neurons in 699 groups (0.3) / 247 (0.5): needs a guard (z-extent, size) before it becomes a
+   segmentation fix. Still open: are the pieces one cell? Look in napari.
+
 ## Open ideas, not yet checked
 
 - Do the same GT cells fail in every trial (data / GT problem) or different ones (model)?

@@ -1898,3 +1898,245 @@ Staged round_snap1 (b6925cf, README round_snap1_src/README.md): epoch_snapshots 
 ## 2026-10-30 16:17 — run
 
 Cluster epoch times with DataLoader workers (epoch_times_from_runs.py over round_wk1*/round_snap1_*, 53 finished 30-epoch x 100-frame jobs; s per epoch = training + val + proxy). 14 workers: Samuel 13-18 (A30), Zimmer 38-39 (A30) / 56 (L4), Leifer 35-45 (A30/L4) / 59-73 (T4), Flavell 62-70 (L4) / 93-104 (T4); a 30-epoch job takes 0.1-0.15 h (Samuel), 0.3-0.5 h (Zimmer, Leifer), 0.5-0.9 h (Flavell). Same GPU, 0 vs 6 vs 14 workers: Leifer L4 167-177 / 64 / 45, Samuel A30 27 / 16 / 13-18, Flavell L4 78-103 / 48-66 / 62-70. Epoch time now follows GPU type (A30 < L4 < T4), so jobs are compute-bound: serial augmentation per item (local, 0 workers) is Samuel 0.4 s, Flavell 1.0 s, Zimmer 3.4 s, i.e. 80 items / 14 workers = 2-19 s per epoch, under the GPU time. GPU-side warping is not worth it now (at most Zimmer's few seconds); the per-epoch matching proxy (local GPU 6-10 s on Samuel, roughly half its epoch) is the larger fixed cost. round_wk1_samuel_137's dispatcher stopped at 13:59 (3 eval failures in a row, the fixed NWB-label bug): needs the --skip_completed_grid_jobs rerun. round_wk1 Zimmer trials still pending in the queue after 6.5 h with the same Slurm request as round_snap1's running Zimmer jobs. First snapshot records (samuel_137 trial 0, visual_only lo 0): epoch 1 0.885, 3 0.883, 10 0.893, 20 0.877, 30 0.852.
+
+## 2026-10-30 16:30 — run
+
+Smoke check for round_bayes_wk2: the top of each planned augmentation range (scale_jitter 0.25, rotation 180, crop rotation 180, crop noise p 0.5, keypoint dropout 0.3, spurious detections 0.3; elastic_scale 0 vs 1.5 at std (1,4,4), length 40), fused, local GPU, 8 workers, 10 frames x 2 epochs, on samuel_137 / zimmer_1128 / leifer_reexport / flavell_2022033001: does it run, and what elastic costs per item
+
+run r261030-2581777 · pids 2581777 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/augmax.log
+
+## 2026-10-30 16:44 — run
+
+round_bayes_wk2 launched by the user (2026-10-30 16:42, code 55cc4a3): one Ax search per recording (zimmer_1128, samuel_137, flavell_2022033001, leifer_reexport), --total_budget 120 each, 13 parameters (fusion, self_layers, lambd_obj, lr, epochs 2-30, num_frames 30-500, 7 GT-free augmentations). All four dispatchers submitted their first 10 trials. Weekend run that sets the space for the Tue-Thu 3-day run. Smoke check r261030-2581777: samuel_137 and zimmer_1128 run at the top of every augmentation range, with and without elastic; leifer and flavell pending.
+
+## 2026-10-30 16:58 — run
+
+r261030-2581777: all 8 cells ran (4 recordings x elastic 0 / 1.5, every other augmentation at the top of its round_bayes_wk2 range). Per epoch of 8 steps, 8 workers on 10 local cores, data wait elastic 0 -> 1.5: Zimmer 8.3 -> 19.4 s, Leifer 7.5 -> 18.8 s, Flavell 6.4 -> 7.3 s, Samuel 3.0 -> 3.5 s, against fwd+bwd 1-3.6 s. So strong elastic on the large volumes (Zimmer, Leifer) makes training data-bound again, maybe 2-3x slower trials; that is where GPU-side warping would pay off, if Ax favours elastic. The matching proxy is 8-28 s per epoch (Zimmer 28 s), the largest fixed cost.
+
+## 2026-11-02 08:17 — run
+
+round_bayes_wk2 status 2026-11-02: flavell/leifer/samuel dispatchers all stopped silently at 2026-11-01 04:42 (no traceback, simultaneous: host/session ended) after 106/90/108 trials; their in-flight training jobs finished but the CPU evals were never submitted (12/10/10 trained-unscored). zimmer dispatcher died 2026-10-30 20:35 on 'sbatch: Unable to contact slurm controller' after 18 trials (8 scored, 9 trained-unscored, 1 no ckpt). Only real failures: flavell trials 28 (all embeddings NaN) and 48 (1468 NaN rows). Best acc: flavell .985, leifer .885 (median .878, flat), samuel .931, zimmer .980 (Sobol only). Top-5 everywhere fusion=add, lambd_obj ~0.4-0.7.
+
+- [ ] restart round_bayes_wk2 dispatchers (budgets flavell 14, leifer 30, samuel 12, zimmer 102) to score the trained-unscored trials
+- [ ] dispatcher: retry sbatch on transient slurm controller errors instead of dying
+
+## 2026-11-02 08:25 — run
+
+Leifer deep dive (user, 2026-11-02: round_bayes_wk2 Leifer flat at .878-.885 is too low even with distractors): re-track round_bayes_wk2_leifer_reexport trial 57's cached embeddings on CPU (37cddd2 decompose_errors.py) with every detection / GT masks only / NeRVE masks only, and break the errors down by neuron, frame, mask type and wrong-label kind
+
+run r261102-3049660 · pids 3049660, 3049661, 3049662 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/leifer_deep_dive/trial57/all.log, /home/charles/.cache/barlow_scratch/leifer_deep_dive/trial57/gt.log, /home/charles/.cache/barlow_scratch/leifer_deep_dive/trial57/nerve.log
+
+## 2026-11-02 08:29 — run
+
+Leifer deep dive: per-mask geometry of the A2 re-export (3cb590e mask_geometry.py), to test whether distractors near GT rows in embedding space are fragments or duplicates of GT neurons. trial 57 kNN (SVD 50, 6000 GT queries, 10 NN from other frames): same neuron 0.882, distractor 0.094, other GT 0.024; 37% of detections (70359 / 189378) are non-GT.
+
+run r261102-3052801 · pids 3052801 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/leifer_deep_dive/masks.log
+
+## 2026-11-02 12:36 — dropped
+
+killed by the session crash at 2-4 of 25 seeds; relaunched
+
+dropped r261102-3049660
+
+## 2026-11-02 12:36 — dropped
+
+killed by the session crash before output; relaunched
+
+dropped r261102-3052801
+
+## 2026-11-02 12:36 — run
+
+Relaunch (setsid) of the Leifer deep dive after a session crash: mask_geometry.py and decompose_errors.py all/gt/nerve on trial 57, same commit 3cb590e
+
+run r261102-3155203 · pids 3155203, 3155204, 3155205, 3155206 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/leifer_deep_dive/masks.log, /home/charles/.cache/barlow_scratch/leifer_deep_dive/trial57/all.log, /home/charles/.cache/barlow_scratch/leifer_deep_dive/trial57/gt.log, /home/charles/.cache/barlow_scratch/leifer_deep_dive/trial57/nerve.log
+
+## 2026-11-02 12:38 — run
+
+Leifer deep dive (user): are the 4 NeRVE-blank volumes with the 208 extra clicks corrupted? blank_volumes.py at 7475607
+
+run r261102-3156626 · pids 3156626 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/leifer_deep_dive/blank.log
+
+## 2026-11-02 13:34 — dropped
+
+killed with the terminal scope by systemd-oomd at 12:40 (user-slice memory pressure from 3 parallel labelprops + 16-worker geometry)
+
+dropped r261102-3155203
+
+## 2026-11-02 13:34 — dropped
+
+same oomd kill at 12:40
+
+dropped r261102-3156626
+
+## 2026-11-02 13:34 — dead-end
+
+Both session crashes today (08:35, 12:40) were systemd-oomd killing the terminal scope: my parallel Leifer deep-dive runs pushed user-slice memory pressure past 50%; also took Firefox. Rerun sequentially with ulimit -v caps (run_all.sh, 89b284b), outputs in the session scratchpad (/tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive; ~/.cache is read-only in this session). Lesson: one labelprop at a time locally (each Leifer eval is budgeted 64 GB on the cluster).
+
+run r261102-2490 · pids 2490 · host charles-Precision-7820-Tower · logs /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/driver.log
+
+## 2026-11-02 13:34
+
+r261102-2490 runs run_all.sh as of ec2c82a (89b284b plus the env-var fallback only)
+
+## 2026-11-02 13:40 — todo
+
+Real cause of today's OOMs: wbfm load_final_project_data_from_nwb does da.squeeze(h5py dataset) on CalciumSeriesSegmentation(Untracked), which reads the whole array (35 GB for Leifer A2) on every ProjectData load; 16 geometry workers each loaded it. Same 35 GB at the start of every cluster Leifer eval (64 GB jobs). Fix belongs in wbfm (wrap in da.from_array before squeeze; wbfm repo read-only this session); deep-dive scripts patch it in-process (bf5bfd3 lazy_nwb.py). Blank-volume and geometry steps rerun with it (40 GB cap) next to decompose_all.
+
+- [ ] wbfm: wrap the NWB segmentation datasets in da.from_array before da.squeeze in load_final_project_data_from_nwb (finished_project_data.py ~943, ~951)
+
+run r261102-3482 · pids 3482 · host charles-Precision-7820-Tower · logs /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/blank.log, /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/masks.log
+
+- [ ] issue i261102-1
+
+## 2026-11-02 13:41 — dropped
+
+lazy_nwb tripped on wbfm's da.from_array of a dask array; fixed
+
+dropped r261102-3482
+
+## 2026-11-02 13:41 — run
+
+Rerun blank-volume check and mask geometry with the fixed lazy loader (b907dc0; NWB loads in 8 s)
+
+run r261102-4055 · pids 4055 · host charles-Precision-7820-Tower · logs /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/blank.log, /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/masks.log
+
+## 2026-11-02 13:41
+
+r261102-2490: decompose_nerve and decompose_gt steps will run decompose_errors.py at 9505316 (lazy NWB load only; tracking and scoring unchanged)
+
+## 2026-11-02 13:44 — run
+
+r261102-4055 (blank_volumes.py + mask_geometry.py at 75b… lazy loader): (1) The 4 NeRVE-blank volumes 78/405/945/1516 are corrupted: mean red ~2020 vs ~110 in neighbours, p99 at saturation (63-65k), one plane at mean 31-33k in 405/945, correlation with the previous volume ~0 (neighbours 0.3-0.7). Clicks there (39-75 of 79) sit on bright voxels, but these are bad frames, not a detector failure; candidates to drop. (2) Non-GT masks (70359, 46/frame) are mostly separate cells, not duplicates: nearest GT mask centroid median 3.74 um (GT-GT nearest 4.59), <2 um only 4.2% (GT-GT 2.4%), <3 um 29.5% (GT-GT 11.7%); smaller (median 78 vs 133 voxels) and deeper in z (median plane 18.8 vs 15.7): plausibly the unannotated neurons. 2863 non-GT NeRVE masks contain a GT click (the merged / offset cases). Pseudo masks: only 6.8% have a non-GT NeRVE mask within 3 um, so the GT-seeded masks rarely duplicate a NeRVE detection.
+
+## 2026-11-02 14:14 — dropped
+
+decompose_all killed at seed 22/25 in the 14:12 terminal crash (blank and masks steps had finished)
+
+dropped r261102-2490
+
+## 2026-11-02 14:14 — run
+
+Relaunch decompose_errors.py all/nerve/gt (9505316) on trial 57 sequentially in its own systemd user unit leifer-decompose (MemoryMax 120G), so a memory kill stays inside the unit and a terminal crash does not take it
+
+run r261102-3202160 · pids 3202160 · host charles-Precision-7820-Tower · logs /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/decompose_all.log, /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/decompose_nerve.log, /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/decompose_gt.log
+
+## 2026-11-02 14:17 — dropped
+
+restarted as three parallel units: one labelprop uses ~8 cores (serial main loop) and 5 GB, so the subsets can run side by side
+
+dropped r261102-3202160
+
+## 2026-11-02 14:17 — run
+
+decompose_errors.py all/nerve/gt (9505316) on trial 57 in parallel, units leifer-decompose-{all,nerve,gt}, MemoryMax 40G each, 12 threads
+
+run r261102-3204514 · pids 3204514, 3204522, 3204525 · host charles-Precision-7820-Tower · logs /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/decompose_all.log, /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/decompose_nerve.log, /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/leifer_deep_dive/decompose_gt.log
+
+## 2026-11-02 14:25 — decision
+
+round_bayes_wk2 per-parameter read (80-98 scored trials; Zimmer only 8): Leifer is insensitive to everything: Sobol-phase std 0.036 (Samuel 0.095, Flavell 0.166), visual_only mean 0.857 vs add 0.873, round_snap1 epoch-1 snapshot already 0.84; top-10 sit at the top of scale_jitter (0.25), crop_degrees_z (~160-180) and epochs (30), nothing else at an edge. Samuel 137 (the hardest Samuel recording; earlier best 0.662, image-only 0.468) reaches 0.931; its top 10 all self_layers 1, and epochs and num_frames at the upper bounds (30, 500). Everywhere: add fusion, lambd_obj ~0.4-0.5 at the top, low global rotation (max_degrees_z top-10 median 0.06-0.14 of range).
+
+## 2026-11-02 14:33 — run
+
+Generate round_bayes_wk3_<label> (round_bayes_wk2's search, same grid, on the 8 other GT recordings: zimmer_1123/1210, flavell (2025_07_01), flavell 0316-03/0324-02/0330-02, samuel (153), samuel_184) with --preflight, in unit wk3-preflight
+
+run r261102-3214879 · pids 3214879 · host charles-Precision-7820-Tower · logs /tmp/claude/claude-1000/-home-charles-Current-work-repos-barlow-track/ba25cb4a-3496-406f-97c9-e1aff6a1e52c/scratchpad/wk3_gen.log
+
+## 2026-11-02 15:04 — run
+
+r261102-3204514 (trial 57, cached embeddings re-tracked as the objective): every detection 0.880 (reproduces 0.885 within seed noise); GT masks only 0.9665 (0.976 on NeRVE-mask GT, 0.881 on pseudo-mask GT); NeRVE masks only 0.884. So the non-GT detections cost ~9 points: 10700 of 12113 mismatches go to a non-GT mask, only 1413 to another GT neuron. Errors concentrate: worst 10 neurons hold 41% (neuron_013/076/044/049/032/024 at 0.48-0.69 with all detections, 0.95-0.99 GT-only). The stolen-by masks sit next to the true one: predicted mask to true GT mask centroid median 2.84 um (59% < 3 um; GT-GT nearest 4.59), median 93 voxels, 11% hold a GT click; errors flicker (runs median 1-2 frames, not identity swaps). The 26 frames without NeRVE masks score 0.43 (frames 1524+ 0.05). Pseudo masks are not the problem (removing them changes nothing). Next: are the stealing masks splits of the same cell (z-adjacent) or touching neighbours.
+
+## 2026-11-02 15:04
+
+r261102-3214879: round_bayes_wk3 generated for 8 recordings, all preflights OK (c806e42)
+
+## 2026-11-02 15:05
+
+Leifer stealing masks (the 10700 mismatches onto non-GT masks, trial 57): offset mostly in z, |dz| median 2.18 um (1.45 planes) vs dxy 1.55 um; 61% more z than xy, 30% within 1 um in xy (stacked above/below the GT mask); baseline non-GT masks within 4 um of GT: 41% mostly-z, |dz| 1.56 / dxy 2.09. Points to NeRVE z-splits of single cells. In HANDOFF.md (leifer_deep_dive).
+
+## 2026-11-02 15:12 — decision
+
+Decision (user, 2026-11-02): Leifer needs work on the dataset (z-split NeRVE masks) before more sweeps; the Tue-Fri launch covers the other recordings only (launch_tue_fri.sh leaves leifer_reexport out).
+
+## 2026-11-02 15:46 — decision
+
+Decision (user, 2026-11-02): sweep round configs live in the cluster's config_files/<round>/, not in the repo. round_bayes_wk3_* and round_bayes_wk3_src (grid, base, README, launch_tue_fri.sh) copied to config_files/ (identical, checked with diff) and removed from git (555a125). Launch: bash $B/round_bayes_wk3_src/launch_tue_fri.sh after git pull. 45 older round_* folders still sit in barlow_track/scripts/scratch/.
+
+## 2026-11-02 17:25 — run
+
+wk3 launch (17:21): Flavell x4 and Samuel x2 submitted 6 trials each; wk2 zimmer_1128/samuel_137 score-only restarts submitted their CPU evals. round_bayes_wk3_zimmer_1123/1210 dispatchers (7781791/2) OOM-killed at 32G during the objective preflight (_load_project_gt -> ProjectData with NWB, likely i261102-1); no trials created, safe to resubmit with sbatch --mem=96G. First launch at 15:48 failed only because the launch shell lacked the conda env (user relaunched).
+
+## 2026-11-02 18:01 — decision
+
+best_of_table dropped every per-recording sweep record (lab samuel_137 / flavell_2022* / leifer_reexport -> 'unknown lab'), so Samuel 137 showed <0.9 instead of 0.931 (round_bayes_wk2_samuel_137 trial 63). Also, Flavell nwb_objects=all records had been filed under the '(GT objects)' rows. Fixed in 61efb24: lab matched by prefix, every-detection records in their own rows.
+
+## 2026-11-02 18:04 — decision
+
+best_of_table split (fe39543): main table = every-detection / project-segmentation scores; GT-object rows move to a second table when the recording has an every-detection score. Found while doing it: round_bayes_wk3_samuel / _samuel_184 and wk2_samuel_137 score GT objects only (no objective_nwb_objects: all), although thresholded_segmentation NWBs exist for 137/153/184/185 and the one every-detection Samuel 153 score is 0.898 (sc_bayes0_153_nwball) vs 0.971 GT-only. Asked the user whether to switch Samuel to every detection.
+
+## 2026-11-02 18:05 — decision
+
+Correction to 18:04: no Samuel scoring change needed. Every Samuel NWB segmentation (plain and thresholded) is GT-only (checked 2026-10-28, user agreed); the 0.898 nwb_objects=all on 153 drops 76% of GT. best_of_table excludes those records again (Samuel stays GT objects in the main table).
+
+## 2026-11-02 18:16 — run
+
+wbfm opt-in lazy NWB segmentation (lazy_segmentation arg / WBFM_NWB_LAZY_SEGMENTATION, uncommitted on wbfm dev at 20ed314e): load check identical sampled-volume hashes eager vs lazy, peak RSS Samuel 137 3.56->0.30 GB, Flavell 7.22->0.33 GB, Leifer A2 lazy 0.44 GB (eager ~35 GB). End-to-end check: eval_accuracy trained wk2 flavell_2022033001 trial 83, nwb_objects all, 150 frames, 5 seeds, lazy then eager; accuracies must match
+
+run r261102-3394883 · pids 3394883 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/53a39840-2ccb-4fa4-8a78-2b0160b71611/scratchpad/lazy/e2e_driver.log
+
+## 2026-11-02 18:18 — run
+
+Leifer z-split test, stage 1 (zsplit_merge.py pairs at 3287a70, lazy wbfm NWB segmentation): every vertically touching mask pair per frame of A2 with contact fraction; no GT used
+
+run r261102-3398854 · pids 3398854 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/53a39840-2ccb-4fa4-8a78-2b0160b71611/scratchpad/zsplit/pairs.log
+
+## 2026-11-02 18:20 — run
+
+Leifer z-split test, stage 2 (zsplit_merge.py track at 3287a70): trial 57 cached embeddings, merge vertically touching masks with contact_frac >= 0.3 / 0.5 (largest-mask row) and 0.3 (mean row), GT mapped through the merge, re-track 25 seeds and score as the objective (baseline 0.880, GT-only 0.9665). Pairs stage: 53396 touching pairs, contact_frac median 0.36
+
+run r261102-3403676 · pids 3403676, 3403749, 3403774 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/53a39840-2ccb-4fa4-8a78-2b0160b71611/scratchpad/zsplit/track_0.3_largest.log, /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/53a39840-2ccb-4fa4-8a78-2b0160b71611/scratchpad/zsplit/track_0.5_largest.log, /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/53a39840-2ccb-4fa4-8a78-2b0160b71611/scratchpad/zsplit/track_0.3_mean.log
+
+## 2026-11-02 18:24 — decision
+
+Lazy NWB segmentation works (r261102-3394883): eval_accuracy trained wk2 flavell_2022033001 trial 83, nwb_objects all, 150 frames, 5 seeds gives identical results lazy vs eager (accuracy 0.947694, misses 384, mismatches 739); lazy 1:36 wall / 2.6 GB peak RSS, eager 2:32 / 16.3 GB. Load alone: sampled-volume hashes identical; Samuel 137 3.56->0.30 GB, Flavell 7.22->0.33 GB, Leifer A2 0.44 GB lazy (eager ~35 GB). The Dec 2024 napari segfault (wbfm 2f409136) came from lazy image data, which has stayed lazy since; the segmentation went eager only by accident in a4819064 (Aug 2025, da.squeeze on the h5py dataset). wbfm change (lazy_segmentation arg, env WBFM_NWB_LAZY_SEGMENTATION, default off) is uncommitted on wbfm dev; barlow_track c77ab22 sets the env default to 1 in eval_accuracy.py and train_barlow_clusterer.py. Fixes i261102-1 once wbfm is pushed and pulled on the cluster.
+
+## 2026-11-02 18:28 — run
+
+Samuel 137 one-change pilot (s137_pilot/run_pilot.py at 1b2c519) from round_bayes_wk2_samuel_137 trial 63 (0.931): base (same seed; step-0 loss matches the cluster run), base_seed2, lambd_obj 0 (no object term; the wk2 sweeps never sampled < 0.1), lambd_obj 1, reaugment_each_epoch true. Trained locally on the GPU in two streams, scored as the objective (nwb GT objects, CPU embedding and labelprop, 25 seeds). For [[QUE - Does the object-space loss term improve tracking in any regime]] and a261027-1. Existing-data read (sweep_param_effect.py at 62cd4c8): wk2 partial dependence of accuracy on lambd_obj over 0.1-1 is flat on Flavell 0330-01 (0.911-0.914), Leifer (0.868-0.871) and Samuel 137 (0.859-0.863); importance rank 5-8 of 13; top-10 trials sit at 0.35-0.8
+
+run r261102-3413234 · pids 3413234, 4109000 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/s137_pilot/stream_a.log, /home/charles/.cache/barlow_scratch/train/s137_pilot/stream_b.log
+
+## 2026-11-02 18:29
+
+r261029-4169997 (create_all_projects.sh): all seven wbfm-tracker baseline projects were created without errors (Samuel 137, 184-004, Flavell 0331-01, 0316-03, 0324-02, 0330-01, 0330-02 under barlow_track_revisions/wbfm_tracker_baseline/<label>/); the Flavell five needed 0 centroid fixes, and the two Samuel projects print no centroid-fix line (to check against the open to-do 'all eight have the centroid fix'). These are the projects the user runs the wbfm tracker on with snakemake; no tracker scores yet in this log.
+
+## 2026-11-02 18:29
+
+r261030-356454 (first timing matrix) was superseded by its rerun r261030-589527 with the data phase split (same log, matrix.log); results are in the 2026-10-30 11:01 entry. Its own failures (gpu leifer add, cpu samuel_137/leifer add+eval exit 1) were the GPU OOM next to the other job and the evals noted there.
+
+## 2026-11-02 18:29
+
+Correction to the 18:29 r261030-356454 entry: the log does not say why its runs failed (GPU fused train exit 1 on flavell/leifer/zimmer, CPU samuel_137/leifer evals exit 1; the tracebacks are only the subprocess wrappers). The OOM cause in the 11:01 entry is for the rerun r261030-589527; do not read it as this run's cause.
+
+## 2026-11-02 18:30 — dropped
+
+restarted after 10 min with num_workers 4 (data-bound at 0: 220 s/100 steps vs 50 s on the cluster) in three streams; partial dirs removed
+
+dropped r261102-3413234
+
+## 2026-11-02 18:30 — run
+
+Samuel 137 pilot relaunched (run_pilot.py at 6e68a5e, num_workers 4 for every variant; the user freed the GPU for the coming days): streams a base+reaug, b lambd0+lambd1, c base_seed2. Same design as the dropped r261102-3413234
+
+run r261102-365990 · pids 365990, 366025, 366044 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/s137_pilot/stream_a.log, /home/charles/.cache/barlow_scratch/train/s137_pilot/stream_b.log, /home/charles/.cache/barlow_scratch/train/s137_pilot/stream_c.log
+
+## 2026-11-02 19:02 — result
+
+Leifer z-split merge (r261102-3403676, zsplit_merge.py 00ac3c0; trial 57 cached embeddings, GT-free merge of vertically touching masks): on the cells both score, accuracy 0.894 -> 0.938 (contact_frac >= 0.3, largest piece's row), 0.942 (0.3, mean row), 0.890 -> 0.928 (0.5). Headline vs the 0.880 baseline overstates: merging drops GT cells where two GT neurons end in one group (0.3: 699 groups, 8404 cells, baseline 0.70 on them; 0.5: 247 groups, 4846 cells), so compare on the same cells. Reading: the gain (~4.5 pt) matches the share of baseline mismatches whose stealing mask gets merged into the GT mask's group (6453 of 119019 cells = 5.4 pt at 0.3), so it is mostly the score accepting either piece, not better tracking. If the stacked pieces are one cell, the segmentation (not the network) costs ~5 of the ~9 points; if they are touching neighbours, the merge is hiding errors. Needs a look at a few in napari (e.g. neuron_044) and a guard against merging two annotated neurons before any re-segmentation. GT-only remains 0.9665.
+
+## 2026-11-02 20:13 — run
+
+Sweep state 19:54 (user away until ~Fri): wk3 Flavell x4 and Samuel x2 running cleanly (no failed trials), zimmer_1123 dispatcher resubmitted at 96G (7781913) and submitting; zimmer_1210 resubmit and most wk1/wk1f30 grid restarts still queued (dispatcher jobs start one at a time). Monitoring stopped at the user's request.
+
+- [ ] On return: check zimmer_1210 and wk1 grid dispatchers started; tally wk3 per-recording bests with best_of_table.py
+- [ ] Decide wrapper default memory (96G) or cheap preflight for Zimmer projects (i261102-1)

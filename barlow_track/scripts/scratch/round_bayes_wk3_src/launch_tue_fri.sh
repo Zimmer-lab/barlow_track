@@ -30,12 +30,13 @@ for L in zimmer_1123 zimmer_1210 flavell flavell_2022031603 flavell_2022032402 f
 done
 
 # 2a. Weekend searches: score the trained-but-unscored trials
-for L in zimmer_1128 samuel_137 flavell_2022033001 leifer_reexport; do
+# (leifer_reexport left out: its segmentation needs work first, see leifer_deep_dive/HANDOFF.md)
+for L in zimmer_1128 samuel_137 flavell_2022033001; do
   dispatch round_bayes_wk2_$L --total_budget 1
 done
 
 # 2b. round_wk1 grids (fusion x lambd_obj): score what trained, finish missing cells
-for R in $(cd $B && ls -d round_wk1_* round_wk1f30_*); do
+for R in $(cd $B && ls -d round_wk1_* round_wk1f30_* | grep -v leifer); do
   case $R in
     round_wk1f30_*|round_wk1_zimmer_1128|round_wk1_samuel|round_wk1_flavell_2022033001) REP=2 ;;
     *) REP=1 ;;

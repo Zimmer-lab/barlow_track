@@ -60,6 +60,55 @@ def load_segmentation(seg_project):
     return meta, masks_fname
 
 
+def nwb_seg_dataset(f):
+    act = f['processing/CalciumActivity']
+    for k in ('CalciumSeriesSegmentationUntracked', 'CalciumSeriesSegmentation'):
+        if k in act:
+            return act[k]
+    raise KeyError('no segmentation in the NWB')
+
+
+def nwb_voxel_um(nwb):
+    """(um_z, um_xy) from the segmentation's imaging_volume grid_spacing (x, y, z)."""
+    with h5py.File(nwb, 'r') as f:
+        g = nwb_seg_dataset(f)['imaging_volume/grid_spacing'][:]
+    return float(g[2]), float(g[0])
+
+
+def load_segmentation_nwb(nwb, clicks=None):
+    """Metadata-like dict from an NWB's segmentation (unweighted centroids, zxy), one frame at a time;
+    with clicks also the label under each click (as labels_under_clicks)."""
+    meta = {}
+    T, N = (clicks.shape[:2] if clicks is not None else (None, None))
+    under = None if clicks is None else np.full((T, N), -1)
+    with h5py.File(nwb, 'r') as f:
+        ds = nwb_seg_dataset(f)['data']
+        for t in range(ds.shape[0]):
+            vol = np.transpose(np.asarray(ds[t]).squeeze(), (2, 0, 1))  # (x, y, z) -> (z, x, y)
+            flat = vol.ravel()
+            nz = np.flatnonzero(flat)
+            labs = flat[nz].astype(np.int64)
+            if len(labs):
+                cnt = np.bincount(labs)
+                ul = np.flatnonzero(cnt)
+                ul = ul[ul > 0]
+                zxy = np.stack(np.unravel_index(nz, vol.shape), 1)
+                cen = np.stack([np.bincount(labs, zxy[:, i], minlength=len(cnt)) for i in range(3)], 1)[ul] \
+                    / cnt[ul, None]
+                meta[t] = pd.DataFrame({'centroids': list(map(tuple, cen)), 'neuron_volume': cnt[ul],
+                                        'total_brightness': np.nan}, index=ul)
+            else:
+                meta[t] = pd.DataFrame(columns=['centroids', 'neuron_volume', 'total_brightness'])
+            if clicks is not None:
+                fin = np.isfinite(clicks[t]).all(1)
+                v = np.rint(clicks[t, fin]).astype(int)
+                inb = (v >= 0).all(1) & (v < np.array(vol.shape)).all(1)
+                lab = np.full(len(v), -1)
+                lab[inb] = vol[tuple(v[inb].T)]
+                under[t, fin] = lab
+    return meta, under
+
+
 def frame_masks(meta, t):
     """labels (M,), centroids (M, 3) zxy, volume, brightness of frame t, in metadata row order."""
     df = meta.get(t)
@@ -171,8 +220,8 @@ def report(a, names, clicks, nwb_ids=None):
     print('neurons losing the most cells:')
     print(per.sort_values('kept_frac').head(12).round(3).to_string())
     if nwb_ids is not None:  # dry run on the NeRVE project: agreement with the export's matching
-        both = (r == 0) & np.isfinite(nwb_ids) & (nwb_ids < 1000)
-        print(f'agreement with the NWB NeuronSegmentationID (NeRVE labels): '
+        both = (r == 0) & np.isfinite(nwb_ids)
+        print(f'agreement with the NWB NeuronSegmentationID: '
               f'{np.mean(a["label"][both] == nwb_ids[both]):.4f} of {int(both.sum())} cells')
 
 
@@ -185,35 +234,53 @@ def make_gt_project(seg_project, out_parent, suffix):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--seg_project', required=True, help='project_config.yaml of the new segmentation')
+    ap.add_argument('--seg_project', default=None, help='project_config.yaml of the new segmentation')
+    ap.add_argument('--seg_from_nwb', action='store_true',
+                    help='take the masks from the --nwb segmentation itself (dry run only; voxel size '
+                         'from its grid_spacing unless --um_z / --um_xy are given)')
     ap.add_argument('--nwb', default=NWB, help='NWB with the GT clicks (NeuronCentroids)')
     ap.add_argument('--out_parent', default=None, help='create the GT project in this folder (else dry run)')
     ap.add_argument('--suffix', default='_gt')
     ap.add_argument('--assign', choices=['nearest', 'contain'], default='nearest')
     ap.add_argument('--max_um', type=float, default=2.5)
     ap.add_argument('--dup_um', type=float, default=1.5)
-    ap.add_argument('--um_z', type=float, default=1.5)
-    ap.add_argument('--um_xy', type=float, default=0.3226)
+    ap.add_argument('--um_z', type=float, default=None, help='default 1.5 (Leifer), or the NWB grid')
+    ap.add_argument('--um_xy', type=float, default=None, help='default 0.3226 (Leifer), or the NWB grid')
     ap.add_argument('--compare_nwb_ids', action='store_true',
-                    help='report agreement with the NWB NeuronSegmentationID (only meaningful on the '
-                         'NeRVE masks, i.e. the A2 project)')
+                    help='report agreement with the NWB NeuronSegmentationID (meaningful when the masks '
+                         'are the NWB\'s own: the A2 project, or --seg_from_nwb)')
     args = ap.parse_args()
 
+    if (args.seg_project is None) == (not args.seg_from_nwb):
+        ap.error('pass exactly one of --seg_project and --seg_from_nwb')
+    if args.seg_from_nwb and args.out_parent:
+        ap.error('--seg_from_nwb is a dry run only')
     clicks, names = load_clicks(args.nwb)
-    meta, masks_fname = load_segmentation(args.seg_project)
+    if args.seg_from_nwb:
+        uz, uxy = nwb_voxel_um(args.nwb)
+        meta, under = load_segmentation_nwb(args.nwb, clicks)
+        if args.assign != 'contain':
+            under = None
+        src = args.nwb
+    else:
+        uz, uxy = 1.5, 0.3226
+        meta, masks_fname = load_segmentation(args.seg_project)
+        under = labels_under_clicks(masks_fname, clicks) if args.assign == 'contain' else None
+        src = args.seg_project
     T = clicks.shape[0]
     n_meta = len(meta)
     assert n_meta == T, f'segmentation has {n_meta} frames, the GT {T}'
-    um = np.array([args.um_z, args.um_xy, args.um_xy])
-    under = labels_under_clicks(masks_fname, clicks) if args.assign == 'contain' else None
+    um = np.array([args.um_z if args.um_z is not None else uz, args.um_xy if args.um_xy is not None else uxy,
+                   args.um_xy if args.um_xy is not None else uxy])
     a = associate(clicks, meta, um, args.max_um, args.dup_um, under)
-    print(f'[assign {args.assign}, max {args.max_um} um, dup {args.dup_um} um, voxel {um.tolist()} um] '
-          f'{args.seg_project}')
+    print(f'[assign {args.assign}, max {args.max_um} um, dup {args.dup_um} um, voxel {um.tolist()} um] {src}')
     nwb_ids = None
     if args.compare_nwb_ids:
         with h5py.File(args.nwb, 'r') as f:
             g = f['processing/CalciumActivity/NeuronSegmentationID']
-            nwb_ids = np.stack([g[n][:] for n in names], 1)
+            nwb_ids = np.stack([g[n][:] for n in names], 1).astype(float)
+            if 'NeRVEExport' in f['processing']:
+                nwb_ids[nwb_ids >= 1000] = np.nan  # pseudo masks: not in a NeRVE-only segmentation
     report(a, names, clicks, nwb_ids)
     if args.out_parent is None:
         print('dry run: nothing written (pass --out_parent to create the GT project)')

@@ -267,6 +267,28 @@ def test_correlation_for_plot_single_object_view_returns_none():
     assert _correlation_for_plot(None, one, 'cpu', True) is None
 
 
+def test_correlation_for_plot_views_with_too_few_shared_ids_return_none():
+    """Views of 2 and 3 objects sharing one id crashed the validation plot with a shape
+    mismatch (reaug_seed3, Samuel 137 pilot) and the trial was discarded; skip instead.
+    Views sharing >= 2 ids are still plotted on their intersection."""
+    torch = pytest.importorskip('torch')
+    from barlow_track.scripts.train_barlow_clusterer import _correlation_for_plot
+
+    class M:
+        def embed_with_position(self, y, k):
+            return torch.cat([k, k ** 2], 1)
+
+    def batch(ids1, ids2):
+        n1, n2 = len(ids1), len(ids2)
+        return (torch.rand(n1, 1, 4, 4, 4), torch.rand(n2, 1, 4, 4, 4), torch.rand(n1, 3), torch.rand(n2, 3),
+                torch.tensor(ids1), torch.tensor(ids2))
+
+    assert _correlation_for_plot(M(), batch([0, 1], [1, 2, 3]), 'cpu', True) is None
+    assert _correlation_for_plot(M(), batch([0, 1], [2, 3, 4]), 'cpu', True) is None
+    c = _correlation_for_plot(M(), batch([0, 1, 2], [1, 2, 3]), 'cpu', True)
+    assert c is not None and tuple(c.shape) == (6, 6)
+
+
 def test_nwb_gt_mapping_by_segmentation_id_keeps_clicks_off_the_mask_centroid():
     """A manual click 1 voxel off its mask's centroid maps only with gt_mapping='segmentation_id'."""
     from types import SimpleNamespace

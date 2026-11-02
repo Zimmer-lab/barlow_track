@@ -714,8 +714,15 @@ def _correlation_for_plot(model, batch, gpu, use_position):
     z2 = model.embed_with_position(y2, k2)
     if len(batch) > 5:
         sel1, sel2 = intersection_gather(batch[4].to(gpu), batch[5].to(gpu))
-        if sel1 is not None and len(sel1) >= 2:
+        if sel1 is not None:
+            # Views paired by object id: fewer than 2 shared ids cannot be plotted, and the
+            # unpaired views (e.g. 2 vs 3 objects) must not be multiplied (reaug_seed3 on
+            # Samuel 137 crashed here, discarding the trial)
+            if len(sel1) < 2:
+                return None
             z1, z2 = z1[sel1], z2[sel2]
+    if z1.shape[0] != z2.shape[0]:
+        return None
     return both_correlation_matrices(z1, z2)[0]
 
 

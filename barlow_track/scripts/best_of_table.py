@@ -58,9 +58,19 @@ def _flavell_recording(nwb):
     return '2022-03-31-01' if parent in ('images_for_charlie', 'flavell') else parent
 
 
+def _objects(rec):
+    """Row suffix for an NWB record's detections: GT objects only, or every NWB mask."""
+    return 'every detection' if (rec.get('nwb_objects') or 'gt') == 'all' else 'GT objects'
+
+
 def dataset_of(rec):
     """(dataset row label, None) or (None, reason it is left out)."""
     lab, source, gt = str(rec.get('lab') or ''), rec.get('source'), str(rec.get('gt') or '')
+    # Per-recording sweep objectives record their benchmark label as the lab (samuel_137,
+    # flavell_2022033001, leifer_reexport, ...): match the lab by prefix
+    if lab == 'leifer_reexport':
+        return f"Leifer NeRVE worm 1 re-export ({_objects(rec)})", None
+    lab = lab.split('_')[0]
     if lab.startswith('zimmer'):
         where = str(rec.get('project') or gt)
         if 'updated_format' not in where:
@@ -76,17 +86,14 @@ def dataset_of(rec):
         if source == 'nwb':
             if rec.get('nwb_arrays') != 'by_name':
                 return None, 'flavell nwb before the neuron-order fix'
-            return f"Flavell {_flavell_recording(gt)} (GT objects)", None
+            return f"Flavell {_flavell_recording(gt)} ({_objects(rec)})", None
         if gt.endswith('.nwb'):
             return f"Flavell {_flavell_recording(gt)} (project segmentation)", None
         return None, 'flavell project GT (tracker output)'
     if lab == 'samuel':
         if source == 'project':
             return None, 'samuel project segmentation (redundant with GT objects)'
-        objects = rec.get('nwb_objects') or 'gt'
-        if objects != 'gt':
-            return None, f'samuel nwb_objects {objects}'
-        return f"Samuel {_stem(gt).replace('.nwb', '') or '153'} (GT objects)", None
+        return f"Samuel {_stem(gt).replace('.nwb', '') or '153'} ({_objects(rec)})", None
     return None, f'unknown lab {lab!r}'
 
 

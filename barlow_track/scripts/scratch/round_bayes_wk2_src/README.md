@@ -44,6 +44,14 @@ for R in $(cd $S && ls -d round_bayes_wk2_* | grep -v _src); do
 done
 ```
 
+Login nodes restart now and then and take tmux dispatchers with them (all three surviving ones
+stopped at 2026-11-01 04:42). Run each dispatcher as its own CPU-only job instead:
+
+```bash
+sbatch --output=$B/$R/dispatcher_%j.log barlow_track/scripts/sbatch_dispatcher.sbatch \
+    -p $B/$R/hyperparameter_search_template.yaml --total_budget 120
+```
+
 No `--direct_parameter_sweep`. A dispatcher that dies is restarted with the same command: it
 re-attaches the trials already on disk (scored ones, and trained-but-unscored ones whose eval
 it re-runs; trials killed mid-training are dropped). `--total_budget` counts the NEW trials of

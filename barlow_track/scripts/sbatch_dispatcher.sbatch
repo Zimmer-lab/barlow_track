@@ -11,7 +11,7 @@
 #SBATCH --job-name=barlow_dispatch
 #SBATCH --time=7-00:00:00
 #SBATCH --mem=16G
-#SBATCH --cpus-per-task=2
+#SBATCH --cpus-per-task=1
 
 pwd; hostname; date
 echo "Dispatcher job $SLURM_JOB_ID: $*"

@@ -10,7 +10,7 @@
 
 #SBATCH --job-name=barlow_dispatch
 #SBATCH --time=7-00:00:00
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 #SBATCH --cpus-per-task=1
 
 pwd; hostname; date

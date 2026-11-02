@@ -122,7 +122,7 @@ Temporary: copy what you need.
   long local jobs in their own unit: `systemd-run --user --unit=NAME -p MemoryMax=40G ...`
   (survives terminal crashes; an OOM stays inside the unit).
 - One label propagation uses ~8 cores (serial main loop) and ~5 GB; three can run at once.
-- The local GPU belongs to another project now: do not use it without asking.
+- The local GPU: the user freed it for this project again on 2026-11-02 (for the coming days).
 - Python: `/home/charles/anaconda3/envs/wbfm/bin/python`; log runs with
   `ygg log "..." --pid N --log PATH`; commit as you go with the session trailer.
 - `copy_nwb_file=False` in wbfm's `build_project_structure_from_nwb_file` deletes the source

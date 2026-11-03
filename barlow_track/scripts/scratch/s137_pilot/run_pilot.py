@@ -44,6 +44,10 @@ VARIANTS = {
     'lambd0_seed3': {'seed': 3, 'lambd_obj': 0.0},
     'lambd1_seed3': {'seed': 3, 'lambd_obj': 1.0},
     'reaug_seed3': {'seed': 3, 'reaugment_each_epoch': True},
+    # Leifer StarDist resegmentation grid: lambd_obj x num_frames (Leifer wk2's most important parameter)
+    'nf400': {'num_frames': 400},
+    'lambd0_nf400': {'lambd_obj': 0.0, 'num_frames': 400},
+    'lambd1_nf400': {'lambd_obj': 1.0, 'num_frames': 400},
 }
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 

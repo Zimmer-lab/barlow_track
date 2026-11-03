@@ -2168,3 +2168,71 @@ Labelprop seed noise on Samuel 137 (r261102-77194, lp_seeds.py 32ce9cf, cached e
 ## 2026-11-03 00:02 — result
 
 Samuel 137 pilot (r261102-2656039): base_seed3 0.872. Trial 63's config over three training seeds: 0.920 (its own seed; 0.928 at 100 labelprop seeds), 0.884, 0.872; mean 0.892, sd ~2.5 pt. Trial 63's 0.931 was largely a lucky training seed: the sweep's best trial overstates its config by ~3-4 pt. lambd0 (0.893, trial 63's seed) sits at the config's seed mean.
+
+## 2026-11-03 00:16 — result
+
+Samuel 137 pilot (r261102-365990) at trial 63's training seed: base 0.920, reaug 0.917, lambd1 (object term only) 0.899, lambd0 (feature term only) 0.893. The config's own training-seed spread is 0.872-0.920 (base, base_seed2, base_seed3), so no variant differs from base beyond seed noise. Launched seed-3 variants so every arm has 3 training seeds (2854f93).
+
+## 2026-11-03 00:16 — run
+
+Samuel 137 pilot streams e (lambd1_seed2, lambd0_seed3) and f (reaug_seed3, lambd1_seed3), run_pilot.py 2854f93; with stream d (lambd0_seed2, reaug_seed2) this completes 3 training seeds x {base, lambd0, lambd1, reaug}
+
+run r261103-1931191 · pids 1931191, 2222987 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/s137_pilot/stream_e.log, /home/charles/.cache/barlow_scratch/train/s137_pilot/stream_f.log
+
+## 2026-11-03 00:52 — surprise
+
+reaug_seed3 (r261103-1931191, stream f) crashed in its first validation epochs: _correlation_for_plot multiplied unpaired position views (2 vs 3 objects, < 2 shared ids) and the trial was discarded without a checkpoint. Fixed in bc3c1bf (skip such batches; regression test), pushed. Affects any position-pipeline run with object dropout where a val batch's views share < 2 ids, more likely with reaugment_each_epoch; cluster rounds crash the same way until they pull. Partial dir removed, reaug_seed3 queued after stream f (unit s137-pilot-g).
+
+## 2026-11-03 00:52 — run
+
+reaug_seed3 rerun with the bc3c1bf fix, queued after stream f
+
+run r261103-732047 · pids 732047 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/s137_pilot/stream_g.log
+
+## 2026-11-03 06:14 — result
+
+Samuel 137 pilot complete (r261102-365990, r261102-2656039, r261103-1931191, r261103-732047; run_pilot.py 2854f93, train fix bc3c1bf for reaug_seed3; trial 63 config, labelprop seed 0 x 25 seeds, CPU objective). Training seeds trial63/2/3: base 0.920/0.884/0.872 (mean 0.892, sd 2.5 pt); lambd0 (no object term) 0.893/0.804/0.821 (mean 0.839), paired vs base -2.7/-8.0/-5.1 pt, mean -5.3, paired t p 0.07; lambd1 (object term only) 0.899/0.864/0.912 (mean 0.892), paired -2.1/-2.0/+4.0, mean 0.0; reaug 0.917/0.859/0.911 (mean 0.896), paired -0.2/-2.5/+3.9, mean +0.4. Reading: removing the object-space term costs ~5 pt on Samuel 137 (same sign at all 3 seeds); the feature-space term adds nothing beyond the object term; reaugment_each_epoch has no detectable effect. The wk2 sweep never sampled lambd_obj < 0.1, which is why its partial dependence looked flat. One dataset, 3 seeds.
+
+## 2026-11-03 06:23 — run
+
+Leifer replication of the Samuel 137 lambd0 result: round_bayes_wk2_leifer_reexport trial 57 (sweep 0.885, lambd_obj 0.41) retrained as base and lambd0 at training seeds trial57/2/3, scored as the sweep objective (NWB all objects, segmentation_id GT mapping, labelprop 25 seeds, CPU). run_pilot.py 7c849f8 --name leifer_pilot. Streams a (base, lambd0) and b (base_seed2, lambd0_seed2) on the GPU; c (base_seed3, lambd0_seed3) waits for a, since a third ~5 GB process OOM'd. ~3.7 h training per run locally (321 s/100 steps vs 172 on the cluster) plus ~1 h scoring; all done ~03:00 on 2026-11-04.
+
+run r261103-716084 · pids 716084, 742568, 1663423 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_pilot/stream_a.log, /home/charles/.cache/barlow_scratch/train/leifer_pilot/stream_b.log, /home/charles/.cache/barlow_scratch/train/leifer_pilot/stream_c.log · for [[EVD - Loss-term ablation where accuracy is not saturated]]
+
+## 2026-11-03 07:56 — run
+
+User asked for object-space-only runs. Leifer pilot stream d: lambd1 (lambd_obj 1) at training seeds trial57/2/3, queued after stream b (GPU fits two Leifer runs). run_pilot.py 7c849f8. Expected done ~06:00 on 2026-11-04.
+
+run r261103-946326 · pids 946326 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_pilot/stream_d.log · for [[EVD - Loss-term ablation where accuracy is not saturated]]
+
+## 2026-11-03 15:50 — dead-end
+
+Leifer resegment (leifer_resegment/Leifer_NeRVE_Worm1_reexport_A2_stardist) segmentation job 7781649 failed: project_config pointed subfolder_configs.preprocessing at the SOURCE project's preprocessing_config.yaml, so the relative bounding_boxes_fname resolved to leifer_reexport/.../dat (no bbox there) while the alt_preprocessing rule had written the bbox into the resegment project's dat/. Fixed: preprocessing now points at the resegment project's own dat/preprocessing_config.yaml, with preprocessed_red/green_fname made absolute to the source zarrs. Backups *.bak_20261103. Not relaunched.
+
+## 2026-11-03 15:55 — run
+
+Leifer resegment (stardist) segmentation run locally via RUNME.sh -c -s segmentation, cluster queue full; after the preprocessing-config path fix
+
+run r261103-1181386 · pids 1181386 · host charles-Precision-7820-Tower · logs /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/wbfm_tracker_baseline/leifer_resegment/Leifer_NeRVE_Worm1_reexport_A2_stardist/snakemake/log_snakemake_local_20261103.out
+
+## 2026-11-03 16:47 — result
+
+Leifer pilot (r261103-716084): base 0.8775, base_seed2 0.8792 (trial 57's sweep score 0.885). Training-seed spread on Leifer is small so far (0.2 pt vs 3.6 on Samuel 137). lambd0 and lambd0_seed2 finishing training.
+
+## 2026-11-03 16:47 — decision
+
+Checked the wk3 cluster rounds after the user's wbfm pull (cluster wbfm f4f555d5, pulled 2026-11-03 15:55; cluster barlow_track still 555a125, so WBFM_NWB_LAZY_SEGMENTATION is never set and NWB segmentation stays eager): all 8 dispatchers alive (37-41 of 120 submitted per Flavell/Samuel round, 24-29 Zimmer), no Traceback in any job log since the pull, jobs started after the pull load NWBs and embed, records written after the pull have normal accuracies. Only failure today: round_bayes_wk3_samuel trial 18 at 05:56, before the pull, a NaN checkpoint refused by the eval and marked FAILED for Ax (NaN discipline working). Zimmer 'bigtiff.btf does not exist' errors are logged lines from 2026-11-02, not crashes.
+
+## 2026-11-03 16:55 — decision
+
+User pulled barlow_track on the cluster (bc3c1bf, 2026-11-03 16:54): new eval and train jobs now set WBFM_NWB_LAZY_SEGMENTATION=1 (lazy NWB segmentation, with wbfm f4f555d5) and carry the validation-plot fix. Running dispatchers keep their old in-memory code; jobs they submit import the new files (eval_accuracy changed by the env-var line only). Watching all wk3 job logs for tracebacks and new FAILED trials.
+
+## 2026-11-03 17:36
+
+r261103-1181386 done: Leifer stardist resegmentation (leifer_resegment/Leifer_NeRVE_Worm1_reexport_A2_stardist) finished locally in ~1h40, exit 0. 1536 frames, median 129 objects/frame (max 145); metadata.pickle + masks.zarr (385 MB) in 1-segmentation/. Later pipeline steps left to the user on the cluster.
+
+## 2026-11-03 17:51 — run
+
+Mapping Leifer re-export GT (79 neurons, NWB clicks + NeRVE masks) onto the stardist masks of leifer_resegment/Leifer_NeRVE_Worm1_reexport_A2_stardist, to build a final_3d_tracks_df so eval_accuracy --source project can score this project like the paper wbfm projects. Script: scratchpad map_gt.py (click-voxel label and max-overlap-with-NeRVE-mask label per (t, neuron)).
+
+run r261103-3422453 · pids 3422453 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/map_gt.log

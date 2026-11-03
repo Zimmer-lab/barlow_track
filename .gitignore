@@ -189,3 +189,5 @@ barlow_track/notebooks/wandb
 # AI stuff
 AGENTS.md
 CLAUDE.md
+# ASC/VSC compute proposal drafts (local only)
+docs/asc_proposal/

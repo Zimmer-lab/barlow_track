@@ -14,7 +14,8 @@ with the round's template: source nwb, GT objects, 137.nwb, labelprop 25 seeds, 
     python barlow_track/scripts/scratch/s137_pilot/run_pilot.py --variants base lambd0 reaug
 
 Other rounds: --round round_bayes_wk2_leifer_reexport --trial 57 --name leifer_pilot (outputs and
-record tags then use that name instead of s137_pilot).
+record tags then use that name instead of s137_pilot). --project_path trains on another project
+(e.g. a resegmentation of the same recording); --train_only skips scoring (no GT yet).
 """
 import argparse
 import copy
@@ -47,7 +48,7 @@ VARIANTS = {
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 
-def run_variant(name):
+def run_variant(name, project_path=None, train_only=False):
     d = os.path.join(OUT, name)
     os.makedirs(os.path.join(d, 'log'), exist_ok=True)
     os.makedirs(os.path.join(d, 'checkpoints'), exist_ok=True)
@@ -57,6 +58,8 @@ def run_variant(name):
     # within run-to-run noise, notebook 2026-10-30, aab23eb). Every variant gets it, so they compare.
     cfg['num_workers'] = 4
     cfg.update(VARIANTS[name])
+    if project_path:
+        cfg['project_path'] = project_path
     cfg['project_dir'] = d
     cfg['wandb_name'] = f'{NAME}_{name}'
     cfg_path = os.path.join(d, 'train_config.yaml')
@@ -67,6 +70,9 @@ def run_variant(name):
         print(f"[{name}] training", flush=True)
         subprocess.run([sys.executable, '-u', 'barlow_track/scripts/train_barlow_clusterer.py', '-p', cfg_path],
                        cwd=REPO, check=True)
+    if train_only:
+        print(f"[{name}] trained (train_only: not scored)", flush=True)
+        return
     from barlow_track.scripts.eval_accuracy import evaluate_trained_checkpoint
     from barlow_track.scripts.optimize_hyperparameters import resolve_objective
     tmpl = yaml.safe_load(open(os.path.join(ROUND, 'hyperparameter_search_template.yaml')))
@@ -89,6 +95,8 @@ def main():
     ap.add_argument('--round', default=None, help='round dir name under config_files (default Samuel 137 wk2)')
     ap.add_argument('--trial', type=int, default=None)
     ap.add_argument('--name', default=None, help='output dir and tag prefix (default s137_pilot)')
+    ap.add_argument('--project_path', default=None, help="train on this project instead of the trial's")
+    ap.add_argument('--train_only', action='store_true')
     args = ap.parse_args()
     global ROUND, TRIAL, NAME, OUT
     if args.round:
@@ -100,7 +108,7 @@ def main():
         OUT = os.path.expanduser(f'~/.cache/barlow_scratch/train/{NAME}')
     for v in args.variants:
         try:
-            run_variant(v)
+            run_variant(v, args.project_path, args.train_only)
         except Exception as e:  # keep going: one failed variant should not cost the rest
             print(f"[{v}] FAILED: {e!r}", flush=True)
 

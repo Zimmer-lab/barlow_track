@@ -12,6 +12,9 @@ with the round's template: source nwb, GT objects, 137.nwb, labelprop 25 seeds, 
   *_seed2/3    the same at another seed (seed 2 variants pair with base_seed2)
 
     python barlow_track/scripts/scratch/s137_pilot/run_pilot.py --variants base lambd0 reaug
+
+Other rounds: --round round_bayes_wk2_leifer_reexport --trial 57 --name leifer_pilot (outputs and
+record tags then use that name instead of s137_pilot).
 """
 import argparse
 import copy
@@ -21,9 +24,11 @@ import sys
 
 import yaml
 
-ROUND = '/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files/round_bayes_wk2_samuel_137'
+ROUNDS = '/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files'
+ROUND = os.path.join(ROUNDS, 'round_bayes_wk2_samuel_137')
 TRIAL = os.path.join(ROUND, 'trial_63')
-OUT = os.path.expanduser('~/.cache/barlow_scratch/train/s137_pilot')
+NAME = 's137_pilot'
+OUT = os.path.expanduser(f'~/.cache/barlow_scratch/train/{NAME}')
 VARIANTS = {
     'base': {},
     'base_seed2': {'seed': 2},
@@ -53,7 +58,7 @@ def run_variant(name):
     cfg['num_workers'] = 4
     cfg.update(VARIANTS[name])
     cfg['project_dir'] = d
-    cfg['wandb_name'] = f's137_pilot_{name}'
+    cfg['wandb_name'] = f'{NAME}_{name}'
     cfg_path = os.path.join(d, 'train_config.yaml')
     with open(cfg_path, 'w') as f:
         yaml.safe_dump(cfg, f, sort_keys=True)
@@ -73,7 +78,7 @@ def run_variant(name):
     print(f"[{name}] scoring ({objective}, {label}): {kwargs}", flush=True)
     rec = evaluate_trained_checkpoint(weights=weights, project=cfg['project_path'],
                                       gt=eval_kwargs.get('gt') or cfg['project_path'],
-                                      tag=f's137_pilot_{name}', results_jsonl=os.path.join(OUT, 'results.jsonl'),
+                                      tag=f'{NAME}_{name}', results_jsonl=os.path.join(OUT, 'results.jsonl'),
                                       emb_dir=os.path.join(d, 'emb'), extra_record={'variant': name}, **kwargs)
     print(f"[{name}] accuracy {rec['accuracy']:.4f}", flush=True)
 
@@ -81,7 +86,18 @@ def run_variant(name):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--variants', nargs='+', default=list(VARIANTS), choices=list(VARIANTS))
+    ap.add_argument('--round', default=None, help='round dir name under config_files (default Samuel 137 wk2)')
+    ap.add_argument('--trial', type=int, default=None)
+    ap.add_argument('--name', default=None, help='output dir and tag prefix (default s137_pilot)')
     args = ap.parse_args()
+    global ROUND, TRIAL, NAME, OUT
+    if args.round:
+        ROUND = os.path.join(ROUNDS, args.round)
+        TRIAL = os.path.join(ROUND, f'trial_{args.trial}')
+        assert args.name, '--name is required with --round, so outputs do not mix with the Samuel pilot'
+    if args.name:
+        NAME = args.name
+        OUT = os.path.expanduser(f'~/.cache/barlow_scratch/train/{NAME}')
     for v in args.variants:
         try:
             run_variant(v)

@@ -54,7 +54,7 @@ def score(name, weights, results):
     os.makedirs(emb_dir, exist_ok=True)
     rec = evaluate_trained_checkpoint(weights=weights, project=PROJECT, gt=PROJECT, tag=tag, results_jsonl=results,
                                       emb_dir=emb_dir, source='project', device='cpu', cluster='labelprop',
-                                      num_seeds=25, seed=0, extra_record={'variant': name, 'weights': weights})
+                                      num_seeds=25, seed=0, extra_record={'variant': name})
     print(f"[{name}] accuracy {rec['accuracy']:.4f}", flush=True)
 
 

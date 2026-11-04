@@ -23,8 +23,9 @@ found 9% of the Leifer clicks inside an object whose centroid is 1.5-2.7 um away
      voxel within --edge_um (um distances; ties keep the first in a fixed offset order).
   2. A click with another neuron's click within --coincide_um at t is assigned to none (GT points on
      top of each other).
-  3. An object holding two or more neurons' clicks at t (by step 1, coincident clicks included) is
-     assigned to none of them (merge).
+  3. An object whose mask holds two or more neurons' click voxels at t (coincident clicks included) is
+     assigned to none of them (merge). A click matched only through the edge search takes its object
+     only if no other click claims it; it never removes a click inside the mask.
   Otherwise the click is assigned to its object.
 
 The output is a final_3d_tracks_df in the same format as the paper projects' tracks (columns per neuron:
@@ -146,8 +147,12 @@ def assign_clicks_by_mask(project_data, gx, gy, gz, voxel_um, edge_um, coincide_
         np.fill_diagonal(d, np.inf)
         coincide = d.min(1) < coincide_um
         labeled = lab > 0
-        vals, cnt = np.unique(lab[labeled], return_counts=True)
-        shared = np.isin(lab, vals[cnt > 1]) & labeled
+        inside = labeled & ~on_edge
+        vals, cnt = np.unique(lab[inside], return_counts=True)
+        shared = np.isin(lab, vals[cnt > 1]) & inside
+        # Edge clicks: dropped if their object holds an inside click, or another edge click claims it
+        all_vals, all_cnt = np.unique(lab[labeled], return_counts=True)
+        shared |= on_edge & np.isin(lab, all_vals[all_cnt > 1])
         lab2row = {int(md.i_in_array_to_mask_index(t, i)): i for i in range(n_obj)}
         for k, j in enumerate(js):
             if coincide[k]:

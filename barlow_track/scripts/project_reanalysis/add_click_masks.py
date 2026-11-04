@@ -58,7 +58,8 @@ def main():
     z = zarr.open(str(seg_cfg.resolve_relative_path_from_config('output_masks')), mode='r')
     with open(str(seg_cfg.resolve_relative_path_from_config('output_metadata')), 'rb') as f:
         md = pickle.load(f)
-    st = np.load(args.status)
+    with np.load(args.status) as f:  # into memory: the worker threads must not share the lazy zip reader
+        st = {k: f[k] for k in f.files}
     codes = json.loads(str(st['codes']))
     miss_codes = [v for k, v in codes.items() if k.startswith('missed_no_mask') or k.startswith('missed_empty')]
     nwb = ProjectData.load_final_project_data(args.gt_nwb, allow_hybrid_loading=True, verbose=0)

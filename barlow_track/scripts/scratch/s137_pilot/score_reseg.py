@@ -13,6 +13,10 @@ embedding and tracking (as the sweep's CPU objective jobs). Scores, in order:
 gt_tracks_from_clicks.py --rule mask) with --results naming its own jsonl. Embedding still reads PROJECT and
 tags stay the same, so the cached embeddings are reused and only tracking reruns.
 
+--weights NAME=PATH scores other checkpoints (e.g. older sweep trials), and --gts GT=RESULTS ... scores each
+checkpoint against several GTs in turn (embedding once, tracking per GT), so parallel streams never embed
+the same checkpoint twice.
+
 Already recorded tags are skipped, so it can be restarted. Run with CUDA_VISIBLE_DEVICES=''
 while the GPU trains (load_barlow_model otherwise puts the checkpoint on the full GPU).
 
@@ -59,7 +63,7 @@ def score(name, weights, results, gt=PROJECT, gt_variant=None):
     rec = evaluate_trained_checkpoint(weights=weights, project=PROJECT, gt=gt, tag=tag, results_jsonl=results,
                                       emb_dir=emb_dir, source='project', device='cpu', cluster='labelprop',
                                       num_seeds=25, seed=0, extra_record={'variant': name, 'gt_variant': gt_variant})
-    print(f"[{name}] accuracy {rec['accuracy']:.4f}", flush=True)
+    print(f"[{name}] accuracy {rec['accuracy']:.4f} ({gt_variant or 'stardist 1.5um'})", flush=True)
 
 
 def main():
@@ -69,13 +73,18 @@ def main():
     ap.add_argument('--poll', type=int, default=300)
     ap.add_argument('--gt', default=PROJECT, help='project_config.yaml whose final tracks are the GT')
     ap.add_argument('--results', default='scores.jsonl', help='jsonl under leifer_reseg/')
+    ap.add_argument('--weights', nargs='*', default=[], help='NAME=PATH: other checkpoints to score')
+    ap.add_argument('--gts', nargs='*', default=None,
+                    help='GT_PROJECT=RESULTS pairs, each checkpoint scored against every one (overrides --gt/--results)')
     ap.add_argument('--training_units', nargs='*', default=[],
                     help='systemd user units training the variants: stop waiting once none is active')
     args = ap.parse_args()
-    results = os.path.join(OUT, args.results)
-    gt_variant = None if args.gt == PROJECT else os.path.basename(os.path.dirname(args.gt))
+    pairs = [g.rsplit('=', 1) for g in args.gts] if args.gts else [(args.gt, args.results)]
+    gts = [(gt, os.path.join(OUT, res), None if gt == PROJECT else os.path.basename(os.path.dirname(gt)))
+           for gt, res in pairs]
     jobs = [] if args.no_refs else list(REFS.items())
     jobs += [(v, os.path.join(OUT, v, 'resnet50.pth')) for v in args.variants]
+    jobs += [tuple(w.split('=', 1)) for w in args.weights]
     pending = list(jobs)
     while pending:
         ready = [(n, w) for n, w in pending if os.path.exists(w)]
@@ -89,10 +98,11 @@ def main():
         name, w = ready[0]
         pending.remove(ready[0])
         time.sleep(30)  # let the trainer finish writing
-        try:
-            score(name, w, results, args.gt, gt_variant)
-        except Exception as e:  # one bad checkpoint should not cost the rest
-            print(f"[{name}] FAILED: {e!r}", flush=True)
+        for gt, results, gt_variant in gts:
+            try:
+                score(name, w, results, gt, gt_variant)
+            except Exception as e:  # one bad checkpoint should not cost the rest
+                print(f"[{name}] FAILED: {e!r}", flush=True)
 
 
 if __name__ == '__main__':

@@ -9,6 +9,10 @@ embedding and tracking (as the sweep's CPU objective jobs). Scores, in order:
   ref_local_nerve     the local Leifer pilot's base retrain of trial 57 (NeRVE project)
   <variant>           each leifer_reseg sweep run, waiting for its resnet50.pth
 
+--gt scores against another project's final tracks (e.g. the _maskgt project: same segmentation, GT by
+gt_tracks_from_clicks.py --rule mask) with --results naming its own jsonl. Embedding still reads PROJECT and
+tags stay the same, so the cached embeddings are reused and only tracking reruns.
+
 Already recorded tags are skipped, so it can be restarted. Run with CUDA_VISIBLE_DEVICES=''
 while the GPU trains (load_barlow_model otherwise puts the checkpoint on the full GPU).
 
@@ -44,7 +48,7 @@ def done_tags(path):
     return tags
 
 
-def score(name, weights, results):
+def score(name, weights, results, gt=PROJECT, gt_variant=None):
     from barlow_track.scripts.eval_accuracy import evaluate_trained_checkpoint
     tag = f'leifer_reseg_{name}'
     if tag in done_tags(results):
@@ -52,9 +56,9 @@ def score(name, weights, results):
         return
     emb_dir = os.path.join(OUT, 'emb', name)
     os.makedirs(emb_dir, exist_ok=True)
-    rec = evaluate_trained_checkpoint(weights=weights, project=PROJECT, gt=PROJECT, tag=tag, results_jsonl=results,
+    rec = evaluate_trained_checkpoint(weights=weights, project=PROJECT, gt=gt, tag=tag, results_jsonl=results,
                                       emb_dir=emb_dir, source='project', device='cpu', cluster='labelprop',
-                                      num_seeds=25, seed=0, extra_record={'variant': name})
+                                      num_seeds=25, seed=0, extra_record={'variant': name, 'gt_variant': gt_variant})
     print(f"[{name}] accuracy {rec['accuracy']:.4f}", flush=True)
 
 
@@ -63,10 +67,13 @@ def main():
     ap.add_argument('--variants', nargs='*', default=[])
     ap.add_argument('--no_refs', action='store_true')
     ap.add_argument('--poll', type=int, default=300)
+    ap.add_argument('--gt', default=PROJECT, help='project_config.yaml whose final tracks are the GT')
+    ap.add_argument('--results', default='scores.jsonl', help='jsonl under leifer_reseg/')
     ap.add_argument('--training_units', nargs='*', default=[],
                     help='systemd user units training the variants: stop waiting once none is active')
     args = ap.parse_args()
-    results = os.path.join(OUT, 'scores.jsonl')
+    results = os.path.join(OUT, args.results)
+    gt_variant = None if args.gt == PROJECT else os.path.basename(os.path.dirname(args.gt))
     jobs = [] if args.no_refs else list(REFS.items())
     jobs += [(v, os.path.join(OUT, v, 'resnet50.pth')) for v in args.variants]
     pending = list(jobs)
@@ -83,7 +90,7 @@ def main():
         pending.remove(ready[0])
         time.sleep(30)  # let the trainer finish writing
         try:
-            score(name, w, results)
+            score(name, w, results, args.gt, gt_variant)
         except Exception as e:  # one bad checkpoint should not cost the rest
             print(f"[{name}] FAILED: {e!r}", flush=True)
 

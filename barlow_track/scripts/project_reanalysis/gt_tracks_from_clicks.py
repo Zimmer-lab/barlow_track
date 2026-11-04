@@ -27,6 +27,10 @@ found 9% of the Leifer clicks inside an object whose centroid is 1.5-2.7 um away
      assigned to none of them (merge). A click matched only through the edge search takes its object
      only if no other click claims it; it never removes a click inside the mask.
   Otherwise the click is assigned to its object.
+  --keep_shared (trust the GT, discard nothing the segmentation can hold) skips 3: a mask holding several
+  neurons' clicks is assigned to all of them (a segmentation merge then costs the tracker at least one of
+  them), and --coincide_um 0 skips 2. A click with no mask within --edge_um stays NaN: a segmentation miss,
+  to be reported with the score (summary counts no_mask_within_edge and no_objects_in_volume).
 
 --rule segmentation_id takes the object from the GT NWB's own raw_segmentation_id, for a project whose
 masks are the NWB's (the NeRVE project Leifer_NeRVE_Worm1_reexport_A2: NeRVE's masks plus pseudo masks,
@@ -113,14 +117,14 @@ def assign_clicks(project_data, gx, gy, gz, max_dist_um, voxel_um, masks=None):
     return raw_ind, counts
 
 
-def assign_clicks_by_mask(project_data, gx, gy, gz, voxel_um, edge_um, coincide_um, masks=None):
+def assign_clicks_by_mask(project_data, gx, gy, gz, voxel_um, edge_um, coincide_um, masks=None, keep_shared=False):
     """--rule mask (module docstring): same outputs as assign_clicks."""
     scale = np.asarray(voxel_um, dtype=float)  # z, x, y
     T, N = gx.shape
     raw_ind = np.full((T, N), np.nan)
     counts = dict(gt_clicks=0, no_objects_in_volume=0, coincident_with_another_click=0,
                   no_mask_within_edge=0, object_shared_with_another_gt_neuron=0, label_not_in_metadata=0,
-                  assigned=0, assigned_in_mask=0, assigned_on_mask_edge=0)
+                  assigned=0, assigned_in_mask=0, assigned_on_mask_edge=0, assigned_to_a_shared_mask=0)
     masks = project_data.raw_segmentation if masks is None else masks
     vol_shape = np.array(masks.shape[1:])
     md = project_data.segmentation_metadata
@@ -154,7 +158,7 @@ def assign_clicks_by_mask(project_data, gx, gy, gz, voxel_um, edge_um, coincide_
         p = g[js] * scale
         d = np.linalg.norm(p[:, None] - p[None], axis=2)
         np.fill_diagonal(d, np.inf)
-        coincide = d.min(1) < coincide_um
+        coincide = d.min(1) < coincide_um if coincide_um > 0 else np.zeros(len(js), bool)
         labeled = lab > 0
         inside = labeled & ~on_edge
         vals, cnt = np.unique(lab[inside], return_counts=True)
@@ -162,6 +166,9 @@ def assign_clicks_by_mask(project_data, gx, gy, gz, voxel_um, edge_um, coincide_
         # Edge clicks: dropped if their object holds an inside click, or another edge click claims it
         all_vals, all_cnt = np.unique(lab[labeled], return_counts=True)
         shared |= on_edge & np.isin(lab, all_vals[all_cnt > 1])
+        if keep_shared:
+            counts['assigned_to_a_shared_mask'] += int((shared & ~coincide).sum())
+            shared[:] = False
         lab2row = {int(md.i_in_array_to_mask_index(t, i)): i for i in range(n_obj)}
         for k, j in enumerate(js):
             if coincide[k]:
@@ -228,7 +235,10 @@ def main():
                     help='--rule segmentation_id: labels at or above this are pseudo masks, assigned to none')
     ap.add_argument('--max_dist_um', type=float, default=1.0, help='--rule centroid')
     ap.add_argument('--edge_um', type=float, default=1.0, help='--rule mask: background clicks this close to a mask')
-    ap.add_argument('--coincide_um', type=float, default=1.5, help='--rule mask: clicks of two neurons this close')
+    ap.add_argument('--coincide_um', type=float, default=1.5,
+                    help='--rule mask: clicks of two neurons this close (0: no exclusion)')
+    ap.add_argument('--keep_shared', action='store_true',
+                    help='--rule mask: a mask holding several neurons\' clicks is assigned to all of them')
     ap.add_argument('--voxel_um', type=float, nargs=3, default=[1.5, 0.3226, 0.3226],
                     help='z x y voxel size in um (default: the Leifer NWB grid_spacing)')
     ap.add_argument('--out_name', default='3-tracking/manual_annotation/gt_tracks_from_clicks.h5',
@@ -254,7 +264,7 @@ def main():
         raw_ind, counts = assign_clicks_by_segmentation_id(prj, a['gx'], a['gs'], args.max_label)
     elif args.rule == 'mask':
         raw_ind, counts = assign_clicks_by_mask(prj, a['gx'], a['gy'], a['gz'], args.voxel_um, args.edge_um,
-                                                args.coincide_um)
+                                                args.coincide_um, keep_shared=args.keep_shared)
     else:
         raw_ind, counts = assign_clicks(prj, a['gx'], a['gy'], a['gz'], args.max_dist_um, args.voxel_um)
     n_click = np.isfinite(a['gx']).sum(0)
@@ -290,12 +300,15 @@ def main():
               "assigned to none; otherwise NaN") if args.rule == 'centroid' else
              ("segmentation_id: the GT NWB's raw_segmentation_id; labels >= max_label (pseudo masks) and "
               "labels held by 2+ neurons' clicks assigned to none; otherwise NaN") if args.rule == 'segmentation_id' else
-             ("mask: the mask at the click voxel, else the nearest mask voxel within edge_um; clicks with "
-              "another neuron's click within coincide_um assigned to none; masks holding 2+ neurons' clicks "
-              "assigned to none; otherwise NaN"),
+             ("mask: the mask at the click voxel, else the nearest mask voxel within edge_um; "
+              + ("clicks with another neuron's click within coincide_um assigned to none; " if args.coincide_um > 0
+                 else "") +
+              ("a mask holding 2+ neurons' clicks assigned to all of them; " if args.keep_shared else
+               "masks holding 2+ neurons' clicks assigned to none; ") + "otherwise NaN"),
         rule_name=args.rule, max_dist_um=args.max_dist_um if args.rule == 'centroid' else None,
         edge_um=args.edge_um if args.rule == 'mask' else None,
         coincide_um=args.coincide_um if args.rule == 'mask' else None,
+        keep_shared=bool(args.keep_shared) if args.rule == 'mask' else None,
         max_label=args.max_label if args.rule == 'segmentation_id' else None, voxel_um_zxy=list(args.voxel_um),
         output=out, shape=list(df.shape), summary=summary)
     with open(os.path.splitext(out)[0] + '_provenance.json', 'w') as f:

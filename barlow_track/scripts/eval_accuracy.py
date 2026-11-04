@@ -571,6 +571,9 @@ def _parse_args(argv=None):
     ap.add_argument('--emb_tag', default=None,
                     help='embedding cache filename tag, if not --tag: cells that score the same checkpoint '
                          'on the same frames against different GTs share one cache (with --skip_embed)')
+    ap.add_argument('--save_tracks', default=None,
+                    help='h5 to write the scored tracks to (keys gt, pred_matched, pred_all: one column per neuron '
+                         'or predicted track, values in the matched ID space), for error analysis; one mode only')
     args = ap.parse_args(argv)
     _check_args(args)
     return args
@@ -585,6 +588,8 @@ def _check_args(args):
     evaluates the lab's reference weights, which requires a --lab.
     """
     spec = LABS.get(args.lab, {}) if args.lab else {}
+    if getattr(args, 'save_tracks', None) and args.mode == 'both':
+        raise SystemExit('--save_tracks writes one mode\'s tracks; pick --mode image or position')
     if args.mode == 'trained':
         if not args.weights:
             raise SystemExit('--mode trained requires --weights')
@@ -845,6 +850,11 @@ def run_eval(args):
         col_gt = df_gt.loc[:, (slice(None), match_col)].droplevel(1, axis=1)
         col_pr = df_pred_r.loc[:, (slice(None), match_col)].droplevel(1, axis=1)
         stats = calculate_accuracy(col_gt, col_pr)
+        if getattr(args, 'save_tracks', None):
+            col_all = df_pred.loc[:, (slice(None), match_col)].droplevel(1, axis=1)
+            for key, df in (('gt', col_gt), ('pred_matched', col_pr), ('pred_all', col_all)):
+                df.astype(float).to_hdf(args.save_tracks, key=key, mode='w' if key == 'gt' else 'a')
+            print(f"[{args.lab}/{mode}] tracks written to {args.save_tracks}", flush=True)
         _fusion = {'image': None, 'position': 'add', 'attention': 'concat',
                    'posonly': 'position_only', 'trained': getattr(targs, 'fusion', None) if targs else None}.get(mode)
         train_config = None

@@ -568,6 +568,9 @@ def _parse_args(argv=None):
     ap.add_argument('--tag', default=None,
                     help='label recorded with each result and added to embedding cache filenames '
                          '(use e.g. the trial name so caches from different checkpoints do not collide)')
+    ap.add_argument('--emb_tag', default=None,
+                    help='embedding cache filename tag, if not --tag: cells that score the same checkpoint '
+                         'on the same frames against different GTs share one cache (with --skip_embed)')
     args = ap.parse_args(argv)
     _check_args(args)
     return args
@@ -728,7 +731,8 @@ def run_eval(args):
             suffix += "_allobj"
         emb_dir = args.emb_dir or '/tmp/claude'
         os.makedirs(emb_dir, exist_ok=True)
-        tag_suffix = f"_{args.tag}" if args.tag else ""
+        emb_tag = getattr(args, 'emb_tag', None) or args.tag
+        tag_suffix = f"_{emb_tag}" if emb_tag else ""
         emb_path = os.path.join(emb_dir, f'emb_{args.lab}_{suffix}{tag_suffix}.npz')
         cache_key = _embedding_cache_key(args)
         if args.skip_embed and os.path.exists(emb_path):

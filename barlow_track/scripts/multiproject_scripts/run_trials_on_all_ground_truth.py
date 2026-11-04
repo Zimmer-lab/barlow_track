@@ -40,6 +40,8 @@ EVAL_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 _PAPER_DATA = "/lisc/data/scratch/neurobiology/zimmer/fieseler/wbfm_projects/manually_annotated/paper_data"
 _PAPER_OTHER = "/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_paper"
+_LEIFER_SD = ("/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/wbfm_tracker_baseline/"
+              "leifer_resegment/Leifer_NeRVE_Worm1_reexport_A2_stardist")
 
 # Hardcoded ground truth datasets. zimmer_* use project-frame crops from the GT
 # project itself; the rest crop around GT xyz straight from the GT NWB.
@@ -76,6 +78,15 @@ DATASETS = {
     "leifer_reexport": dict(source="nwb", nwb=(
         "/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/leifer_reexport/"
         "Leifer_NeRVE_Worm1_reexport_A2.nwb")),
+    # The same recording segmented with StarDist (wbfm project, every detection tracked),
+    # GT from the manual clicks by gt_tracks_from_clicks.py: leifer_stardist with the
+    # centroid rule (click within 1.5 um of a centroid, 87% of clicks), leifer_stardist_maskgt
+    # with the mask rule (click inside a mask or within 1 um of one, 95%; a _maskgt copy of the
+    # project made with make_project_like, same segmentation). Both crop from the StarDist
+    # project, so they share one embedding (emb_from) and differ only in the GT.
+    "leifer_stardist": dict(source="project", project=_LEIFER_SD, gt=_LEIFER_SD),
+    "leifer_stardist_maskgt": dict(source="project", project=_LEIFER_SD, gt=_LEIFER_SD + "_maskgt",
+                                   emb_from="leifer_stardist"),
 }
 
 # eval_accuracy.py addresses projects by lab; nwb-source datasets reuse the
@@ -148,7 +159,8 @@ def parse_args():
                         help="CPUs per evaluation job (tracking is CPU-bound)")
     parser.add_argument("--slurm_mem", default="32G", help="Memory per evaluation job")
     parser.add_argument("--gpus", default="auto",
-                        help="GPUs to round-robin jobs over, e.g. '0,1' (default: all visible via nvidia-smi)")
+                        help="GPUs to round-robin jobs over, e.g. '0,1' (default: all visible via nvidia-smi); "
+                             "'none' hides every GPU from the workers (with --device cpu --jobs N)")
     parser.add_argument("--fail_fast", dest="fail_fast", action="store_true",
                         help="stop starting new evaluations after the first failure (default)")
     parser.add_argument("--no_fail_fast", dest="fail_fast", action="store_false",
@@ -251,6 +263,8 @@ def top_k_trials(trial_parent_dir, k, model_fname):
 
 def resolve_gpus(gpus_arg):
     """Return a list of GPU indices; 'auto' queries nvidia-smi."""
+    if gpus_arg == "none":
+        return [""]  # CUDA_VISIBLE_DEVICES='' in every worker: CPU only (with --device cpu --jobs N)
     if gpus_arg != "auto":
         return [g.strip() for g in gpus_arg.split(",") if g.strip()]
     try:
@@ -284,8 +298,10 @@ def run_one(cmd, gpu, label):
     else:
         env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu))
         where = f"gpu {gpu}"
-    print(f"\n### {label} [{where}]\n{' '.join(cmd)}", flush=True)
-    rc = subprocess.call(cmd, env=env)
+    rc = 0
+    for c in (cmd if isinstance(cmd[0], list) else [cmd]):  # a chain runs in order (shared embedding)
+        print(f"\n### {label} [{where}]\n{' '.join(c)}", flush=True)
+        rc = max(rc, subprocess.call(c, env=env))
     return rc
 
 
@@ -353,6 +369,10 @@ def build_eval_cmd(lab, tag, weights, args, results_jsonl, emb_dir):
            "--tag", tag, "--results_jsonl", results_jsonl, "--emb_dir", emb_dir]
     if weights is not None:
         cmd += ["--weights", weights]
+    emb_lab = spec.get("emb_from") or (lab if any(d.get("emb_from") == lab for d in DATASETS.values()) else None)
+    if emb_lab is not None and tag.endswith(lab):
+        # One cache for every dataset that crops the same frames (cache key: checkpoint sha1 + project)
+        cmd += ["--skip_embed", "--emb_tag", tag[:len(tag) - len(lab)] + emb_lab]
     if spec["source"] == "nwb":
         # --gt too, so the record names this NWB rather than the lab's default GT (for the
         # default datasets the two are the same file); requested_settings expects it
@@ -375,6 +395,20 @@ def build_eval_cmd(lab, tag, weights, args, results_jsonl, emb_dir):
     if getattr(args, "gt_matching", "nandist") != "nandist":
         cmd += ["--gt_matching", args.gt_matching]
     return cmd
+
+
+def chain_shared_embeddings(tasks):
+    """Run a cell whose dataset has emb_from right after that dataset's cell of the same
+    trial, in the same worker, so it loads the cached embedding instead of embedding again."""
+    first = {(lab, trial_num): i for i, (lab, trial_num, _, _) in enumerate(tasks)}
+    out, merged = [list(t) for t in tasks], set()
+    for i, (lab, trial_num, _, cmd) in enumerate(tasks):
+        j = first.get((DATASETS[lab].get("emb_from"), trial_num))
+        if j is not None and j not in merged:
+            prev = out[j][3]
+            out[j][3] = (prev if isinstance(prev[0], list) else [prev]) + [cmd]
+            merged.add(i)
+    return [tuple(t) for i, t in enumerate(out) if i not in merged]
 
 
 def main():
@@ -422,6 +456,7 @@ def main():
     for lab, trial_num, tag, weights in trial_jobs:
         tasks.append((lab, trial_num, tag, build_eval_cmd(lab, tag, weights, args, results_jsonl, emb_dir)))
     tags = [(lab, trial_num, tag) for lab, trial_num, tag, _ in tasks]
+    tasks = chain_shared_embeddings(tasks)
 
     gpus = resolve_gpus(args.gpus)
     jobs = 1 if args.sequential else (args.jobs or len(gpus))
@@ -430,7 +465,8 @@ def main():
     if args.debug:
         for i, (lab, trial_num, tag, cmd) in enumerate(tasks):
             where = "slurm" if args.slurm else f"gpu {gpus[i % len(gpus)]}"
-            print(f"\n### {tag} [{where}]\n{' '.join(cmd)}", flush=True)
+            for c in (cmd if isinstance(cmd[0], list) else [cmd]):
+                print(f"\n### {tag} [{where}]\n{' '.join(c)}", flush=True)
         check_device(args.device)
         return
 

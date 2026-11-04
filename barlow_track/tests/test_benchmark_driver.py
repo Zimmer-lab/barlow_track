@@ -50,3 +50,36 @@ def test_slurm_asks_for_a_gpu_only_when_embedding_on_one(monkeypatch, tmp_path, 
     args = SimpleNamespace(slurm_time='01:00:00', slurm_cpus=4, slurm_mem='8G', device=device, fail_fast=True)
     assert drv.run_slurm([], str(tmp_path / 'r.jsonl'), args) == []
     assert seen.get('slurm_gres') == gres
+
+
+def test_stardist_gts_share_one_embedding_and_run_chained():
+    """leifer_stardist_maskgt crops the same project as leifer_stardist: its cell loads that
+    cell's embedding cache and runs right after it in the same worker."""
+    labs = ['leifer_stardist', 'leifer_stardist_maskgt', 'zimmer_1128']
+    tasks = []
+    for trial in (3, 7):
+        for lab in labs:
+            tag = f'round_x_trial{trial}_{lab}'
+            tasks.append((lab, trial, tag, drv.build_eval_cmd(lab, tag, 'w.pth', _args(), 'r.jsonl', 'emb')))
+    for lab, trial, tag, cmd in tasks:
+        if lab == 'zimmer_1128':
+            assert '--emb_tag' not in cmd and '--skip_embed' not in cmd
+        else:
+            assert _flag(cmd, '--emb_tag') == f'round_x_trial{trial}_leifer_stardist'
+            assert '--skip_embed' in cmd
+    chained = drv.chain_shared_embeddings(tasks)
+    assert [(lab, trial) for lab, trial, _, _ in chained] == [
+        ('leifer_stardist', 3), ('zimmer_1128', 3), ('leifer_stardist', 7), ('zimmer_1128', 7)]
+    sd3 = chained[0][3]
+    assert [_flag(c, '--tag') for c in sd3] == ['round_x_trial3_leifer_stardist', 'round_x_trial3_leifer_stardist_maskgt']
+    # A maskgt cell whose stardist cell is already recorded runs alone (and loads the cache)
+    alone = drv.chain_shared_embeddings([t for t in tasks if t[0] != 'leifer_stardist'])
+    assert sum(lab == 'leifer_stardist_maskgt' for lab, _, _, _ in alone) == 2
+
+
+def test_run_one_runs_a_chain_in_order(monkeypatch):
+    calls = []
+    monkeypatch.setattr(drv.subprocess, 'call', lambda c, env: calls.append((c, env['CUDA_VISIBLE_DEVICES'])) or 0)
+    assert drv.run_one([['a'], ['b']], '', 'tag') == 0
+    assert calls == [(['a'], ''), (['b'], '')]
+    assert drv.resolve_gpus('none') == ['']

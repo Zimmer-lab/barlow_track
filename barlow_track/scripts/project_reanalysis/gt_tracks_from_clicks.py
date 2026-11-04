@@ -32,13 +32,26 @@ found 9% of the Leifer clicks inside an object whose centroid is 1.5-2.7 um away
   them), and --coincide_um 0 skips 2. A click with no mask within --edge_um stays NaN: a segmentation miss,
   to be reported with the score (summary counts no_mask_within_edge and no_objects_in_volume).
 
+Per-click fates (--rule mask and segmentation_id) are written next to the h5 as <name>_status.npz: status
+(T, N) with STATUS codes (no click, assigned, excluded as coincident, excluded as a merge, missed: no mask at
+or near the click, missed: volume without objects, missed: label not in the metadata) and label (T, N), the
+mask label each assigned click gets. Scoring over every kept click (assigned + missed; coincident and merged
+clicks excluded) uses these (score_gt_variants.py).
+
+--attach mahalanobis (--rule mask) attaches a background click to the object nearest in Mahalanobis distance
+(the object's voxel covariance, click_mahalanobis.py) when that distance is at most --attach_dm (sqrt 5 =
+2.236 is the surface of a solid ellipsoid), instead of the nearest mask voxel within --edge_um.
+
 --rule segmentation_id takes the object from the GT NWB's own raw_segmentation_id, for a project whose
 masks are the NWB's (the NeRVE project Leifer_NeRVE_Worm1_reexport_A2: NeRVE's masks plus pseudo masks,
 label 1000 + GT index, watershed around clicks NeRVE missed):
   1. A click without a raw_segmentation_id, or with one at or above --max_label (the pseudo masks: built
      from the click itself, not by the segmentation), is assigned to none.
   2. A label held by two or more neurons' clicks at t is assigned to none of them (merge).
-  3. A label that is not in the project's segmentation metadata is assigned to none.
+  3. A label that is not in the project's segmentation metadata is assigned to none (--no_metadata_check
+     skips this, for a status-only GT in the NWB's own label space, pseudo masks included, with --max_label
+     unset: the NWB-path tracking sees every NWB mask).
+  --coincide_um > 0 first drops clicks with another neuron's click that close, as in --rule mask.
   Otherwise the click is assigned to its labelled object.
 
 The output is a final_3d_tracks_df in the same format as the paper projects' tracks (columns per neuron:
@@ -69,6 +82,20 @@ def _git_rev():
         return rev + ('' if untracked.strip() and not dirty else ' (script uncommitted or modified)')
     except Exception:
         return None
+
+
+STATUS = dict(no_click=-1, assigned=0, excluded_coincident=1, excluded_merge=2, missed_no_mask=3,
+              missed_empty_volume=4, missed_label_not_in_metadata=5)
+
+
+def coincident_clicks(g, scale, coincide_um):
+    """Boolean per click (rows of g, voxels z x y): another click within coincide_um (um)."""
+    if coincide_um <= 0 or len(g) < 2:
+        return np.zeros(len(g), bool)
+    p = g * scale
+    d = np.linalg.norm(p[:, None] - p[None], axis=2)
+    np.fill_diagonal(d, np.inf)
+    return d.min(1) < coincide_um
 
 
 def assign_clicks(project_data, gx, gy, gz, max_dist_um, voxel_um, masks=None):
@@ -117,17 +144,22 @@ def assign_clicks(project_data, gx, gy, gz, max_dist_um, voxel_um, masks=None):
     return raw_ind, counts
 
 
-def assign_clicks_by_mask(project_data, gx, gy, gz, voxel_um, edge_um, coincide_um, masks=None, keep_shared=False):
-    """--rule mask (module docstring): same outputs as assign_clicks."""
+def assign_clicks_by_mask(project_data, gx, gy, gz, voxel_um, edge_um, coincide_um, masks=None, keep_shared=False,
+                          attach='edge', attach_dm=None):
+    """--rule mask (module docstring): assign_clicks' outputs plus status and label (T, N)."""
     scale = np.asarray(voxel_um, dtype=float)  # z, x, y
     T, N = gx.shape
     raw_ind = np.full((T, N), np.nan)
+    status = np.full((T, N), STATUS['no_click'])
+    label_out = np.full((T, N), np.nan)
     counts = dict(gt_clicks=0, no_objects_in_volume=0, coincident_with_another_click=0,
                   no_mask_within_edge=0, object_shared_with_another_gt_neuron=0, label_not_in_metadata=0,
                   assigned=0, assigned_in_mask=0, assigned_on_mask_edge=0, assigned_to_a_shared_mask=0)
     masks = project_data.raw_segmentation if masks is None else masks
     vol_shape = np.array(masks.shape[1:])
     md = project_data.segmentation_metadata
+    if attach == 'mahalanobis':
+        from barlow_track.scripts.project_reanalysis.click_mahalanobis import objects_in_volume
     # Background clicks look for a mask voxel at these offsets, nearest first
     r = np.floor(edge_um / scale).astype(int)
     offs = np.stack(np.meshgrid(*[np.arange(-k, k + 1) for k in r], indexing='ij'), -1).reshape(-1, 3)
@@ -141,24 +173,34 @@ def assign_clicks_by_mask(project_data, gx, gy, gz, voxel_um, edge_um, coincide_
         if not len(js):
             continue
         n_obj = len(project_data.get_centroids_as_numpy(t))
+        coincide = coincident_clicks(g[js], scale, coincide_um)
         if not n_obj:
-            counts['no_objects_in_volume'] += len(js)
+            counts['no_objects_in_volume'] += int((~coincide).sum())
+            counts['coincident_with_another_click'] += int(coincide.sum())
+            status[t, js] = np.where(coincide, STATUS['excluded_coincident'], STATUS['missed_empty_volume'])
             continue
         seg = np.asarray(masks[t])
         vox = np.clip(np.round(g[js]).astype(int), 0, vol_shape - 1)
         lab = seg[vox[:, 0], vox[:, 1], vox[:, 2]].astype(np.int64)
         on_edge = np.zeros(len(js), bool)
-        for k in np.flatnonzero(lab == 0):
-            v = vox[k] + offs
-            ok = ((v >= 0) & (v < vol_shape)).all(1)
-            hits = seg[v[ok, 0], v[ok, 1], v[ok, 2]]
-            if (hits > 0).any():
-                lab[k] = hits[np.argmax(hits > 0)]
-                on_edge[k] = True
-        p = g[js] * scale
-        d = np.linalg.norm(p[:, None] - p[None], axis=2)
-        np.fill_diagonal(d, np.inf)
-        coincide = d.min(1) < coincide_um if coincide_um > 0 else np.zeros(len(js), bool)
+        bgk = np.flatnonzero(lab == 0)
+        if attach == 'mahalanobis' and len(bgk):
+            labels_t, mu, inv = objects_in_volume(seg, scale)
+            if len(labels_t):
+                diff = (g[js[bgk]] * scale)[:, None, :] - mu[None]
+                dm = np.sqrt(np.einsum('nmi,mij,nmj->nm', diff, inv, diff))
+                kk = dm.argmin(1)
+                hit = dm[np.arange(len(bgk)), kk] <= attach_dm
+                lab[bgk[hit]] = labels_t[kk[hit]]
+                on_edge[bgk[hit]] = True
+        elif len(offs):
+            for k in bgk:
+                v = vox[k] + offs
+                ok = ((v >= 0) & (v < vol_shape)).all(1)
+                hits = seg[v[ok, 0], v[ok, 1], v[ok, 2]]
+                if (hits > 0).any():
+                    lab[k] = hits[np.argmax(hits > 0)]
+                    on_edge[k] = True
         labeled = lab > 0
         inside = labeled & ~on_edge
         vals, cnt = np.unique(lab[inside], return_counts=True)
@@ -173,56 +215,80 @@ def assign_clicks_by_mask(project_data, gx, gy, gz, voxel_um, edge_um, coincide_
         for k, j in enumerate(js):
             if coincide[k]:
                 counts['coincident_with_another_click'] += 1
+                status[t, j] = STATUS['excluded_coincident']
             elif not labeled[k]:
                 counts['no_mask_within_edge'] += 1
+                status[t, j] = STATUS['missed_no_mask']
             elif shared[k]:
                 counts['object_shared_with_another_gt_neuron'] += 1
+                status[t, j] = STATUS['excluded_merge']
             elif int(lab[k]) not in lab2row:
                 counts['label_not_in_metadata'] += 1
+                status[t, j] = STATUS['missed_label_not_in_metadata']
             else:
                 raw_ind[t, j] = lab2row[int(lab[k])]
+                label_out[t, j] = int(lab[k])
+                status[t, j] = STATUS['assigned']
                 counts['assigned'] += 1
                 counts['assigned_on_mask_edge' if on_edge[k] else 'assigned_in_mask'] += 1
-    return raw_ind, counts
+    return raw_ind, counts, status, label_out
 
 
-def assign_clicks_by_segmentation_id(project_data, gx, gs, max_label=None):
-    """--rule segmentation_id (module docstring): same outputs as assign_clicks. gx (T, N) marks the
-    clicks (finite where neuron j was clicked at t); gs (T, N) is their raw_segmentation_id."""
+def assign_clicks_by_segmentation_id(project_data, gx, gs, max_label=None, gy=None, gz=None, voxel_um=None,
+                                     coincide_um=0.0, check_metadata=True):
+    """--rule segmentation_id (module docstring): assign_clicks' outputs plus status and label. gx (T, N)
+    marks the clicks (finite where neuron j was clicked at t); gs (T, N) is their raw_segmentation_id."""
     T, N = gs.shape
     raw_ind = np.full((T, N), np.nan)
-    counts = dict(gt_clicks=0, no_objects_in_volume=0, no_segmentation_id=0, pseudo_mask_label=0,
-                  object_shared_with_another_gt_neuron=0, label_not_in_metadata=0, assigned=0)
-    md = project_data.segmentation_metadata
+    status = np.full((T, N), STATUS['no_click'])
+    label_out = np.full((T, N), np.nan)
+    counts = dict(gt_clicks=0, coincident_with_another_click=0, no_objects_in_volume=0, no_segmentation_id=0,
+                  pseudo_mask_label=0, object_shared_with_another_gt_neuron=0, label_not_in_metadata=0, assigned=0)
+    md = project_data.segmentation_metadata if check_metadata else None
+    scale = np.asarray(voxel_um, dtype=float) if voxel_um is not None else None
     for t in range(T):
         js = np.flatnonzero(np.isfinite(gx[t]))
         counts['gt_clicks'] += len(js)
         if not len(js):
             continue
-        n_obj = len(project_data.get_centroids_as_numpy(t))
-        if not n_obj:
-            counts['no_objects_in_volume'] += len(js)
-            continue
+        coincide = (coincident_clicks(np.stack([gz[t, js], gx[t, js], gy[t, js]], 1), scale, coincide_um)
+                    if coincide_um > 0 else np.zeros(len(js), bool))
+        n_obj = len(project_data.get_centroids_as_numpy(t)) if check_metadata else 1
         lab = gs[t, js]
         has = np.isfinite(lab) & (lab > 0)
+        if not n_obj or (not check_metadata and not has.any()):
+            counts['no_objects_in_volume'] += int((~coincide).sum())
+            counts['coincident_with_another_click'] += int(coincide.sum())
+            status[t, js] = np.where(coincide, STATUS['excluded_coincident'], STATUS['missed_empty_volume'])
+            continue
         pseudo = has & (lab >= max_label) if max_label is not None else np.zeros(len(js), bool)
-        ok = has & ~pseudo
+        ok = has & ~pseudo & ~coincide
         vals, cnt = np.unique(lab[ok], return_counts=True)
         shared = ok & np.isin(lab, vals[cnt > 1])
-        lab2row = {int(md.i_in_array_to_mask_index(t, i)): i for i in range(n_obj)}
+        lab2row = {int(md.i_in_array_to_mask_index(t, i)): i for i in range(n_obj)} if check_metadata else None
         for k, j in enumerate(js):
-            if not has[k]:
+            if coincide[k]:
+                counts['coincident_with_another_click'] += 1
+                status[t, j] = STATUS['excluded_coincident']
+            elif not has[k]:
                 counts['no_segmentation_id'] += 1
+                status[t, j] = STATUS['missed_no_mask']
             elif pseudo[k]:
                 counts['pseudo_mask_label'] += 1
+                status[t, j] = STATUS['missed_no_mask']
             elif shared[k]:
                 counts['object_shared_with_another_gt_neuron'] += 1
-            elif int(lab[k]) not in lab2row:
+                status[t, j] = STATUS['excluded_merge']
+            elif check_metadata and int(lab[k]) not in lab2row:
                 counts['label_not_in_metadata'] += 1
+                status[t, j] = STATUS['missed_label_not_in_metadata']
             else:
-                raw_ind[t, j] = lab2row[int(lab[k])]
+                if check_metadata:
+                    raw_ind[t, j] = lab2row[int(lab[k])]
+                label_out[t, j] = int(lab[k])
+                status[t, j] = STATUS['assigned']
                 counts['assigned'] += 1
-    return raw_ind, counts
+    return raw_ind, counts, status, label_out
 
 
 
@@ -237,6 +303,14 @@ def main():
     ap.add_argument('--edge_um', type=float, default=1.0, help='--rule mask: background clicks this close to a mask')
     ap.add_argument('--coincide_um', type=float, default=1.5,
                     help='--rule mask: clicks of two neurons this close (0: no exclusion)')
+    ap.add_argument('--attach', choices=['edge', 'mahalanobis'], default='edge',
+                    help='--rule mask: how a background click finds a mask (edge: --edge_um; mahalanobis: --attach_dm)')
+    ap.add_argument('--attach_dm', type=float, default=np.sqrt(5.0),
+                    help='--attach mahalanobis: largest Mahalanobis distance (sqrt 5: ellipsoid surface)')
+    ap.add_argument('--no_metadata_check', action='store_true',
+                    help='--rule segmentation_id: keep labels the metadata lacks (status-only GT in NWB label space)')
+    ap.add_argument('--status_only', action='store_true',
+                    help='write only <out_name>_status.npz and the provenance (no tracks h5)')
     ap.add_argument('--keep_shared', action='store_true',
                     help='--rule mask: a mask holding several neurons\' clicks is assigned to all of them')
     ap.add_argument('--voxel_um', type=float, nargs=3, default=[1.5, 0.3226, 0.3226],
@@ -261,14 +335,23 @@ def main():
         raise ValueError(f"GT has {a['gx'].shape[0]} volumes, the project {prj.num_frames}")
 
     if args.rule == 'segmentation_id':
-        raw_ind, counts = assign_clicks_by_segmentation_id(prj, a['gx'], a['gs'], args.max_label)
+        raw_ind, counts, status, label = assign_clicks_by_segmentation_id(
+            prj, a['gx'], a['gs'], args.max_label, gy=a['gy'], gz=a['gz'], voxel_um=args.voxel_um,
+            coincide_um=args.coincide_um, check_metadata=not args.no_metadata_check)
     elif args.rule == 'mask':
-        raw_ind, counts = assign_clicks_by_mask(prj, a['gx'], a['gy'], a['gz'], args.voxel_um, args.edge_um,
-                                                args.coincide_um, keep_shared=args.keep_shared)
+        raw_ind, counts, status, label = assign_clicks_by_mask(
+            prj, a['gx'], a['gy'], a['gz'], args.voxel_um, args.edge_um, args.coincide_um,
+            keep_shared=args.keep_shared, attach=args.attach, attach_dm=args.attach_dm)
     else:
         raw_ind, counts = assign_clicks(prj, a['gx'], a['gy'], a['gz'], args.max_dist_um, args.voxel_um)
+        status = label = None
+    if status is not None:
+        kept = np.isin(status, [STATUS[k] for k in STATUS if k.startswith(('assigned', 'missed'))])
+        counts['kept_clicks'] = int(kept.sum())
+        counts['missed_clicks'] = int(np.isin(status, [STATUS[k] for k in STATUS if k.startswith('missed')]).sum())
+        counts['fraction_of_kept_assigned'] = counts['assigned'] / max(counts['kept_clicks'], 1)
     n_click = np.isfinite(a['gx']).sum(0)
-    coverage = np.isfinite(raw_ind).sum(0) / np.maximum(n_click, 1)
+    coverage = np.isfinite(raw_ind if status is None else label).sum(0) / np.maximum(n_click, 1)
     summary = dict(counts, fraction_assigned=counts['assigned'] / max(counts['gt_clicks'], 1),
                    neurons=len(neurons),
                    per_neuron_coverage_percentiles={p: float(np.percentile(coverage, p)) for p in (0, 10, 50, 90, 100)},
@@ -277,18 +360,24 @@ def main():
     print(json.dumps(summary, indent=1))
     if not args.write:
         return
-
-    df = pd.DataFrame(raw_ind, columns=pd.MultiIndex.from_product([neurons, ['raw_neuron_ind_in_list']]))
-    # Manual GT: likelihood 1 where assigned (wbfm's helper also fails without this column).
-    lik = pd.DataFrame(np.where(np.isfinite(raw_ind), 1.0, np.nan),
-                       columns=pd.MultiIndex.from_product([neurons, ['likelihood']]))
-    df = pd.concat([df, lik], axis=1)
-    df = add_metadata_to_df_raw_ind(df, prj.segmentation_metadata)
-    df = df.sort_index(axis=1)
     project_dir = os.path.dirname(os.path.abspath(args.project))
     out = os.path.join(project_dir, args.out_name)
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    df.to_hdf(out, key='df_with_missing', mode='w')
+    if status is not None:
+        np.savez(os.path.splitext(out)[0] + '_status.npz', status=status, label=label, names=np.array(neurons),
+                 codes=json.dumps(STATUS))
+    if args.status_only:
+        df = None
+
+    if not args.status_only:
+        df = pd.DataFrame(raw_ind, columns=pd.MultiIndex.from_product([neurons, ['raw_neuron_ind_in_list']]))
+        # Manual GT: likelihood 1 where assigned (wbfm's helper also fails without this column).
+        lik = pd.DataFrame(np.where(np.isfinite(raw_ind), 1.0, np.nan),
+                           columns=pd.MultiIndex.from_product([neurons, ['likelihood']]))
+        df = pd.concat([df, lik], axis=1)
+        df = add_metadata_to_df_raw_ind(df, prj.segmentation_metadata)
+        df = df.sort_index(axis=1)
+        df.to_hdf(out, key='df_with_missing', mode='w')
     prov = dict(
         created=datetime.datetime.now().isoformat(timespec='seconds'),
         script='barlow_track/scripts/project_reanalysis/gt_tracks_from_clicks.py',
@@ -298,22 +387,33 @@ def main():
         rule=("nearest segmented-object centroid within max_dist_um (wbfm calc_nearest_neighbor_matches, "
               "um distances); click voxel inside that object's mask; objects nearest to 2+ GT neurons "
               "assigned to none; otherwise NaN") if args.rule == 'centroid' else
-             ("segmentation_id: the GT NWB's raw_segmentation_id; labels >= max_label (pseudo masks) and "
-              "labels held by 2+ neurons' clicks assigned to none; otherwise NaN") if args.rule == 'segmentation_id' else
-             ("mask: the mask at the click voxel, else the nearest mask voxel within edge_um; "
+             ("segmentation_id: the GT NWB's raw_segmentation_id; "
+              + ("clicks with another neuron's click within coincide_um assigned to none; " if args.coincide_um > 0
+                 else "") +
+              "labels >= max_label (pseudo masks) and labels held by 2+ neurons' clicks assigned to none; "
+              + ("labels missing from the metadata kept (NWB label space); " if args.no_metadata_check else "")
+              + "otherwise NaN") if args.rule == 'segmentation_id' else
+             ("mask: the mask at the click voxel, else "
+              + ("the object nearest in Mahalanobis distance within attach_dm; " if args.attach == 'mahalanobis'
+                 else "the nearest mask voxel within edge_um; ")
               + ("clicks with another neuron's click within coincide_um assigned to none; " if args.coincide_um > 0
                  else "") +
               ("a mask holding 2+ neurons' clicks assigned to all of them; " if args.keep_shared else
                "masks holding 2+ neurons' clicks assigned to none; ") + "otherwise NaN"),
         rule_name=args.rule, max_dist_um=args.max_dist_um if args.rule == 'centroid' else None,
         edge_um=args.edge_um if args.rule == 'mask' else None,
-        coincide_um=args.coincide_um if args.rule == 'mask' else None,
+        coincide_um=args.coincide_um if args.rule in ('mask', 'segmentation_id') else None,
+        attach=args.attach if args.rule == 'mask' else None,
+        attach_dm=args.attach_dm if args.rule == 'mask' and args.attach == 'mahalanobis' else None,
+        check_metadata=not args.no_metadata_check if args.rule == 'segmentation_id' else None,
+        status_file=(os.path.splitext(out)[0] + '_status.npz') if status is not None else None,
+        status_codes=STATUS if status is not None else None,
         keep_shared=bool(args.keep_shared) if args.rule == 'mask' else None,
         max_label=args.max_label if args.rule == 'segmentation_id' else None, voxel_um_zxy=list(args.voxel_um),
-        output=out, shape=list(df.shape), summary=summary)
+        output=out, shape=list(df.shape) if df is not None else None, summary=summary)
     with open(os.path.splitext(out)[0] + '_provenance.json', 'w') as f:
         json.dump(prov, f, indent=1)
-    print('wrote', out, df.shape)
+    print('wrote', out if df is not None else os.path.splitext(out)[0] + '_status.npz', df.shape if df is not None else '')
 
     if args.set_final_tracks:
         cfg = prj.project_config.get_tracking_config()

@@ -106,6 +106,7 @@ def main():
     mism = valid & np.isfinite(PM) & (PM != G)
     feats = {k: np.full((T, N), np.nan) for k in BINS}
     err_kind = {}  # (t, j) -> description
+    click_to_pred = {}  # (t, j) -> (click to predicted object, click to GT object), um, mismatches
     vol = np.full((T, N), np.nan)
     bri = np.full((T, N), np.nan)
     for t in range(T):
@@ -150,6 +151,10 @@ def main():
                 dist = float(np.linalg.norm((cen[ip] - cen[i]) * scale)) if ip is not None else np.nan
                 err_kind[(t, j)] = ('mismatch_swap_with_gt' if p in gt_owner else 'mismatch_unannotated_object',
                                     dist)
+                if ip is not None:
+                    # Is the tracker's object nearer the click than the GT's object? (centroid distances)
+                    click_to_pred[(t, j)] = (float(np.linalg.norm((cen[ip] - clicks[j]) * scale)),
+                                             feats['click_obj_um'][t, j])
             elif miss[t, j]:
                 k = trk_owner.get(int(G[t, j]))
                 if k is None:
@@ -175,6 +180,18 @@ def main():
     if len(dists):
         out['mismatch_pred_to_gt_object_um_pct_10_50_90'] = np.nanpercentile(dists, [10, 50, 90]).round(2).tolist()
         out['mismatch_pred_object_within_3um_frac'] = float(np.nanmean(dists < 3))
+
+    if click_to_pred:
+        cp = np.array(list(click_to_pred.values()))
+        out['mismatch_click_to_pred_vs_gt_object_um'] = dict(
+            n=len(cp), click_to_pred_pct_10_50_90=np.percentile(cp[:, 0], [10, 50, 90]).round(2).tolist(),
+            click_to_gt_obj_pct_10_50_90=np.percentile(cp[:, 1], [10, 50, 90]).round(2).tolist(),
+            frac_pred_object_nearer_the_click=round(float(np.mean(cp[:, 0] < cp[:, 1])), 4))
+        far = cp[:, 1] >= 1.5
+        if far.any():
+            out['mismatch_click_to_pred_vs_gt_object_um']['frac_pred_nearer_when_click_1_5um_plus_from_gt_obj'] = \
+                round(float(np.mean(cp[far, 0] < cp[far, 1])), 4)
+            out['mismatch_click_to_pred_vs_gt_object_um']['n_click_1_5um_plus_from_gt_obj'] = int(far.sum())
 
     # Error rate by GT-only property
     by = {}

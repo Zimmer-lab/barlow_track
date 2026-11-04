@@ -18,6 +18,10 @@ track, by an unmatched track, or by no track). Also how errors cluster in time (
 with many errors) and over neurons, and the accuracy left after dropping GT cells by GT-only criteria
 (fixed thresholds, not chosen from the errors).
 
+Without --project (tracks from the NWB path, values = NWB mask labels) only the outcome, error kinds and
+their clustering are computed. --pseudo_min_label splits every rate by whether the GT object's label is at
+or above it (the Leifer re-export's pseudo masks, label 1000 + GT index, built around clicks NeRVE missed).
+
     python .../tracking_error_patterns.py --tracks base_centroidgt.h5 --project .../project_config.yaml \
         --gt_nwb .../Leifer_NeRVE_Worm1_reexport_A2.nwb --out <dir>
 """
@@ -54,7 +58,10 @@ def runs(mask):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--tracks', required=True, help='eval_accuracy --save_tracks h5')
-    ap.add_argument('--project', required=True, help='project_config.yaml whose segmentation was tracked')
+    ap.add_argument('--project', default=None, help='project_config.yaml whose segmentation was tracked '
+                    '(omit for NWB-path tracks: no per-object properties)')
+    ap.add_argument('--pseudo_min_label', type=int, default=None,
+                    help='split rates by GT object label >= this (pseudo masks)')
     ap.add_argument('--gt_nwb', required=True, help='NWB whose final_tracks x/y/z are the manual clicks')
     ap.add_argument('--voxel_um', type=float, nargs=3, default=[1.5, 0.3226, 0.3226])
     ap.add_argument('--out', required=True)
@@ -80,9 +87,11 @@ def main():
                 break
     n_matched_found = len(track_to_gt)
 
-    with open(os.path.join(os.path.dirname(os.path.abspath(args.project)), '1-segmentation', 'metadata.pickle'),
-              'rb') as f:
-        md = pickle.load(f)
+    md = {}
+    if args.project:
+        with open(os.path.join(os.path.dirname(os.path.abspath(args.project)), '1-segmentation',
+                               'metadata.pickle'), 'rb') as f:
+            md = pickle.load(f)
     nwb = ProjectData.load_final_project_data(args.gt_nwb, allow_hybrid_loading=True, verbose=0)
     a = _load_nwb_arrays(nwb)
     missing = [n for n in names if n not in a['neurons']]
@@ -101,10 +110,11 @@ def main():
     bri = np.full((T, N), np.nan)
     for t in range(T):
         d = md.get(t)
-        if d is None or len(d) == 0:
-            continue
-        labels = d['label'].values.astype(int)
-        cen = np.stack(d['centroids'].values).astype(float)
+        if d is not None and len(d):
+            labels = d['label'].values.astype(int)
+            cen = np.stack(d['centroids'].values).astype(float)
+        else:
+            labels, cen = np.zeros(0, int), np.zeros((0, 3))
         lab_to_i = {l: i for i, l in enumerate(labels)}
         gt_owner = {int(G[t, j]): j for j in range(N) if valid[t, j]}
         trk_owner = {}
@@ -115,6 +125,14 @@ def main():
         for j in np.flatnonzero(valid[t]):
             i = lab_to_i.get(int(G[t, j]))
             if i is None:
+                if mism[t, j]:
+                    err_kind[(t, j)] = ('mismatch_swap_with_gt' if int(PM[t, j]) in gt_owner
+                                        else 'mismatch_unannotated_object', np.nan)
+                elif miss[t, j]:
+                    k = trk_owner.get(int(G[t, j]))
+                    err_kind[(t, j)] = ('miss_object_in_no_track' if k is None else
+                                        'miss_object_in_another_neurons_track' if k in track_to_gt else
+                                        'miss_object_in_unmatched_track', np.nan)
                 continue
             feats['n_obj'][t, j] = len(labels)
             feats['click_obj_um'][t, j] = np.linalg.norm((cen[i] - clicks[j]) * scale)
@@ -195,6 +213,21 @@ def main():
         bad = has & (per_t > thr)
         out[f'volumes_with_error_rate_over_{thr}'] = dict(n=int(bad.sum()),
                                                            share_of_errors=round(float(err[bad].sum() / err.sum()), 3))
+
+    if args.pseudo_min_label is not None:
+        ps = valid & (G >= args.pseudo_min_label)
+        pred_ps = mism & (PM >= args.pseudo_min_label)
+        out['pseudo_masks'] = dict(
+            gt_cells=int(ps.sum()), frac_of_gt=round(float(ps.sum() / n_valid), 4),
+            error_rate_on_pseudo=round(float(err[ps].mean()), 4) if ps.any() else None,
+            miss_rate_on_pseudo=round(float(miss[ps].mean()), 4) if ps.any() else None,
+            mismatch_rate_on_pseudo=round(float(mism[ps].mean()), 4) if ps.any() else None,
+            error_rate_on_rest=round(float(err[valid & ~ps].mean()), 4),
+            accuracy_without_pseudo_cells=round(float(1 - err[valid & ~ps].sum() / (valid & ~ps).sum()), 4),
+            mismatches_onto_a_pseudo_object=int(pred_ps.sum()),
+            share_of_errors_on_or_onto_pseudo=round(float(((err & ps) | pred_ps).sum() / err.sum()), 4))
+        kinds_ps = pd.Series([v[0] for (t, j), v in err_kind.items() if ps[t, j]]).value_counts()
+        out['pseudo_masks']['error_kinds_on_pseudo'] = kinds_ps.to_dict()
 
     # Accuracy after GT-only filters (fixed thresholds)
     filt = {'click_obj_um > 1.0': feats['click_obj_um'] > 1.0,

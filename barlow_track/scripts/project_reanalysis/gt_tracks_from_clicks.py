@@ -28,6 +28,15 @@ found 9% of the Leifer clicks inside an object whose centroid is 1.5-2.7 um away
      only if no other click claims it; it never removes a click inside the mask.
   Otherwise the click is assigned to its object.
 
+--rule segmentation_id takes the object from the GT NWB's own raw_segmentation_id, for a project whose
+masks are the NWB's (the NeRVE project Leifer_NeRVE_Worm1_reexport_A2: NeRVE's masks plus pseudo masks,
+label 1000 + GT index, watershed around clicks NeRVE missed):
+  1. A click without a raw_segmentation_id, or with one at or above --max_label (the pseudo masks: built
+     from the click itself, not by the segmentation), is assigned to none.
+  2. A label held by two or more neurons' clicks at t is assigned to none of them (merge).
+  3. A label that is not in the project's segmentation metadata is assigned to none.
+  Otherwise the click is assigned to its labelled object.
+
 The output is a final_3d_tracks_df in the same format as the paper projects' tracks (columns per neuron:
 raw_neuron_ind_in_list plus everything wbfm's add_metadata_to_df_raw_ind fills from the segmentation),
 and a JSON next to it with the parameters, inputs and counts of every exclusion reason.
@@ -170,11 +179,53 @@ def assign_clicks_by_mask(project_data, gx, gy, gz, voxel_um, edge_um, coincide_
     return raw_ind, counts
 
 
+def assign_clicks_by_segmentation_id(project_data, gx, gs, max_label=None):
+    """--rule segmentation_id (module docstring): same outputs as assign_clicks. gx (T, N) marks the
+    clicks (finite where neuron j was clicked at t); gs (T, N) is their raw_segmentation_id."""
+    T, N = gs.shape
+    raw_ind = np.full((T, N), np.nan)
+    counts = dict(gt_clicks=0, no_objects_in_volume=0, no_segmentation_id=0, pseudo_mask_label=0,
+                  object_shared_with_another_gt_neuron=0, label_not_in_metadata=0, assigned=0)
+    md = project_data.segmentation_metadata
+    for t in range(T):
+        js = np.flatnonzero(np.isfinite(gx[t]))
+        counts['gt_clicks'] += len(js)
+        if not len(js):
+            continue
+        n_obj = len(project_data.get_centroids_as_numpy(t))
+        if not n_obj:
+            counts['no_objects_in_volume'] += len(js)
+            continue
+        lab = gs[t, js]
+        has = np.isfinite(lab) & (lab > 0)
+        pseudo = has & (lab >= max_label) if max_label is not None else np.zeros(len(js), bool)
+        ok = has & ~pseudo
+        vals, cnt = np.unique(lab[ok], return_counts=True)
+        shared = ok & np.isin(lab, vals[cnt > 1])
+        lab2row = {int(md.i_in_array_to_mask_index(t, i)): i for i in range(n_obj)}
+        for k, j in enumerate(js):
+            if not has[k]:
+                counts['no_segmentation_id'] += 1
+            elif pseudo[k]:
+                counts['pseudo_mask_label'] += 1
+            elif shared[k]:
+                counts['object_shared_with_another_gt_neuron'] += 1
+            elif int(lab[k]) not in lab2row:
+                counts['label_not_in_metadata'] += 1
+            else:
+                raw_ind[t, j] = lab2row[int(lab[k])]
+                counts['assigned'] += 1
+    return raw_ind, counts
+
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--project', required=True, help='project_config.yaml of the re-segmented project')
     ap.add_argument('--gt_nwb', required=True, help='NWB whose final_tracks x/y/z are the manual GT clicks')
-    ap.add_argument('--rule', choices=['centroid', 'mask'], default='centroid')
+    ap.add_argument('--rule', choices=['centroid', 'mask', 'segmentation_id'], default='centroid')
+    ap.add_argument('--max_label', type=int, default=None,
+                    help='--rule segmentation_id: labels at or above this are pseudo masks, assigned to none')
     ap.add_argument('--max_dist_um', type=float, default=1.0, help='--rule centroid')
     ap.add_argument('--edge_um', type=float, default=1.0, help='--rule mask: background clicks this close to a mask')
     ap.add_argument('--coincide_um', type=float, default=1.5, help='--rule mask: clicks of two neurons this close')
@@ -199,7 +250,9 @@ def main():
     if a['gx'].shape[0] != prj.num_frames:
         raise ValueError(f"GT has {a['gx'].shape[0]} volumes, the project {prj.num_frames}")
 
-    if args.rule == 'mask':
+    if args.rule == 'segmentation_id':
+        raw_ind, counts = assign_clicks_by_segmentation_id(prj, a['gx'], a['gs'], args.max_label)
+    elif args.rule == 'mask':
         raw_ind, counts = assign_clicks_by_mask(prj, a['gx'], a['gy'], a['gz'], args.voxel_um, args.edge_um,
                                                 args.coincide_um)
     else:
@@ -235,12 +288,15 @@ def main():
         rule=("nearest segmented-object centroid within max_dist_um (wbfm calc_nearest_neighbor_matches, "
               "um distances); click voxel inside that object's mask; objects nearest to 2+ GT neurons "
               "assigned to none; otherwise NaN") if args.rule == 'centroid' else
+             ("segmentation_id: the GT NWB's raw_segmentation_id; labels >= max_label (pseudo masks) and "
+              "labels held by 2+ neurons' clicks assigned to none; otherwise NaN") if args.rule == 'segmentation_id' else
              ("mask: the mask at the click voxel, else the nearest mask voxel within edge_um; clicks with "
               "another neuron's click within coincide_um assigned to none; masks holding 2+ neurons' clicks "
               "assigned to none; otherwise NaN"),
         rule_name=args.rule, max_dist_um=args.max_dist_um if args.rule == 'centroid' else None,
         edge_um=args.edge_um if args.rule == 'mask' else None,
-        coincide_um=args.coincide_um if args.rule == 'mask' else None, voxel_um_zxy=list(args.voxel_um),
+        coincide_um=args.coincide_um if args.rule == 'mask' else None,
+        max_label=args.max_label if args.rule == 'segmentation_id' else None, voxel_um_zxy=list(args.voxel_um),
         output=out, shape=list(df.shape), summary=summary)
     with open(os.path.splitext(out)[0] + '_provenance.json', 'w') as f:
         json.dump(prov, f, indent=1)

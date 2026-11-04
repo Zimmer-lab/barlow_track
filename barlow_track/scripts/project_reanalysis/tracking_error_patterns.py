@@ -214,6 +214,21 @@ def main():
         out[f'volumes_with_error_rate_over_{thr}'] = dict(n=int(bad.sum()),
                                                            share_of_errors=round(float(err[bad].sum() / err.sum()), 3))
 
+    # The same predicted tracks matched to GT columns without assuming the GT is complete: 'gt_valid' scores
+    # agreement only on frames with GT, so a track holding an object where the GT is NaN is not penalised
+    from barlow_track.utils.utils_ground_truth import match_columns_to_gt, calculate_accuracy
+    col = 'raw_segmentation_id'
+    gt_mi = pd.DataFrame(G, columns=pd.MultiIndex.from_product([names, [col]]))
+    pa_mi = pd.DataFrame(PA, columns=pd.MultiIndex.from_product([list(map(str, pa.columns)), [col]]))
+    for how in ('nandist', 'gt_valid'):
+        r = match_columns_to_gt(gt_mi, pa_mi, col, gt_matching=how)
+        if 'unmatched_neuron' in r.columns.get_level_values(0):
+            r = r.drop(columns='unmatched_neuron')
+        st = calculate_accuracy(gt_mi.droplevel(1, axis=1),
+                                r.loc[:, (slice(None), col)].droplevel(1, axis=1).reindex(columns=names))
+        out[f'accuracy_rematched_{how}'] = dict(accuracy=round(float(st['accuracy']), 4),
+                                                misses=int(st['total_misses']), mismatches=int(st['total_mismatches']))
+
     if args.pseudo_min_label is not None:
         ps = valid & (G >= args.pseudo_min_label)
         pred_ps = mism & (PM >= args.pseudo_min_label)

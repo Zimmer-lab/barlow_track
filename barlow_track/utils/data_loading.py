@@ -44,6 +44,34 @@ def get_bbox_data_for_volume(project_data, t, target_sz=np.array([8, 64, 64]), r
     return all_dat, all_bbox
 
 
+def _single_time_metadata(project_data, t):
+    """(row_data, column_names) as wbfm's get_all_neuron_metadata_for_single_time(t, as_dataframe=False).
+
+    That call first evaluates volumes_with_no_neurons, a property that rebuilds every frame's
+    centroid array, so it costs O(T) per frame (0.24 s a frame on Leifer, 90% of the eval's
+    per-frame metadata time; quadratic over a video). This builds the same lists from the frame's
+    own table. Falls back to the wbfm call when the table is not a dict of per-frame dataframes
+    or has no frame t (wbfm then raises as before). Raises FileNotFoundError like wbfm when the
+    metadata file is missing.
+    """
+    sm = project_data.segmentation_metadata
+    table = getattr(sm, 'segmentation_metadata', None)
+    if not isinstance(table, dict) or t not in table or not hasattr(sm, '_column_names'):
+        return sm.get_all_neuron_metadata_for_single_time(t, as_dataframe=False)
+    df = table[t]
+    if len(df) == 0:  # wbfm's empty-volume test: no centroid rows
+        return [], []
+    zxy = np.array(df['centroids'].values.tolist())
+    if len(zxy.shape) > 2:  # multiple channels: wbfm averages them
+        zxy = zxy.mean(axis=-1)
+    mask_ind = df['label']
+    index = list(df.index)
+    ind_in_list = [index.index(m) if m in index else None for m in mask_ind]  # mask_index_to_i_in_array
+    row_data = [zxy[:, 0], zxy[:, 1], zxy[:, 2], [1.0] * len(mask_ind), ind_in_list, mask_ind,
+                df['total_brightness'].to_numpy(), df['neuron_volume'].to_numpy()]
+    return row_data, list(sm._column_names)
+
+
 def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 64, 64]), which_neurons=None,
                                         include_untracked=False, skip_crops=False, round_centroids=False):
     """
@@ -84,7 +112,7 @@ def get_bbox_data_for_volume_with_label(project_data, t, target_sz=np.array([8, 
 
     # Use the metadata as calculated in the project
     try:
-        row_data, column_names = project_data.segmentation_metadata.get_all_neuron_metadata_for_single_time(t, as_dataframe=False)
+        row_data, column_names = _single_time_metadata(project_data, t)
         mdata = pd.DataFrame(dict(zip(column_names, row_data)))
     except FileNotFoundError as e:
         # Fallback to the intermediate tracks

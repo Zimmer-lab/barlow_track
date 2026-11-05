@@ -1080,7 +1080,8 @@ def main():
 
 
 def _rows_for_names(project_data, t, names, name_to_seg):
-    row_data, col_names = project_data.segmentation_metadata.get_all_neuron_metadata_for_single_time(t, as_dataframe=False)
+    from barlow_track.utils.data_loading import _single_time_metadata
+    row_data, col_names = _single_time_metadata(project_data, t)
     import pandas as pd
     mdata = pd.DataFrame(dict(zip(col_names, row_data)))
     out = []

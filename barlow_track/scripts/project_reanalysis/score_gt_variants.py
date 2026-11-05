@@ -45,9 +45,18 @@ def main():
         z = np.load(path)
         codes = json.loads(str(z['codes']))
         status, label, names = z['status'], z['label'], list(z['names'])
-        T = min(len(status), len(PA))
-        if len(status) != len(PA):
-            raise SystemExit(f'{vname}: GT has {len(status)} volumes, the tracks {len(PA)}')
+        if len(pa) != len(status):
+            # Volumes without objects get no tracker row (e.g. the NeRVE project's last 13): align by time index
+            idx = np.asarray(pa.index)
+            if not np.issubdtype(idx.dtype, np.integer) or idx.min() < 0 or idx.max() >= len(status):
+                raise SystemExit(f'{vname}: GT has {len(status)} volumes, the tracks {len(pa)} with index '
+                                 f'{idx[:3]}...{idx[-3:]}')
+            print(f'{vname}: tracks cover {len(pa)} of {len(status)} volumes; the rest count as no track', flush=True)
+            pa_v = pa.reindex(range(len(status)))
+            pa_mi_v = pd.DataFrame(pa_v.values.astype(float),
+                                   columns=pd.MultiIndex.from_product([list(map(str, pa.columns)), [col]]))
+        else:
+            pa_mi_v = pa_mi
         assigned = status == codes['assigned']
         missed = np.isin(status, [v for k, v in codes.items() if k.startswith('missed')])
         excluded = np.isin(status, [v for k, v in codes.items() if k.startswith('excluded')])
@@ -55,7 +64,7 @@ def main():
         G = np.where(assigned, label, np.nan)
         gt_mi = pd.DataFrame(G, columns=pd.MultiIndex.from_product([names, [col]]))
         for how in args.matching:
-            r = match_columns_to_gt(gt_mi, pa_mi, col, gt_matching=how)
+            r = match_columns_to_gt(gt_mi, pa_mi_v, col, gt_matching=how)
             if 'unmatched_neuron' in r.columns.get_level_values(0):
                 r = r.drop(columns='unmatched_neuron')
             P = r.loc[:, (slice(None), col)].droplevel(1, axis=1).reindex(columns=names).values.astype(float)

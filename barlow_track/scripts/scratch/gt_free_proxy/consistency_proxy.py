@@ -47,6 +47,8 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--device', default='cuda')
     ap.add_argument('--second_seed', action='store_true')
+    ap.add_argument('--num_seeds', type=int, default=25,
+                    help='label-propagation seed volumes (eval/sweep: 25; tracker default and paper: 100)')
     ap.add_argument('--trials', nargs='*', type=int, default=None)
     args = ap.parse_args()
 
@@ -84,14 +86,16 @@ def main():
         Xs = svd.fit_transform(X)
         print(f'{tag}: {X.shape}, svd {time.time() - t0:.0f}s', flush=True)
         # multi_seed_propagation itself redoes every seed on CPU after a CUDA OOM
-        tracker = consensus_run(Xs, time_to_lin, lin_to_t_seg, 0, args.device)
+        tracker = consensus_run(Xs, time_to_lin, lin_to_t_seg, 0, args.device, num_seeds=args.num_seeds)
         out = dict(tag=tag, round=os.path.basename(args.round), trial=trial, accuracy=rec['accuracy'],
                    train_config={k: rec.get('train_config', {}).get(k) for k in
                                  ('fusion', 'num_frames', 'epochs', 'lr', 'lambd_obj', 'self_layers')})
         out.update(tracker_consistency(tracker, lin_to_t_seg, n_frames))
+        out['num_seeds'] = args.num_seeds
         if args.second_seed:
             final = tracker.labelprop_runs['final_labels']
-            final1 = consensus_run(Xs, time_to_lin, lin_to_t_seg, 1, args.device).labelprop_runs['final_labels']
+            final1 = consensus_run(Xs, time_to_lin, lin_to_t_seg, 1, args.device,
+                                   num_seeds=args.num_seeds).labelprop_runs['final_labels']
             out['ari_seed1'] = float(adjusted_rand_score(final, final1))
         out['seconds'] = round(time.time() - t0, 1)
         with open(args.out, 'a') as f:

@@ -12,6 +12,13 @@ reference_accuracy is each recording's best score from its own GT-tuned per-reco
 2026-11-05: the mean is dominated by saturated datasets, the minimum is too noisy). A trial in which
 any recording fails (no checkpoint, NaN) is a failed trial: Ax leaves it out of the fit.
 
+objective_metric picks what is regretted. 'accuracy' (default) needs GT on every tuning recording.
+A GT-free label-propagation consistency metric (utils_consistency.METRICS, e.g. agree_mean: agreement
+of the 25 per-seed runs with their consensus; the user, 2026-11-05) uses reference_<metric> instead,
+e.g. reference_agree_mean: the best value of that metric on each recording, GT-free if taken as the
+maximum over a round's trials (scratch/gt_free_proxy/proxy_references.py). Every cell still records
+its GT accuracy, so the GT-free selection can be checked afterwards; it never steers the search.
+
 HELD-OUT recordings (heldout_labels) are never trained or scored here; they are listed so the
 template documents the split, and the dispatcher refuses an overlap.
 
@@ -52,8 +59,17 @@ from barlow_track.scripts.scratch.make_per_recording_rounds import round_files
 DEFAULT_QUANTILE = 0.25
 
 
+def metric_value(record, metric):
+    """The objective metric of one cell's eval record (or train_and_score result); None if missing."""
+    if not record:
+        return None
+    if metric == 'accuracy':
+        return oh.objective_value(record.get('accuracy'))
+    return oh.objective_value((record.get('consistency') or {}).get(metric))
+
+
 def regret_objective(accuracy, reference, labels, q=DEFAULT_QUANTILE):
-    """q-quantile (linear interpolation) of accuracy - reference over labels; None if any is missing."""
+    """q-quantile (linear interpolation) of value - reference over labels; None if any is missing."""
     vals = []
     for label in labels:
         a = oh.objective_value(accuracy.get(label))
@@ -83,11 +99,11 @@ def latest_records(results_jsonl):
     return out
 
 
-def train_and_score(cfg, eval_kwargs, tag, results_jsonl, emb_dir, train=True):
+def train_and_score(cfg, eval_kwargs, tag, results_jsonl, emb_dir, train=True, objective_metric=None):
     """One (trial, recording) cell, inside its own Slurm job: train, then score on that recording.
 
-    Returns the accuracy, or None on any failure (logged), so one recording's crash fails the cell
-    rather than the dispatcher.
+    Returns dict(accuracy, consistency) of the eval record, or None on any failure (logged), so one
+    recording's crash fails the cell rather than the dispatcher.
     """
     args = SimpleNamespace(**cfg)
     try:
@@ -96,6 +112,8 @@ def train_and_score(cfg, eval_kwargs, tag, results_jsonl, emb_dir, train=True):
         if ckpt is None:
             raise FileNotFoundError(f"No checkpoint in {args.project_dir}")
         extra = dict(objective='shared_quantile_regret', trial_dir=os.path.abspath(args.project_dir))
+        if objective_metric:
+            extra['objective_metric'] = objective_metric
         if isinstance(test_losses, dict):
             for k in ('test_loss', 'test_loss_original', 'test_loss_transpose'):
                 extra[k] = oh._finite_or_none(test_losses.get(k))
@@ -109,7 +127,7 @@ def train_and_score(cfg, eval_kwargs, tag, results_jsonl, emb_dir, train=True):
         record = oh.evaluate_trained_checkpoint(
             weights=ckpt, project=args.project_path, gt=eval_kwargs.get('gt') or args.project_path,
             tag=tag, results_jsonl=results_jsonl, emb_dir=emb_dir, extra_record=extra, **kwargs)
-        return float(record['accuracy'])
+        return dict(accuracy=record.get('accuracy'), consistency=record.get('consistency'))
     except oh.PretrainedArchitectureMismatchError:
         raise
     except Exception as e:
@@ -130,10 +148,15 @@ class SharedSweep:
         overlap = set(self.labels) & set(self.heldout)
         if overlap:
             raise ValueError(f"tuning_labels and heldout_labels overlap: {sorted(overlap)}")
-        self.reference = {k: float(v) for k, v in (t.get('reference_accuracy') or {}).items()}
+        from barlow_track.utils.utils_consistency import METRICS
+        self.metric = str(t.get('objective_metric', 'accuracy'))
+        if self.metric != 'accuracy' and self.metric not in METRICS:
+            raise ValueError(f"objective_metric {self.metric!r}: use 'accuracy' or one of {METRICS}")
+        ref_key = f'reference_{self.metric}'
+        self.reference = {k: float(v) for k, v in (t.get(ref_key) or {}).items()}
         missing = [l for l in self.labels if l not in self.reference]
         if missing:
-            raise ValueError(f"reference_accuracy missing for tuning labels {missing}")
+            raise ValueError(f"{ref_key} missing for tuning labels {missing}")
         self.q = float(t.get('objective_quantile', DEFAULT_QUANTILE))
         base_path = t['base_train_config']
         if not os.path.isabs(base_path):
@@ -208,26 +231,28 @@ class SharedSweep:
             with open(os.path.join(self.trial_dir(n), 'params.yaml')) as f:
                 saved = yaml.safe_load(f)
             params, seed = saved['params'], int(saved['seed'])
-            acc = {}
+            acc, val = {}, {}
             for label in self.labels:
                 rec = records.get(cell_tag(self.round_dir, n, label))
-                if rec is not None and rec.get('accuracy') is not None:
-                    acc[label] = float(rec['accuracy'])
+                if metric_value(rec, self.metric) is not None:
+                    val[label] = metric_value(rec, self.metric)
+                    if rec.get('accuracy') is not None:
+                        acc[label] = float(rec['accuracy'])
             idx = oh._attach_trial(ax, oh.expand_dotted_params(dict(params)))
-            state[idx] = dict(n=n, params=params, seed=seed, acc=acc, jobs={}, failed=set())
-            obj = regret_objective(acc, self.reference, self.labels, self.q)
+            state[idx] = dict(n=n, params=params, seed=seed, acc=acc, val=val, jobs={}, failed=set())
+            obj = regret_objective(val, self.reference, self.labels, self.q)
             if obj is not None:
                 ax.complete_trial(idx, raw_data={'result': obj})
                 state[idx]['done'] = True
                 print(f"Resumed trial_{n}: complete, objective {obj:+.4f}", flush=True)
                 continue
             for label in self.labels:
-                if label in acc:
+                if label in val:
                     continue
                 cdir = os.path.join(self.trial_dir(n), label)
                 has_ckpt = oh.checkpoint_path(cdir) is not None
                 resubmit.append((idx, label, not has_ckpt))
-            print(f"Resumed trial_{n}: {len(acc)}/{len(self.labels)} cells recorded; "
+            print(f"Resumed trial_{n}: {len(val)}/{len(self.labels)} cells recorded; "
                   f"re-running the rest", flush=True)
 
         if self.run_locally:
@@ -249,7 +274,7 @@ class SharedSweep:
             for v in oh._DISPATCH_THREAD_VARS:
                 os.environ.pop(v, None)
             job = executor.submit(train_and_score, cfg, self.eval_kwargs[label], tag, self.results_jsonl,
-                                  self.emb_dir, train)
+                                  self.emb_dir, train, self.metric)
             for v in oh._DISPATCH_THREAD_VARS:
                 os.environ[v] = '1'
             st['jobs'][label] = job
@@ -275,26 +300,30 @@ class SharedSweep:
                             print(f"trial_{st['n']} / {label}: job error {e}", flush=True)
                             res = None
                         del st['jobs'][label]
-                        if oh.objective_value(res) is None:
+                        value = metric_value(res, self.metric)
+                        if value is None:
                             st['failed'].add(label)
                             print(f"trial_{st['n']} / {label}: FAILED", flush=True)
                         else:
-                            st['acc'][label] = float(res)
-                            print(f"trial_{st['n']} / {label}: accuracy {res:.4f} "
-                                  f"(reference {self.reference[label]:.4f})", flush=True)
+                            st['val'][label] = value
+                            a = oh.objective_value(res.get('accuracy'))
+                            if a is not None:
+                                st['acc'][label] = a
+                            print(f"trial_{st['n']} / {label}: {self.metric} {value:.4f} "
+                                  f"(reference {self.reference[label]:.4f}); accuracy {a}", flush=True)
                 if st.get('done') or st['jobs']:
                     continue
-                if not st['failed'] and len(st['acc']) < len(self.labels):
+                if not st['failed'] and len(st['val']) < len(self.labels):
                     continue
-                obj = None if st['failed'] else regret_objective(st['acc'], self.reference, self.labels, self.q)
+                obj = None if st['failed'] else regret_objective(st['val'], self.reference, self.labels, self.q)
                 if obj is None:
                     oh.log_trial_failure(ax, idx)
                 else:
                     ax.complete_trial(idx, raw_data={'result': obj})
                 st['done'] = True
                 line = dict(trial=st['n'], params=st['params'], seed=st['seed'], objective=obj,
-                            quantile=self.q, accuracy=st['acc'],
-                            regret={l: st['acc'][l] - self.reference[l] for l in st['acc']},
+                            metric=self.metric, quantile=self.q, value=st['val'], accuracy=st['acc'],
+                            regret={l: st['val'][l] - self.reference[l] for l in st['val']},
                             failed=sorted(st['failed']))
                 with open(self.shared_jsonl, 'a') as f:
                     f.write(json.dumps(line) + '\n')
@@ -316,7 +345,7 @@ class SharedSweep:
                     os.makedirs(self.trial_dir(n), exist_ok=False)
                     with open(os.path.join(self.trial_dir(n), 'params.yaml'), 'w') as f:
                         yaml.safe_dump(dict(params=dict(params), seed=seed, ax_index=idx), f)
-                    state[idx] = dict(n=n, params=dict(params), seed=seed, acc={}, jobs={}, failed=set())
+                    state[idx] = dict(n=n, params=dict(params), seed=seed, acc={}, val={}, jobs={}, failed=set())
                     submitted += 1
                     for label in self.labels:
                         submit(idx, label, True)
@@ -338,8 +367,8 @@ class SharedSweep:
         print(f"Best observed: trial_{best['trial']} objective {best['objective']:+.4f}; "
               f"params {best['params']}", flush=True)
         with open(os.path.join(self.round_dir, 'best_parameters.yaml'), 'w') as f:
-            yaml.safe_dump(dict(trial=best['trial'], objective=best['objective'], params=best['params'],
-                                accuracy=best['accuracy']), f)
+            yaml.safe_dump(dict(trial=best['trial'], objective=best['objective'], metric=best.get('metric', 'accuracy'),
+                                params=best['params'], value=best.get('value'), accuracy=best['accuracy']), f)
 
 
 def main():
@@ -356,7 +385,7 @@ def main():
     budget = a.total_budget or int(sweep.tpl.get('total_budget', 40))
     par = a.num_parallel_trials or int(sweep.tpl.get('num_parallel_trials', 2))
     print(f"Shared sweep {sweep.round_name}: tuning {sweep.labels}, held out {sweep.heldout}; objective "
-          f"= {sweep.q:.2f}-quantile of (accuracy - reference); {budget} trials, {par} in flight "
+          f"= {sweep.q:.2f}-quantile of ({sweep.metric} - reference); {budget} trials, {par} in flight "
           f"({par * len(sweep.labels)} GPU jobs)", flush=True)
     sweep.run(budget, par)
 

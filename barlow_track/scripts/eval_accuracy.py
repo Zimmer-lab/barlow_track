@@ -798,6 +798,13 @@ def run_eval(args):
         else:
             df_pred = tracker.track_using_global_clusterer()
         print(f"[{args.lab}/{mode}] tracked in {time.time()-t2:.0f}s; df {df_pred.shape}", flush=True)
+        # GT-free self-consistency of the label-propagation run (agreement of the per-seed runs with
+        # their consensus), recorded beside the accuracy; the shared sweep can optimize it
+        from barlow_track.utils.utils_consistency import tracker_consistency
+        consistency = tracker_consistency(tracker, lin_to_t_seg, n_frames)
+        if consistency is not None:
+            print(f"[{args.lab}/{mode}] consistency: agree_mean {consistency['agree_mean']:.4f}, "
+                  f"conf_mean {consistency['conf_mean']:.4f}", flush=True)
 
         if args.source == 'nwb':
             # GT ids come straight from the NWB; match on neuron index, no
@@ -891,6 +898,7 @@ def run_eval(args):
                    nwb_gt_mapping=(getattr(args, 'nwb_gt_mapping', 'centroid') if nwb_all else None),
                    nwb_arrays=('by_name' if args.source == 'nwb' else None),
                    emb_path=os.path.abspath(emb_path),
+                   consistency=consistency,
                    accuracy=float(stats['accuracy']),
                    misses=int(stats['total_misses']),
                    mismatches=int(stats['total_mismatches']),

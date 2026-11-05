@@ -537,6 +537,9 @@ class WormClusterTracker:
         attribute, and if neither is set the run stays unseeded (as before).
         """
         run_seed = self.seed if seed is None else seed
+        # Per-seed labelings and their spectral-sync alignment, kept for GT-free consistency metrics
+        # (utils_consistency.tracker_consistency); None unless spectral relabeling runs
+        self.labelprop_runs = None
         if num_seeds is None:
             # Historical default, kept as-is: it is a fraction of num_frames,
             # not of the number of keys in the time index.
@@ -569,6 +572,8 @@ class WormClusterTracker:
             )
             final_labels = final_labels[:, 0]
             confidence = confidence[:, 0]
+            self.labelprop_runs = dict(labelings=labelings, perms=perms, final_labels=final_labels,
+                                       confidence=confidence)
         else:
             # Rolling reference
             all_aligned, final_labels, confidence = align_all(labelings, self.time_index_to_linear_feature_indices)

@@ -281,6 +281,71 @@ def round_block_to_partial_perm(V_block, null_cost=None):
             mapping[r] = -1
     return mapping
 
+def rotate_to_anchors(V):
+    """Rotate the singular vectors V ((R*K) x d) so that rounding each run's block is meaningful.
+
+    The top singular subspace of S = [A_0 | ... | A_{R-1}] is only defined up to a d x d rotation, and
+    with column weighting every consensus label has about the same singular value, so that rotation is
+    arbitrary; round_block_to_partial_perm on an unrotated block then compares run labels with
+    arbitrary mixtures of consensus labels. Pivoted QR on V^T picks d well-separated rows (one run
+    label per consensus label) as anchors, and the orthogonal polar factor of those rows rotates V so
+    each anchor lies on one axis (Damle, Minden and Ying 2019, CPQR rounding for spectral clustering).
+    Rotation-invariant: the result does not depend on the basis the SVD returned.
+    """
+    from scipy.linalg import qr
+    d = V.shape[1]
+    _, _, piv = qr(V.T, mode='economic', pivoting=True)
+    U, _, Wt = np.linalg.svd(V[piv[:d], :].T)
+    return V @ (U @ Wt)
+
+
+def perm_matrix(perm, K):
+    """Sparse K x K matrix with a 1 at (run label j, consensus label perm[j]) for perm[j] >= 0."""
+    perm = np.asarray(perm)
+    j = np.nonzero(perm >= 0)[0]
+    return sp.csr_matrix((np.ones(len(j)), (j, perm[j])), shape=(K, K))
+
+
+def refine_perms(A_list, perms, K, n_iter=10, min_overlap=0.05, verbose=False):
+    """Alternating refinement of the run-to-consensus permutations.
+
+    Repeat: build the consensus C = sum_r A_r P_r; for each run, the overlap of its labels with the
+    consensus labels of the OTHER runs, M_r = A_r^T (C - A_r P_r) (K x K), and the Hungarian
+    assignment maximizing it (a run label maps to no consensus label if its best overlap is below
+    min_overlap of what full agreement would give, count_j * (R - 1)). Stops when no permutation
+    changes. Each step cannot decrease the total agreement sum_r <A_r P_r, C - A_r P_r>.
+    """
+    R = len(A_list)
+    perms = [np.asarray(p).copy() for p in perms]
+    P = [perm_matrix(p, K) for p in perms]
+    for it in range(n_iter):
+        C = sp.csr_matrix((A_list[0].shape[0], K))
+        for A, Pm in zip(A_list, P):
+            C = C + A @ Pm
+        changed = 0
+        for r, A in enumerate(A_list):
+            own = A @ P[r]
+            M = (A.T @ (C - own)).toarray()  # K x K
+            counts = np.asarray(A.sum(axis=0)).ravel()
+            null = min_overlap * counts * max(R - 1, 1)
+            # rectangular assignment: K run labels -> K consensus labels + one null per run label
+            cost = np.hstack([-M, np.tile(-null[:, None], (1, K))])
+            row, col = linear_sum_assignment(cost)
+            new = np.full(K, -1, dtype=int)
+            for j, c in zip(row, col):
+                new[j] = int(c) if c < K else -1
+            new[counts == 0] = perms[r][counts == 0]  # unused run labels keep their mapping
+            if not np.array_equal(new, perms[r]):
+                changed += 1
+                perms[r] = new
+                P[r] = perm_matrix(new, K)
+        if verbose:
+            print(f"[info] refine iteration {it}: {changed} of {R} permutations changed")
+        if changed == 0:
+            break
+    return perms
+
+
 ###########################
 # 6) Aggregate per-object consensus
 ###########################
@@ -295,15 +360,15 @@ def aggregate_consensus(A_list, perms, K, normalize_rows=True, doweight_runs=Non
     cons = np.zeros((N, K), dtype=float)
     if doweight_runs is None:
         doweight_runs = np.ones(R, dtype=float)
-    for r, A in tqdm(enumerate(A_list), desc="Aggregating runs", total=len(A_list), leave=False):
-        perm = perms[r]  # length K with -1 allowed
+    for r, A in enumerate(A_list):
         if A.nnz == 0:
             continue
+        # cons[i, perm[j]] += w_r * A[i, j] for every entry with perm[j] >= 0 (vectorised; same sums)
+        perm = np.asarray(perms[r])
         A_coo = A.tocoo()
-        for i, j, v in zip(A_coo.row, A_coo.col, A_coo.data):
-            mapped = perm[j]  # <-- Apply permutation here!
-            if mapped >= 0:
-                cons[i, mapped] += doweight_runs[r] * v
+        mapped = perm[A_coo.col]
+        keep = mapped >= 0
+        np.add.at(cons, (A_coo.row[keep], mapped[keep]), doweight_runs[r] * A_coo.data[keep])
     return cons
 
 
@@ -434,7 +499,7 @@ def spectral_sync_from_topk(labels_list, probs_list,
                             do_col_weighting=True, weighting_strategy='invsqrt-count',
                             use_matrix_free=False, svd_params=None,
                             null_cost=None, normalize_input_rows=True, input_probability_threshold=0.0, 
-                            verbose=True, DEBUG=False):
+                            verbose=True, DEBUG=False, rounding='independent', refine_iters=0):
     """
     runs_topk: list of run dicts mapping obj->[(label,prob), ...]
     K: number of labels; safe to overestimate
@@ -442,6 +507,12 @@ def spectral_sync_from_topk(labels_list, probs_list,
       perms: list (R) of mapping arrays (length K) with values -1..K-1
       consensus_probs: N x K array
       diagnostics dict
+
+    rounding: 'independent' (historical) rounds each run's block of singular vectors as returned by
+      the SVD; 'cpqr' first rotates them onto anchor rows (rotate_to_anchors), which makes the
+      rounding independent of the arbitrary basis of the singular subspace.
+    refine_iters: > 0 refines the rounded permutations by alternating Hungarian re-alignment of each
+      run to the consensus of the others (refine_perms), at most this many sweeps.
     """
     if svd_params is None:
         svd_params = dict(n_oversamples=20, n_iter=2)
@@ -510,12 +581,18 @@ def spectral_sync_from_topk(labels_list, probs_list,
         print(f"[info] SVD done: V shape {V.shape}. Time elapsed: {time.time()-t0:.1f}s")
 
     # 4) split into blocks and round
+    if rounding == 'cpqr':
+        V = rotate_to_anchors(V)
+    elif rounding != 'independent':
+        raise ValueError(f"Unknown rounding {rounding!r}; use 'independent' or 'cpqr'")
     perms = []
     for r in range(R):
         start = r*K
         block = V[start:start+K, :]  # K x K
         perm = round_block_to_partial_perm(block, null_cost=null_cost)
         perms.append(perm)
+    if refine_iters:
+        perms = refine_perms(A_list, perms, K, n_iter=int(refine_iters), verbose=verbose)
 
     # 5) aggregate consensus probabilities
     cons = aggregate_consensus(A_list, perms, K, normalize_rows=True)

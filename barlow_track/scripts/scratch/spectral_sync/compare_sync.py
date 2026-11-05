@@ -23,8 +23,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 C = '/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files'
 VARIANTS = {
-    'independent': dict(),
-    'refine': dict(refine_iters=10),
+    'independent': dict(rounding='independent', refine_iters=0),
+    'refine': dict(rounding='independent', refine_iters=10),
     'cpqr_refine': dict(rounding='cpqr', refine_iters=10),
 }
 

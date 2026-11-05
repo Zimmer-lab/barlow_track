@@ -494,12 +494,21 @@ def enforce_temporal_uniqueness_hungarian(consensus_probs, time_index_to_linear_
 # 7) Full pipeline wrapper
 ###########################
 
+# Default rounding of the spectral sync since 2026-11-05 (the user): CPQR anchor rotation, then Hungarian
+# refinement. On 7 sweep networks (Samuel 137/184, Zimmer 1210, Flavell 2022033002) it changed accuracy
+# by -0.26 to +1.15 pt, mean +0.22 pt, vs the historical rounding='independent', refine_iters=0, which
+# every record before then used (scratch/spectral_sync/compare_sync.py).
+DEFAULT_ROUNDING = 'cpqr'
+DEFAULT_REFINE_ITERS = 10
+
+
 def spectral_sync_from_topk(labels_list, probs_list,
                             time_index_to_linear_feature_indices,
                             do_col_weighting=True, weighting_strategy='invsqrt-count',
                             use_matrix_free=False, svd_params=None,
                             null_cost=None, normalize_input_rows=True, input_probability_threshold=0.0, 
-                            verbose=True, DEBUG=False, rounding='independent', refine_iters=0):
+                            verbose=True, DEBUG=False, rounding=DEFAULT_ROUNDING,
+                            refine_iters=DEFAULT_REFINE_ITERS):
     """
     runs_topk: list of run dicts mapping obj->[(label,prob), ...]
     K: number of labels; safe to overestimate
@@ -508,11 +517,11 @@ def spectral_sync_from_topk(labels_list, probs_list,
       consensus_probs: N x K array
       diagnostics dict
 
-    rounding: 'independent' (historical) rounds each run's block of singular vectors as returned by
-      the SVD; 'cpqr' first rotates them onto anchor rows (rotate_to_anchors), which makes the
-      rounding independent of the arbitrary basis of the singular subspace.
-    refine_iters: > 0 refines the rounded permutations by alternating Hungarian re-alignment of each
-      run to the consensus of the others (refine_perms), at most this many sweeps.
+    rounding: 'cpqr' (default) rotates the singular vectors onto anchor rows (rotate_to_anchors) before
+      rounding each run's block, which makes the rounding independent of the arbitrary basis of the
+      singular subspace; 'independent' (historical, before 2026-11-05) rounds them as the SVD returns them.
+    refine_iters: > 0 (default 10) refines the rounded permutations by alternating Hungarian re-alignment
+      of each run to the consensus of the others (refine_perms), at most this many sweeps; 0 = historical.
     """
     if svd_params is None:
         svd_params = dict(n_oversamples=20, n_iter=2)

@@ -572,8 +572,10 @@ class WormClusterTracker:
             )
             final_labels = final_labels[:, 0]
             confidence = confidence[:, 0]
+            from barlow_track.utils.utils_spectral_relabeling import DEFAULT_ROUNDING, DEFAULT_REFINE_ITERS
             self.labelprop_runs = dict(labelings=labelings, perms=perms, final_labels=final_labels,
-                                       confidence=confidence)
+                                       confidence=confidence,
+                                       sync=f'{DEFAULT_ROUNDING}_refine{DEFAULT_REFINE_ITERS}')
         else:
             # Rolling reference
             all_aligned, final_labels, confidence = align_all(labelings, self.time_index_to_linear_feature_indices)

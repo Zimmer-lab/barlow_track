@@ -75,9 +75,13 @@ def labelprop_consistency(labelings, perms, final_labels, confidence, lin_to_t, 
 
 
 def tracker_consistency(tracker, lin_to_t, n_frames):
-    """labelprop_consistency of a WormClusterTracker's last spectral-sync label-propagation run, or None."""
+    """labelprop_consistency of a WormClusterTracker's last spectral-sync label-propagation run (plus the
+    sync variant that produced it, 'sync'), or None."""
     runs = getattr(tracker, 'labelprop_runs', None)
     if not runs:
         return None
-    return labelprop_consistency(runs['labelings'], runs['perms'], runs['final_labels'], runs['confidence'],
-                                 lin_to_t, n_frames)
+    m = labelprop_consistency(runs['labelings'], runs['perms'], runs['final_labels'], runs['confidence'],
+                              lin_to_t, n_frames)
+    # agreement depends on the sync's rounding (refinement raises it); compare only like with like
+    m['sync'] = runs.get('sync', 'independent_refine0')
+    return m

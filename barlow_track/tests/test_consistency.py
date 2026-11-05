@@ -54,17 +54,19 @@ def _consistency(noise):
     tracker = WormClusterTracker(X, dict(time_to_lin), linear_ind_to_t_and_seg_id=lin_to_t_seg, seed=0)
     assert tracker_consistency(tracker, lin_to_t_seg, 12) is None  # nothing tracked yet
     tracker.track_using_label_propagation_clusterer(num_seeds=6, num_neighbors=5, device='cpu')
-    return tracker_consistency(tracker, lin_to_t_seg, 12)
+    m = tracker_consistency(tracker, lin_to_t_seg, 12)
+    assert m['sync'] == 'cpqr_refine10'
+    return m
 
 
 def test_separable_objects_track_consistently_and_overlapping_ones_do_not():
-    # Clean blobs give ~0.72, not 1: the blobs are equal-sized, so the spectral sync's singular values
-    # tie and rounding each run's block on its own misaligns some runs. On real data the permutations
-    # are near-optimal (Samuel 137 trial 63: 0.643 through the perms vs 0.664 for the best per-run
-    # Hungarian matching), so this is a property of the synthetic data, not of the metric.
+    # Clean blobs give ~0.88 (0.72 with the historical independent rounding), not 1: the blobs are
+    # equal-sized, so the spectral sync's singular values tie and some runs stay misaligned. This is a
+    # property of the synthetic data, not of the metric (Samuel 137 trial 63, historical rounding: 0.643
+    # through the perms vs 0.664 for the best per-run Hungarian matching).
     clean, noisy = _consistency(0.3), _consistency(6.0)
     assert clean['n_runs'] == 6 and clean['n_objects'] == 72
-    assert clean['agree_mean'] > 0.6
+    assert clean['agree_mean'] > 0.8
     assert noisy['agree_mean'] < clean['agree_mean'] - 0.2
 
 
@@ -141,17 +143,18 @@ def test_anchor_rotation_does_not_depend_on_the_svd_basis():
 def test_refinement_tracks_noisy_runs_at_least_as_well(kw):
     from barlow_track.utils.utils_spectral_relabeling import spectral_sync_from_topk
     labs, probs, t2l, obj = _synthetic_runs(flip=0.25)
-    base = spectral_sync_from_topk(labs, probs, t2l, verbose=False)[1][:, 0]
+    base = spectral_sync_from_topk(labs, probs, t2l, verbose=False, rounding='independent',
+                                   refine_iters=0)[1][:, 0]
     new = spectral_sync_from_topk(labs, probs, t2l, verbose=False, **kw)[1][:, 0]
     assert _purity(new, obj) >= _purity(base, obj) - 1e-9
     assert _purity(new, obj) > 0.9
 
 
-def test_default_sync_is_unchanged_by_the_new_options():
+def test_default_sync_is_cpqr_with_refinement():
     from barlow_track.utils.utils_spectral_relabeling import spectral_sync_from_topk
     labs, probs, t2l, _ = _synthetic_runs()
     a = spectral_sync_from_topk(labs, probs, t2l, verbose=False)
-    b = spectral_sync_from_topk(labs, probs, t2l, verbose=False, rounding='independent', refine_iters=0)
+    b = spectral_sync_from_topk(labs, probs, t2l, verbose=False, rounding='cpqr', refine_iters=10)
     assert all(np.array_equal(x, y) for x, y in zip(a[0], b[0]))
     np.testing.assert_array_equal(a[1], b[1])
     with pytest.raises(ValueError):

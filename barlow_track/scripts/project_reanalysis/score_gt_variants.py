@@ -30,6 +30,9 @@ def main():
     ap.add_argument('--tracks', required=True)
     ap.add_argument('--variants', nargs='+', required=True, help='NAME=status.npz')
     ap.add_argument('--matching', nargs='+', default=['gt_valid', 'nandist'])
+    ap.add_argument('--split_label_at', type=int, default=None,
+                    help='also report accuracy on assigned clicks with GT label below / at or above this '
+                         '(e.g. 1000: NeRVE masks vs pseudo masks built from the clicks)')
     ap.add_argument('--name', default=None, help='label for this tracking run in the output')
     ap.add_argument('--out', required=True, help='directory; appends to scores.jsonl')
     args = ap.parse_args()
@@ -82,6 +85,14 @@ def main():
                        accuracy_all_kept=round(float(correct.sum() / max(kept.sum(), 1)), 4),
                        **{f'missed_{k[len("missed_"):]}': int((status == v).sum())
                           for k, v in codes.items() if k.startswith('missed')})
+            if args.split_label_at is not None:
+                for part, sel in (('below', assigned & (G < args.split_label_at)),
+                                  ('at_or_above', assigned & (G >= args.split_label_at))):
+                    rec[f'label_{part}_{args.split_label_at}'] = dict(
+                        assigned=int(sel.sum()), correct=int((sel & (P == G)).sum()),
+                        tracker_misses=int((sel & ~np.isfinite(P)).sum()),
+                        mismatches=int((sel & np.isfinite(P) & (P != G)).sum()),
+                        accuracy=round(float((sel & (P == G)).sum() / max(sel.sum(), 1)), 4))
             rows.append(rec)
             print(json.dumps({k: v for k, v in rec.items() if k not in ('status_file', 'tracks')}), flush=True)
     with open(os.path.join(args.out, 'scores.jsonl'), 'a') as f:

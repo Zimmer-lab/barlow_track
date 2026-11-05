@@ -162,7 +162,7 @@ def load_frames(args):
                 n_bad += int(not ok)
         if n_bad:
             raise RuntimeError(f"{n_bad} checked frames: centroid rows != raw_neuron_ind_in_list order")
-        df_gt = _load_project_gt(args.gt or args.project)
+        df_gt = None if args.no_score else _load_project_gt(args.gt or args.project)
         match_col = 'raw_segmentation_id'
         puc = src.physical_unit_conversion
         um_xy, um_z = puc.zimmer_fluroscence_um_per_pixel_xy, puc.zimmer_um_per_pixel_z
@@ -319,7 +319,14 @@ def main():
     ap.add_argument('--threads', type=int, default=4)
     ap.add_argument('--out_dir', default=OUT_DIR)
     ap.add_argument('--tag', default=None)
+    ap.add_argument('--save_tracks', action='store_true',
+                    help='project source: also write <tag>_<variant>_tracks.h5, key pred_all (one column per '
+                         'template neuron, values = mask labels), for score_gt_variants.py')
+    ap.add_argument('--no_score', action='store_true',
+                    help='skip the built-in scoring (e.g. a project whose GT is scored offline)')
     args = ap.parse_args()
+    if args.save_tracks and args.source != 'project':
+        raise ValueError('--save_tracks needs --source project (mask labels from the segmentation metadata)')
     if args.source == 'project' and args.project is None:
         from barlow_track.scripts.multiproject_scripts.run_trials_on_all_ground_truth import DATASETS
         spec = DATASETS[args.dataset]
@@ -341,7 +348,7 @@ def main():
     frames, df_gt, match_col, src, info = load_frames(args)
     n_frames = info['n_frames']
     print(f"[{tag}] loaded {n_frames} frames, {info['objects_per_frame']:.1f} objects/frame, "
-          f"GT {df_gt.columns.get_level_values(0).nunique()} neurons ({time.time()-t_start:.0f}s)", flush=True)
+          f"GT {df_gt.columns.get_level_values(0).nunique() if df_gt is not None else '-'} neurons ({time.time()-t_start:.0f}s)", flush=True)
     if args.n_spread:
         extra = np.linspace(0, n_frames - 1, args.n_spread + 2)[1:-1].round().astype(int).tolist()
         args.templates = list(args.templates) + [t for t in extra if t not in args.templates]
@@ -364,8 +371,17 @@ def main():
     def record(variant, all_matches, n_template, t_track, templates):
         df_pred = matches_to_df(all_matches, frames, n_template, n_frames)
         t1 = time.time()
-        stats, n_gt, n_assigned = score_like_run_eval(df_pred, df_gt, match_col, src)
-        stats_v, _, _ = score_like_run_eval(df_pred, df_gt, match_col, src, gt_matching='gt_valid')
+        if args.save_tracks:
+            from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind
+            lab = add_metadata_to_df_raw_ind(df_pred.copy(), src.segmentation_metadata)
+            pa = lab.loc[:, (slice(None), 'raw_segmentation_id')].droplevel(1, axis=1).astype(float)
+            pa.to_hdf(os.path.join(args.out_dir, f"{tag}_{variant}_tracks.h5"), key='pred_all', mode='w')
+        if args.no_score:
+            stats = stats_v = dict(accuracy=np.nan, total_misses=-1, total_mismatches=-1, total_ground_truth=-1)
+            n_gt = n_assigned = -1
+        else:
+            stats, n_gt, n_assigned = score_like_run_eval(df_pred, df_gt, match_col, src)
+            stats_v, _, _ = score_like_run_eval(df_pred, df_gt, match_col, src, gt_matching='gt_valid')
         rec = dict(tag=f"{tag}_{variant}", dataset=args.dataset, method='fDNC', variant=variant,
                    model=os.path.abspath(args.model_path), source=args.source,
                    project=args.project, gt=args.gt or args.nwb, templates=templates,

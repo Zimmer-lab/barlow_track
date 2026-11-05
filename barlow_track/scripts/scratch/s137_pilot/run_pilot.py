@@ -61,6 +61,9 @@ def run_variant(name, project_path=None, train_only=False):
     # Local runs: 4 DataLoader workers (data-bound at 0; step-0 loss bit-identical and val loss
     # within run-to-run noise, notebook 2026-10-30, aab23eb). Every variant gets it, so they compare.
     cfg['num_workers'] = 4
+    # Recorded runs (2026-11-02 to 11-05) trained before reaugment_each_epoch defaulted to true;
+    # pin the old default so every non-reaug variant reproduces
+    cfg.setdefault('reaugment_each_epoch', False)
     cfg.update(VARIANTS[name])
     if project_path:
         cfg['project_path'] = project_path

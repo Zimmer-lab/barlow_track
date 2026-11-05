@@ -146,6 +146,19 @@ class _PhaseTimer:
         self.totals, self.counts = {}, {}
 
 
+def reaugment_enabled(args, use_position):
+    """Whether the position pipeline draws new augmented views every epoch.
+
+    VolumeCoordsDataset draws each item's augmentation from (seed, epoch, index), and
+    without a Lightning trainer its epoch stays 0 unless set_epoch advances it. Default
+    on since 2026-11-05 (a261027-1). Position runs from 80a2bbd (2026-10-05) until then
+    repeated one fixed view pair per frame every epoch (i261027-1); their saved configs
+    lack the key, so reproducing one needs reaugment_each_epoch: false. The legacy crop
+    pipeline draws from the global RNG and is unaffected.
+    """
+    return bool(getattr(args, 'reaugment_each_epoch', True)) and bool(use_position)
+
+
 def train_barlow_network(args):
     _warn_unread_config_keys(args)
 
@@ -294,11 +307,7 @@ def train_barlow_network(args):
     num_skipped_batches = 0
     prev_gate = None  # previous attention-gate value, for update magnitudes
     gate_grad_norm = None  # captured after backward, before grads are cleared
-    # VolumeCoordsDataset draws each item's augmentation from (seed, epoch, index), and
-    # without a Lightning trainer its epoch stays 0, so every epoch repeats the same view
-    # pairs. reaugment_each_epoch advances it; off by default to keep existing runs
-    # reproducible. The legacy crop pipeline draws from the global RNG and needs nothing.
-    reaugment = bool(getattr(args, 'reaugment_each_epoch', False)) and use_position
+    reaugment = reaugment_enabled(args, use_position)
     timer = _PhaseTimer(bool(getattr(args, 'timing_log', False)), gpu)
     # epoch_snapshots (default none): epoch counts after which to keep the weights, e.g.
     # [1, 2, 5, 10, 20], each a loadable model folder (see _save_epoch_snapshot)

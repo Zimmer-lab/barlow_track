@@ -178,3 +178,13 @@ def test_train_out_of_memory_is_a_failure_with_the_partial_model_aside(tmp_path,
     assert (Path(tmp_path) / 'resnet50_oom.pth').exists()
     assert not (Path(tmp_path) / 'resnet50.pth').exists()
     assert check_training_finished(str(tmp_path), args.epochs - 1) is False
+
+
+def test_reaugment_each_epoch_defaults_on_for_the_position_pipeline():
+    """Views are re-drawn every epoch unless a config pins false (a261027-1)."""
+    from types import SimpleNamespace
+    from barlow_track.scripts.train_barlow_clusterer import reaugment_enabled
+    assert reaugment_enabled(SimpleNamespace(), use_position=True)
+    assert not reaugment_enabled(SimpleNamespace(reaugment_each_epoch=False), use_position=True)
+    assert reaugment_enabled(SimpleNamespace(reaugment_each_epoch=True), use_position=True)
+    assert not reaugment_enabled(SimpleNamespace(), use_position=False)  # legacy crops draw fresh anyway

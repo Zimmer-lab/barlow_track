@@ -52,6 +52,10 @@ seed: 43
 # (augmentation is keyed by seed+epoch+index, not by a per-worker stream), but
 # each worker holds one volume in memory, so raise it only when RAM allows.
 num_workers: 0
+# Position pipeline: draw new augmented views every epoch (default true since
+# 2026-11-05). false repeats one fixed view pair per frame for all epochs, as every
+# position run from 2026-10-05 to 2026-11-05 did; set it only to reproduce those.
+reaugment_each_epoch: true
 
 # Hyperparameters for the new (transposed) BarlowTrack loss
 lambd_obj: 0.67  # Set to 1 to only use the transposed loss; 0 means only original BarlowTwins loss

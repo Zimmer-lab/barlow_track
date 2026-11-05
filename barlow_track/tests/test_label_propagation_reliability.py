@@ -144,3 +144,29 @@ def test_null_option_is_scaled_by_number_of_runs():
     consensus = np.array([[10.0], [40.0], [5.0]])
     labels, _ = enforce_temporal_uniqueness_hungarian(consensus, {0: [0, 1, 2]}, R)[:2]
     assert labels[:, 0].tolist() == [-1, 1, -1]
+
+
+def test_cuda_oom_falls_back_to_cpu_with_the_same_labels(monkeypatch):
+    """A CUDA OOM mid-propagation redoes every seed on CPU instead of failing the eval."""
+    rng = np.random.default_rng(0)
+    T, n = 6, 5
+    X = np.concatenate([rng.normal(i * 10, 0.1, size=(T, 4)) for i in range(n)]).astype(np.float32)
+    # object i of frame t is row i * T + t
+    t2l = {t: [i * T + t for i in range(n)] for t in range(T)}
+    kw = dict(k=4, random_state=0, return_top_k=1, num_layers=10, softmax=False, tau=0.02)
+    ref, _ = lp.multi_seed_propagation(X, [0, 3], t2l, device=None, **kw)
+
+    original = lp._propagate_all_seeds
+    calls = []
+
+    def fake(edge_index, num_nodes, slices, t2l_, device, **kwargs):
+        calls.append(device)
+        if device is not None:
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory. Tried to allocate 2 GiB")
+        return original(edge_index, num_nodes, slices, t2l_, device, **kwargs)
+
+    monkeypatch.setattr(lp, '_propagate_all_seeds', fake)
+    got, _ = lp.multi_seed_propagation(X, [0, 3], t2l, device='cuda', **kw)
+    assert calls == ['cuda', None]
+    for a, b in zip(ref, got):
+        np.testing.assert_array_equal(a, b)

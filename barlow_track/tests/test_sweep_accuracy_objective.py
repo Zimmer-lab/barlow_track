@@ -461,8 +461,15 @@ def test_track_device_cuda_falls_back_when_cuda_is_absent(monkeypatch):
     assert ea.resolve_track_device(args, torch.device('cpu')) is None
 
 
-def test_sweep_defaults_objective_tracking_to_cpu():
+def test_sweep_defaults_objective_tracking_to_the_trial_gpu():
+    # In-job evals track on the trial's GPU with training-like (sliding) GPU crops; a CPU-only eval
+    # job, or an explicit objective_track_device, tracks on CPU
     _, _, kwargs = oh.resolve_objective({'objective': 'accuracy'})
+    assert kwargs['track_device'] == 'cuda'
+    assert kwargs['crop_window'] == 'slide'
+    _, _, kwargs = oh.resolve_objective({'objective': 'accuracy', 'objective_cpu_job': True})
+    assert kwargs['track_device'] == 'cpu'
+    _, _, kwargs = oh.resolve_objective({'objective': 'accuracy', 'objective_track_device': 'cpu'})
     assert kwargs['track_device'] == 'cpu'
 
 
@@ -823,3 +830,11 @@ def test_objective_snapshots_scores_each_epoch_snapshot_after_the_final(tmp_path
     _, label, kwargs = oh.resolve_objective({'objective': 'accuracy', 'objective_dataset': 'zimmer_1128'})
     oh.measure_tracking_accuracy(args, {}, str(tmp_path / 'sweep'), label, 'accuracy', 'r.jsonl', 'emb', kwargs)
     assert [c[1] for c in calls] == [tag]
+
+
+def test_objective_tracks_on_the_gpu_in_job_and_on_cpu_in_cpu_jobs():
+    """In-job evals propagate labels on the trial's GPU (with GPU crops matching training);
+    CPU-only jobs (objective_cpu_job, train_cpu_job) track on CPU."""
+    assert oh.default_objective_track_device({}) == 'cuda'
+    assert oh.default_objective_track_device({'objective_cpu_job': True}) == 'cpu'
+    assert oh.default_objective_track_device({'train_cpu_job': True}) == 'cpu'

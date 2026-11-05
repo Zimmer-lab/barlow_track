@@ -143,13 +143,19 @@ def train_job_params(hyperparameter_args, job_name=None):
     return params
 
 
+def default_objective_track_device(hyperparameter_args):
+    """'cuda' when the objective eval runs inside the trial's GPU job, else 'cpu'."""
+    h = hyperparameter_args
+    return 'cpu' if (h.get('objective_cpu_job', False) or h.get('train_cpu_job', False)) else 'cuda'
+
+
 def cpu_eval_job_params(hyperparameter_args, objective_minutes, job_name=None):
     """Slurm parameters of the CPU-only eval jobs of an `objective_cpu_job: true` sweep.
 
-    The trial's GPU job then only trains; embedding, label propagation and scoring
-    (all CPU-bound but the embedding, which takes minutes on a CPU node too) run in a
-    job of their own with no GPU. On the cluster a full-video CPU eval took 40-130 min
-    (benchmark_more_datasets), about what it took inside the GPU jobs.
+    The trial's GPU job then only trains; embedding, label propagation and scoring run in a
+    job of their own with no GPU. Opt-in only: since label propagation runs on the GPU
+    (~2 min vs ~14 min on 16 CPUs for Leifer, and Leifer's CPU embedding ~14 min), scoring
+    inside the trial's GPU job is faster end to end and needs no second job.
     """
     h = hyperparameter_args
     return dict(timeout_min=int(objective_minutes) + 60,
@@ -264,11 +270,14 @@ def resolve_objective(hyperparameter_args):
         l2_per_volume=bool(hyperparameter_args.get('objective_l2_per_volume', False)),
         svd=hyperparameter_args.get('objective_svd', 'scaled'),
         gt_matching=hyperparameter_args.get('objective_gt_matching', 'nandist'),
-        # Embedding runs on the job's GPU; label propagation runs on the CPU.
-        # Full-video graphs (100k-200k nodes) allocate dense (N x classes)
-        # matrices per propagation step, which OOMs a 12 GB GPU next to the
-        # trained model -- and that would waste a whole trial.
-        track_device=hyperparameter_args.get('objective_track_device', 'cpu'),
+        # Embedding and label propagation run on the trial's own GPU: propagation there takes ~2 min for
+        # a 1,536-volume Leifer video (190k objects) against ~14 min on 16 cluster CPUs, so a separate
+        # CPU eval job no longer saves GPU time. A CUDA OOM redoes propagation on CPU
+        # (utils_label_propagation.multi_seed_propagation); a CPU-only job (objective_cpu_job,
+        # train_cpu_job) tracks on CPU.
+        track_device=hyperparameter_args.get('objective_track_device', default_objective_track_device(hyperparameter_args)),
+        # GPU crops slide inside the volume like training and the CPU crops (i261027-2); ignored on CPU
+        crop_window=hyperparameter_args.get('objective_crop_window', 'slide'),
         # Ground truth to score against; None = the training project. Flavell's
         # project GT is the Flavell lab's tracker output, so its rounds point
         # this at the NWB file (with objective_source nwb, as the benchmark's

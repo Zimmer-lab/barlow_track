@@ -202,19 +202,37 @@ def multi_seed_propagation(X, slices, time_index_to_linear_feature_indices, k=20
 
     The kNN graph is built once on CPU; with a device, edge weights move there
     once (adjacency normalization hoisted out of the per-seed loop) and results
-    come back as numpy either way.
+    come back as numpy either way. On a CUDA out-of-memory error every seed is
+    redone on CPU (same graph, so the same result up to float rounding).
 
     random_state is forwarded to the kNN graph builder: the graph is the only
     random step here, so fixing it makes the whole multi-seed run reproducible.
     """
     edge_index = build_knn_graph(X, k=k, random_state=random_state)
+    if device is not None and torch.device(device).type == 'cuda':
+        try:
+            return _propagate_all_seeds(edge_index, X.shape[0], slices, time_index_to_linear_feature_indices,
+                                        device, **kwargs)
+        except torch.cuda.OutOfMemoryError as e:
+            # A full-video graph can outgrow a small GPU (e.g. next to other jobs); the CPU result is the
+            # same up to float rounding, so finish there rather than lose the eval
+            print(f"[label propagation] CUDA out of memory on {device} ({str(e).splitlines()[0]}); "
+                  f"redoing all seeds on CPU", flush=True)
+            torch.cuda.empty_cache()
+            device = None
+    return _propagate_all_seeds(edge_index, X.shape[0], slices, time_index_to_linear_feature_indices, device,
+                                **kwargs)
+
+
+def _propagate_all_seeds(edge_index, num_nodes, slices, time_index_to_linear_feature_indices, device, **kwargs):
+    """Every seed time's propagation on one device (None = CPU); results as numpy."""
     if device is not None:
         edge_index = edge_index.to(device)
     edge_index, edge_norm = normalized_adjacency(edge_index)
     labelings = []
     probabilities = []
     for t in tqdm(slices, desc="Propagating labels from seed times", leave=False):
-        y = make_seed_labels_no_dict(time_index_to_linear_feature_indices[t], num_timepoints=X.shape[0])
+        y = make_seed_labels_no_dict(time_index_to_linear_feature_indices[t], num_timepoints=num_nodes)
         pred, probs = run_label_propagation(edge_index, y, edge_norm=edge_norm, device=device, **kwargs)
         labelings.append(pred.detach().cpu().numpy())
         probabilities.append(probs.detach().cpu().numpy())

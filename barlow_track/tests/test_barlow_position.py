@@ -364,8 +364,10 @@ def test_projector_uses_layernorm_not_batchnorm(batch):
     # A batch is one volume: BatchNorm would erase volume-level signal before
     # the loss; LayerNorm (per-neuron) preserves inter-neuron structure.
     from torch import nn as _nn
+    # projector_norm is opt-in since d23836a (the default went back to the paper's batchnorm)
     y1, y2, k1, k2 = batch
-    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    model = BarlowVolumeAttention(_attn_args(projector_norm='layernorm'), backbone=ResidualEncoder3D,
+                                  **_backbone_kwargs())
     assert not any(isinstance(m, _nn.BatchNorm1d) for m in model.modules())
     norms = [m for m in model.projector if isinstance(m, _nn.LayerNorm)]
     assert len(norms) == 2  # one per hidden projector layer
@@ -380,7 +382,8 @@ def test_old_batchnorm_checkpoint_loads_leniently(tmp_path, batch):
     # running stats ignored) since tracking never uses the projector.
     import pickle
     y1, _, k1, _ = batch
-    model = BarlowVolumeAttention(_attn_args(), backbone=ResidualEncoder3D, **_backbone_kwargs())
+    model = BarlowVolumeAttention(_attn_args(projector_norm='layernorm'), backbone=ResidualEncoder3D,
+                                  **_backbone_kwargs())
     sd = dict(model.state_dict())
     ln_idx = [i for i, m in enumerate(model.projector) if isinstance(m, torch.nn.LayerNorm)]
     assert ln_idx  # norm positions carry the stale BN buffers in old checkpoints
@@ -391,7 +394,7 @@ def test_old_batchnorm_checkpoint_loads_leniently(tmp_path, batch):
     sd[f'projector.{ln_idx[0]}.num_batches_tracked'] = torch.tensor(100)
     wpath = tmp_path / 'resnet50.pth'
     torch.save(sd, str(wpath))
-    _a = _attn_args()
+    _a = _attn_args(projector_norm='layernorm')
     _a.model_type = 'attention'
     _a.target_sz_z, _a.target_sz_xy = 4, 16
     _a.backbone_kwargs = dict(num_levels=2, f_maps=2)

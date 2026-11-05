@@ -28,10 +28,10 @@ def grid_spacing(path):
     return gs[0]  # (x, y, z) like the image axes
 
 
-def clicks_um(path):
+def clicks_um(path, spacing=None):
     from wbfm.utils.projects.finished_project_data import ProjectData
     from barlow_track.scripts.eval_accuracy import _load_nwb_arrays
-    gs = grid_spacing(path)
+    gs = grid_spacing(path) if spacing is None else np.asarray(spacing, float)
     a = _load_nwb_arrays(ProjectData.load_final_project_data(path, allow_hybrid_loading=True, verbose=0))
     um = np.array([gs[2], gs[0], gs[1]])
     return np.stack([a['gz'], a['gx'], a['gy']], 2) * um, [str(n) for n in a['neurons']], gs
@@ -91,6 +91,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--nwb', nargs='+', required=True, help='NAME=path.nwb')
     ap.add_argument('--radii', nargs='+', type=float, default=[1.0, 1.5, 2.0])
+    ap.add_argument('--spacing', nargs='*', default=[],
+                    help='NAME=x,y,z um: override the NWB grid_spacing (e.g. one suspected wrong)')
     ap.add_argument('--out', required=True)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -99,11 +101,12 @@ def main():
     import matplotlib.pyplot as plt
     summary = {}
     fig, ax = plt.subplots(figsize=(4.6, 3.4))
+    override = {k: [float(x) for x in v.split(',')] for k, v in (s.split('=', 1) for s in args.spacing)}
     for spec in args.nwb:
         name, path = spec.split('=', 1)
-        C, names, gs = clicks_um(path)
+        C, names, gs = clicks_um(path, override.get(name))
         s, pairs, nn = analyse(C, names, args.radii)
-        s.update(nwb=os.path.abspath(path), grid_spacing_xyz_um=gs.tolist())
+        s.update(nwb=os.path.abspath(path), grid_spacing_xyz_um=gs.tolist(), spacing_overridden=name in override)
         summary[name] = s
         pairs.to_csv(os.path.join(args.out, f'{name}_pairs.csv'), index=False)
         print(name, json.dumps({k: v for k, v in s.items() if k != 'nwb'}), flush=True)

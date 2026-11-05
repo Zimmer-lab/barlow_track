@@ -20,13 +20,11 @@ def build_knn_graph(X, k=20, random_state=None):
     index = NNDescent(X, n_neighbors=k, metric="euclidean", random_state=random_state)
     neighbors, _ = index.neighbor_graph
 
-    rows, cols = [], []
-    for i in range(len(neighbors)):
-        for j in neighbors[i]:
-            rows.append(i)
-            cols.append(j)
-
-    edge_index = torch.tensor([rows, cols], dtype=torch.long)
+    # row i repeated once per neighbour, in neighbour order (the same edges and order as the old
+    # Python double loop, without ~N*k list appends)
+    neighbors = np.asarray(neighbors, dtype=np.int64)
+    rows = np.repeat(np.arange(neighbors.shape[0], dtype=np.int64), neighbors.shape[1])
+    edge_index = torch.from_numpy(np.stack([rows, neighbors.reshape(-1)]))
     return edge_index
 
 

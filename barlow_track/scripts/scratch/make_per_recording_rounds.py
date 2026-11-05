@@ -44,6 +44,9 @@ TRAIN_PROJECTS = {
     'samuel_137': os.path.join(_NEW_PROJECTS, 'samuel_137/137/project_config.yaml'),
     'samuel_184': os.path.join(_NEW_PROJECTS, 'samuel_184/184-004/project_config.yaml'),
     'leifer_reexport': os.path.join(_NEW_PROJECTS, 'leifer_reexport/Leifer_NeRVE_Worm1_reexport_A2/project_config.yaml'),
+    # The Leifer recording re-segmented with StarDist (every detection), trained on its own crops and
+    # scored against the strict click GT (round_files takes objective_gt from DATASETS)
+    'leifer_stardist_strict': os.path.join(_NEW_PROJECTS, 'leifer_resegment/Leifer_NeRVE_Worm1_reexport_A2_stardist/project_config.yaml'),
 }
 
 # Objective keys beyond the GT source: score as on a new recording without GT, i.e. track every
@@ -61,12 +64,21 @@ TARGET_SZ_Z = {'flavell': 16}
 
 # Zimmer voxels (the projects' physical units are real; the other labs' are placeholders)
 _ZIMMER_UM_XY, _ZIMMER_UM_Z = 0.325, 1.5
+# Project-source recordings from other labs: (z, xy) voxel size in um (Leifer: NWB grid_spacing)
+_PROJECT_VOXEL_UM = {'leifer_stardist_strict': (1.5, 0.3226)}
+# NWBs whose grid_spacing is wrong: (z, xy) um. Samuel lab, one spinning-disc system for every recording
+# (Susoy et al. 2021 Cell, STAR Methods p. e3: 0.45 um pixels, ~1.75 um sections); 184-004's NWB says
+# 0.3 um xy (issue i261105-1; its nuclei match 137/153 in pixels)
+_NWB_VOXEL_OVERRIDE_UM = {'samuel_184': (1.75, 0.45)}
 
 
 def voxel_aspect(label):
     """z / xy voxel size of a recording, from GT-free metadata: the NWB grid_spacing
     (Zimmer: the lab's voxel size). visnet_z_scale = this undoes the z compression of
     voxel-unit keypoints (batches 22-23)."""
+    if label in _PROJECT_VOXEL_UM or label in _NWB_VOXEL_OVERRIDE_UM:
+        z, xy = {**_PROJECT_VOXEL_UM, **_NWB_VOXEL_OVERRIDE_UM}[label]
+        return z / xy
     ds = DATASETS[label]
     if ds['source'] != 'nwb':
         return _ZIMMER_UM_Z / _ZIMMER_UM_XY
@@ -94,6 +106,8 @@ def round_files(name, label, base, grid, z_scale_from_voxels=False):
     ds = DATASETS[label]
     if ds['source'] == 'nwb':
         tpl.update(objective_source='nwb', objective_gt=ds['nwb'])
+    elif ds.get('gt') and os.path.realpath(ds['gt']) != os.path.realpath(ds['project']):
+        tpl.update(objective_source='project', objective_gt=ds['gt'])
     tpl.update(OBJECTIVE_EXTRA.get(label, {}))
     return cfg, tpl
 

@@ -87,6 +87,9 @@ DATASETS = {
     "leifer_stardist": dict(source="project", project=_LEIFER_SD, gt=_LEIFER_SD),
     "leifer_stardist_maskgt": dict(source="project", project=_LEIFER_SD, gt=_LEIFER_SD + "_maskgt",
                                    emb_from="leifer_stardist"),
+    # The strict click GT (the headline Leifer GT from 2026-11-05; gt_sd_strict.h5), same embedding
+    "leifer_stardist_strict": dict(source="project", project=_LEIFER_SD, gt=_LEIFER_SD + "_strictgt",
+                                   emb_from="leifer_stardist"),
 }
 
 # eval_accuracy.py addresses projects by lab; nwb-source datasets reuse the

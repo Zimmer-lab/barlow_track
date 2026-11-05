@@ -77,15 +77,30 @@ def normalized_adjacency(edge_index):
     return edge_index, norm
 
 
-def clamped_label_propagation(edge_index, y, num_layers=50, norm=None, DEBUG=True):
+def sparse_adjacency(edge_index, norm, num_nodes):
+    """The normalized adjacency as a CSR matrix: A[row, col] = norm, duplicate edges summed.
+
+    Propagating with A @ H gives what torch_sparse.spmm(edge_index, norm, n, n, H) gives, up to
+    float summation order, without spmm's (num_edges x num_classes) gather buffer: about 3.6 GB per
+    layer on a 260k-object video with 20 neighbours and ~175 labels, which fragmented the CUDA cache
+    and ran multi-seed propagation out of GPU memory part way through the seeds.
+    """
+    A = torch.sparse_coo_tensor(edge_index, norm, (num_nodes, num_nodes)).coalesce()
+    return A.to_sparse_csr()
+
+
+def clamped_label_propagation(edge_index, y, num_layers=50, norm=None, DEBUG=True, adj=None):
     """
     edge_index: graph edges
     y: seed labels (-1 for unlabeled)
     norm: precomputed adjacency weights from normalized_adjacency (same device
         as edge_index/y); rebuilt if None
+    adj: precomputed sparse_adjacency(edge_index, norm, N) (same device as y); built if None
     """
-    if norm is None:
-        edge_index, norm = normalized_adjacency(edge_index)
+    if adj is None:
+        if norm is None:
+            edge_index, norm = normalized_adjacency(edge_index)
+        adj = sparse_adjacency(edge_index, norm, y.size(0))
 
     # seed mask
     # NOTE: seed labels are 1-based (from make_seed_labels_no_dict). Use
@@ -105,7 +120,7 @@ def clamped_label_propagation(edge_index, y, num_layers=50, norm=None, DEBUG=Tru
 
     for _ in range(num_layers):
         # propagate: H <- normalized adjacency * H
-        H = spmm(edge_index, norm, H.size(0), H.size(0), H)
+        H = adj @ H
 
         # clamp seeds back to one-hot
         H[mask] = Y[mask]
@@ -128,13 +143,14 @@ def clamped_label_propagation(edge_index, y, num_layers=50, norm=None, DEBUG=Tru
 
 
 def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k=1, prob_thresh=None, tau=0.01, softmax=True, DEBUG=False,
-                          device=None, edge_norm=None):
+                          device=None, edge_norm=None, adj=None):
     """
     edge_index: graph edges
     y: seed labels (-1 for unlabeled)
     device: torch device for propagation (None = keep inputs where they are, i.e. CPU backup)
     edge_norm: precomputed adjacency weights from normalized_adjacency (same
         device as edge_index); rebuilt per call if None
+    adj: precomputed sparse_adjacency (same device); built per call if None
     """
     if device is not None:
         edge_index = edge_index.to(device)
@@ -163,7 +179,7 @@ def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k
 
     # lp = LabelPropagation(num_layers=num_layers, alpha=alpha)
     # out = lp(y_filled, edge_index, mask=mask)  # (N, C)
-    out = clamped_label_propagation(edge_index, y, num_layers=num_layers, norm=edge_norm, DEBUG=DEBUG)
+    out = clamped_label_propagation(edge_index, y, num_layers=num_layers, norm=edge_norm, DEBUG=DEBUG, adj=adj)
 
     if return_top_k == 1:
         probs = torch.softmax(out, dim=-1)
@@ -227,11 +243,12 @@ def _propagate_all_seeds(edge_index, num_nodes, slices, time_index_to_linear_fea
     if device is not None:
         edge_index = edge_index.to(device)
     edge_index, edge_norm = normalized_adjacency(edge_index)
+    adj = sparse_adjacency(edge_index, edge_norm, num_nodes)  # once, shared by every seed
     labelings = []
     probabilities = []
     for t in tqdm(slices, desc="Propagating labels from seed times", leave=False):
         y = make_seed_labels_no_dict(time_index_to_linear_feature_indices[t], num_timepoints=num_nodes)
-        pred, probs = run_label_propagation(edge_index, y, edge_norm=edge_norm, device=device, **kwargs)
+        pred, probs = run_label_propagation(edge_index, y, edge_norm=edge_norm, device=device, adj=adj, **kwargs)
         labelings.append(pred.detach().cpu().numpy())
         probabilities.append(probs.detach().cpu().numpy())
     return labelings, probabilities

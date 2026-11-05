@@ -170,3 +170,45 @@ def test_cuda_oom_falls_back_to_cpu_with_the_same_labels(monkeypatch):
     assert calls == ['cuda', None]
     for a, b in zip(ref, got):
         np.testing.assert_array_equal(a, b)
+
+
+# --- CSR adjacency (replaces torch_sparse.spmm's per-edge gather buffer) -------------------
+
+def _spmm_reference(edge_index, y, num_layers):
+    """The pre-CSR propagation loop, verbatim, as the reference."""
+    from torch_sparse import spmm
+    edge_index, norm = lp.normalized_adjacency(edge_index)
+    mask = (y != -1)
+    num_classes = int(y.max().item())
+    Y = torch.zeros(y.size(0), num_classes)
+    Y[mask, y[mask] - 1] = 1.0
+    H = Y.clone()
+    for _ in range(num_layers):
+        H = spmm(edge_index, norm, H.size(0), H.size(0), H)
+        H[mask] = Y[mask]
+    return H
+
+
+def test_csr_propagation_matches_spmm_on_a_knn_graph():
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(600, 8)).astype(np.float32)
+    edge_index = lp.build_knn_graph(X, k=10, random_state=0)
+    y = torch.full((600,), -1, dtype=torch.long)
+    y[rng.choice(600, 40, replace=False)] = torch.arange(1, 41)
+    ref = _spmm_reference(edge_index, y, num_layers=30)
+    out = lp.clamped_label_propagation(edge_index, y, num_layers=30, DEBUG=False)
+    assert torch.allclose(out, ref, rtol=1e-5, atol=1e-7)
+    assert torch.equal(out.argmax(1), ref.argmax(1))
+
+
+def test_shared_adjacency_gives_the_same_labels_as_per_call():
+    rng = np.random.default_rng(1)
+    X = rng.normal(size=(300, 4)).astype(np.float32)
+    edge_index = lp.build_knn_graph(X, k=8, random_state=0)
+    ei, norm = lp.normalized_adjacency(edge_index)
+    adj = lp.sparse_adjacency(ei, norm, 300)
+    y = torch.full((300,), -1, dtype=torch.long)
+    y[:20] = torch.arange(1, 21)
+    a = lp.run_label_propagation(edge_index, y, return_top_k=2, softmax=False, num_layers=50)
+    b = lp.run_label_propagation(ei, y, return_top_k=2, softmax=False, num_layers=50, edge_norm=norm, adj=adj)
+    assert torch.equal(a[0], b[0]) and torch.allclose(a[1], b[1])

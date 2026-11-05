@@ -7,6 +7,10 @@
 #       -p $B/$R/hyperparameter_search_template.yaml --total_budget 120
 #
 # Restarting after the job ends works as from the login node (see the round README).
+# BARLOW_DISPATCHER picks another dispatcher script, e.g. the shared-config sweep:
+#
+#   BARLOW_DISPATCHER=barlow_track/scripts/optimize_shared_config.py sbatch ... \
+#       barlow_track/scripts/sbatch_dispatcher.sbatch -p $B/$R/shared_template.yaml
 
 #SBATCH --job-name=barlow_dispatch
 #SBATCH --time=7-00:00:00
@@ -22,4 +26,4 @@ for v in $(compgen -e | grep -E '^(SLURM|SBATCH|SRUN)_'); do unset "$v"; done
 
 BASE_CODE_PATH="/lisc/data/scratch/neurobiology/zimmer/wbfm/code/barlow_track"
 cd "$BASE_CODE_PATH" || exit 1
-python -u barlow_track/scripts/optimize_hyperparameters.py "$@"
+python -u "${BARLOW_DISPATCHER:-barlow_track/scripts/optimize_hyperparameters.py}" "$@"

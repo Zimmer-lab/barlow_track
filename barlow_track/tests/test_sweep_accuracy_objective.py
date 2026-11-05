@@ -365,9 +365,11 @@ def test_staged_round_templates_create_an_experiment_and_resume():
         params = yaml.safe_load(open(path))['hyperparameters']
         client = AxClient()
         oh.create_sweep_experiment(client, params, accuracy_objective=True)
+        def vals(q):  # choice values, or a range's two ends
+            return q['values'] if 'values' in q else q['bounds']
         for p in params:
-            for v in p['values']:
-                config = oh.expand_dotted_params({**{q['name']: q['values'][0] for q in params}, p['name']: v})
+            for v in vals(p):
+                config = oh.expand_dotted_params({**{q['name']: vals(q)[0] for q in params}, p['name']: v})
                 oh._attach_trial(client, {**config, 'project_dir': '/sweep/trial_0'})
 
 

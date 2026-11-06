@@ -64,6 +64,8 @@ DEFAULTS = dict(
     temporal_smooth=0.0,                    # > 0: add this times adjacent-volume mutual-NN consensus rows
     reprop_conf=0.0,                        # > 0: re-propagate from consensus labels with confidence >= this
     reprop_layers=30, reprop_w=1.0,         # layers of that propagation; weight of its result vs consensus
+    chain_w=0.0,                            # > 0: add this times the mean consensus of the object's temporal
+                                            # chain (adjacent-volume mutual-NN links) before the final Hungarian
     merge_ratio=0.0,                        # > 0: merge final labels (fragments) whose embedding centroids are
                                             # within this many RMS spreads (sqrt(s_a s_b)) of each other ...
     merge_overlap=0.1,                      # ... and that share at most this fraction of the smaller one's volumes
@@ -78,7 +80,7 @@ STAGES = dict(
           'top_k', 'batch_seeds'),
     sync=('input_probability_threshold', 'prob_weight', 'per_run_unique', 'rounding', 'refine_iters',
           'k_extra', 'run_weight', 'drop_worst_frac'),
-    post=('min_prob_threshold', 'temporal_smooth', 'reprop_conf', 'reprop_layers', 'reprop_w', 'merge_ratio',
+    post=('min_prob_threshold', 'temporal_smooth', 'reprop_conf', 'reprop_layers', 'reprop_w', 'chain_w', 'merge_ratio',
           'merge_overlap', 'merge_aff', 'merge_knn'),
 )
 
@@ -499,12 +501,39 @@ def finalize(sync_out, time_to_lin, v, Xs=None, graph=None):
         np.add.at(sm, I, v['temporal_smooth'] * cons[J])
         np.add.at(sm, J, v['temporal_smooth'] * cons[I])
         cons = sm
+    if v['chain_w'] > 0:
+        cons = chain_vote(cons, Xs, time_to_lin, v['chain_w'])
     labels, probs = ss.enforce_temporal_uniqueness_hungarian(cons, time_to_lin, R=R,
                                                             min_prob_threshold=v['min_prob_threshold'])
     labels, probs = labels[:, 0], probs[:, 0]
     if v['merge_ratio'] > 0:
         labels, probs, _ = merge_fragments(labels, probs, Xs, time_to_lin, v, cons=cons)
     return labels, probs
+
+
+def temporal_chains(Xs, time_to_lin, pairs=None):
+    """Chain id per object: connected components of adjacent-volume mutual-NN links (each object has at most
+    one link forward and one back, so components are chains through time)."""
+    import scipy.sparse as sp
+    from scipy.sparse.csgraph import connected_components
+    n = Xs.shape[0]
+    I, J = adjacent_mnn_pairs(Xs, time_to_lin) if pairs is None else pairs
+    A = sp.csr_matrix((np.ones(len(I)), (I, J)), shape=(n, n))
+    return connected_components(A, directed=False)[1]
+
+
+def chain_vote(cons, Xs, time_to_lin, w, chains=None):
+    """cons + w * (mean consensus row of the object's chain): a long chain outvotes a stretch of volumes
+    in which the consensus prefers a neighbour's label."""
+    import scipy.sparse as sp
+    if chains is None:
+        chains = temporal_chains(Xs, time_to_lin)
+    n = cons.shape[0]
+    C = int(chains.max()) + 1
+    M = sp.csr_matrix((np.ones(n), (chains, np.arange(n))), shape=(C, n))
+    size = np.asarray(M.sum(1)).ravel()
+    mean = (M @ cons) / size[:, None]
+    return cons + w * mean[chains]
 
 
 def label_stats(labels, Xs, time_to_lin):

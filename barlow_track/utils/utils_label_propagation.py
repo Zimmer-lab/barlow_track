@@ -227,15 +227,27 @@ def multi_seed_propagation(X, slices, time_index_to_linear_feature_indices, k=20
         try:
             return _propagate_all_seeds(edge_index, X.shape[0], slices, time_index_to_linear_feature_indices,
                                         device, **kwargs)
-        except torch.cuda.OutOfMemoryError as e:
+        except RuntimeError as e:  # torch.cuda.OutOfMemoryError is a RuntimeError
             # A full-video graph can outgrow a small GPU (e.g. next to other jobs); the CPU result is the
-            # same up to float rounding, so finish there rather than lose the eval
-            print(f"[label propagation] CUDA out of memory on {device} ({str(e).splitlines()[0]}); "
+            # same up to float rounding, so finish there rather than lose the eval. cuSPARSE / CSR
+            # allocation failures arrive as plain RuntimeErrors naming CUDA or memory; anything else
+            # is a real error and is re-raised.
+            if not _is_cuda_resource_error(e):
+                raise
+            print(f"[label propagation] CUDA failure on {device} ({str(e).splitlines()[0]}); "
                   f"redoing all seeds on CPU", flush=True)
             torch.cuda.empty_cache()
             device = None
     return _propagate_all_seeds(edge_index, X.shape[0], slices, time_index_to_linear_feature_indices, device,
                                 **kwargs)
+
+
+def _is_cuda_resource_error(e):
+    """A GPU memory / cuSPARSE / cuBLAS failure (worth redoing on CPU), not a bug in the inputs."""
+    if isinstance(e, torch.cuda.OutOfMemoryError):
+        return True
+    msg = str(e).lower()
+    return any(k in msg for k in ('out of memory', 'cusparse', 'cublas', 'cuda error', 'cuda_error'))
 
 
 def _propagate_all_seeds(edge_index, num_nodes, slices, time_index_to_linear_feature_indices, device, **kwargs):

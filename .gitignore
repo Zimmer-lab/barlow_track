@@ -185,6 +185,7 @@ barlow_track/notebooks/wandb
 .vscode
 .zprofile
 .zshrc
+wandb/*
 
 # AI stuff
 AGENTS.md

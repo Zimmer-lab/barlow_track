@@ -570,7 +570,7 @@ r261027-2876617: norot final checkpoint on the proxy's 30 whole-video frames: 0.
 
 Every use_position network since 2026-10-05 trained on one fixed augmented view pair per frame (i261027-1). barlow_track@7f9f7bc adds reaugment_each_epoch, off by default per the keep-new-behaviour-off rule, so cluster rounds still train frozen unless their configs set it. r261027-562757 tests whether it closes the Flavell gap (result about 23:00).
 
-- [ ] ask a261027-1 · on [[QUE - Which part of the position pipeline costs Flavell accuracy, its augmentation or its position fusion]] · Once the re-augmentation test is in, should reaugment_each_epoch default to true, or stay opt-in and be set per round?
+- [x] ask a261027-1 · on [[QUE - Which part of the position pipeline costs Flavell accuracy, its augmentation or its position fusion]] · Once the re-augmentation test is in, should reaugment_each_epoch default to true, or stay opt-in and be set per round?
 
 ## 2026-10-27 18:36 — dropped
 
@@ -1850,7 +1850,7 @@ User launched the weekend rounds (round_wk1_*, round_wk1f30_*) on 2026-10-30. Sp
 
 - [ ] Speed: DataLoader num_workers > 0 for crop training, with a test that augmented batches are identical to num_workers 0 for a fixed seed
 - [ ] Speed: save per-epoch checkpoints and score several epochs of one trial, to pick shorter schedules
-- [ ] Speed: time full-video label propagation on GPU (--track_device cuda) in its own job vs CPU
+- [x] Speed: time full-video label propagation on GPU (--track_device cuda) in its own job vs CPU
 - [ ] Robustness: resume training from the last checkpoint on restart / Slurm requeue, with a test
 
 ## 2026-10-30 09:55 — run
@@ -2138,7 +2138,7 @@ Leifer z-split merge (r261102-3403676, zsplit_merge.py 00ac3c0; trial 57 cached 
 
 Sweep state 19:54 (user away until ~Fri): wk3 Flavell x4 and Samuel x2 running cleanly (no failed trials), zimmer_1123 dispatcher resubmitted at 96G (7781913) and submitting; zimmer_1210 resubmit and most wk1/wk1f30 grid restarts still queued (dispatcher jobs start one at a time). Monitoring stopped at the user's request.
 
-- [ ] On return: check zimmer_1210 and wk1 grid dispatchers started; tally wk3 per-recording bests with best_of_table.py
+- [x] On return: check zimmer_1210 and wk1 grid dispatchers started; tally wk3 per-recording bests with best_of_table.py
 - [ ] Decide wrapper default memory (96G) or cheap preflight for Zimmer projects (i261102-1)
 
 ## 2026-11-02 21:07 — result
@@ -2236,3 +2236,1073 @@ r261103-1181386 done: Leifer stardist resegmentation (leifer_resegment/Leifer_Ne
 Mapping Leifer re-export GT (79 neurons, NWB clicks + NeRVE masks) onto the stardist masks of leifer_resegment/Leifer_NeRVE_Worm1_reexport_A2_stardist, to build a final_3d_tracks_df so eval_accuracy --source project can score this project like the paper wbfm projects. Script: scratchpad map_gt.py (click-voxel label and max-overlap-with-NeRVE-mask label per (t, neuron)).
 
 run r261103-3422453 · pids 3422453 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/map_gt.log
+
+## 2026-11-03 17:53 — dropped
+
+too slow (per-neuron full-volume compare); replaced by a joint-histogram version
+
+dropped r261103-3422453
+
+## 2026-11-03 17:53 — run
+
+Rerun of the GT-to-stardist cross-check mapping (click-voxel label, max overlap with the GT neuron's NeRVE mask), joint-histogram version, 16 workers.
+
+run r261103-437335 · pids 437335 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/map_gt.log
+
+## 2026-11-03 17:53 — run
+
+Leifer StarDist resegmentation (wbfm_tracker_baseline/leifer_resegment/Leifer_NeRVE_Worm1_reexport_A2_stardist, user request; GT still being finalized): train trial 57's config on it as base and lambd1 (object term only) at training seeds trial57 and 2, train only (run_pilot.py f0e7f7d --project_path --train_only --name leifer_reseg), to score once the GT exists. Checked first: project loads, 1536 frames, masks are StarDist's (120-133 objects per frame, 94% foreground overlap with NeRVE, not identical), metadata matches mask labels per frame; segment_config's segmentation_fname still names the NeRVE masks.zarr but is not what loads. Queued behind the Leifer pilot streams c and d (GPU fits two Leifer runs); ~3 h each, done ~midday 2026-11-04.
+
+run r261103-604205 · pids 604205, 604562 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/stream_e.log, /home/charles/.cache/barlow_scratch/train/leifer_reseg/stream_f.log
+
+## 2026-11-03 17:54 — surprise
+
+Leifer pilot (r261103-716084): lambd0 (no object term) 0.8872 and 0.8792 vs base 0.8775 and 0.8792 at the same training seeds (trial57, 2): paired +1.0 / 0.0 pt. The Samuel 137 lambd0 cost (-5.3 pt) does not show on Leifer so far; seed 3 and lambd1 still to come. Leifer may be bottlenecked elsewhere (z-split masks, HANDOFF finding 7), which would make it insensitive to the loss.
+
+## 2026-11-03 17:57 — decision
+
+Cross-check r261103-437335 result: 97.9% of the 119,019 Leifer GT clicks fall inside a stardist mask; that mask equals the max-overlap stardist mask of the GT neuron's NeRVE mask for 95.3%; 2.9% of clicks share a stardist mask with another GT click (likely stardist merges). Click->nearest-centroid distance median 1.1 vox, p95 4.1 vox (xy 0.3226 um, z 1.5 um). Decision (with user): build stardist GT with a tight distance cap, click inside the mask, objects claimed by 2+ GT neurons left unassigned; script barlow_track/scripts/project_reanalysis/gt_tracks_from_clicks.py, provenance JSON next to the output for the methods section.
+
+## 2026-11-03 17:57 — run
+
+Dry runs of gt_tracks_from_clicks.py on the stardist Leifer project at max_dist_um 0.75 / 1.0 / 1.5, to choose the cap.
+
+run r261103-1354985 · pids 1354985, 1354986, 1354987 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/dry_0.75.log, /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/dry_1.0.log, /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/dry_1.5.log
+
+## 2026-11-03 17:58 — dropped
+
+user: stop the old-data Leifer runs and train on the StarDist resegmentation instead; lambd1 stopped mid-training, partial dir removed
+
+dropped r261103-946326
+
+## 2026-11-03 17:58 — dropped
+
+superseded: user asked for a basic sweep on the resegmentation instead
+
+dropped r261103-604205
+
+## 2026-11-03 17:58 — decision
+
+Leifer pilot (r261103-716084) stopped on the user's call after 4 runs (user: the NeRVE data is saturated): base_seed3 and lambd0_seed3 never finished, base_seed3 partial dir removed. Kept: base 0.878/0.879, lambd0 0.887/0.879 (seeds trial57/2).
+
+## 2026-11-03 17:59 — dead-end
+
+sweep_param_effect.py (62cd4c8) partial dependence is wrong for log_scale parameters: the forest is fit on log values but the grid is evaluated in raw units, so the line is flat (lr, num_frames, epochs all flat on Leifer wk2). lambd_obj (linear) unaffected. Bins are fine.
+
+- [ ] fix sweep_param_effect.py partial dependence grid for log_scale params
+
+## 2026-11-03 18:02 — run
+
+Writing stardist Leifer GT tracks: max_dist_um 1.5 (primary, set as final_3d_tracks_df; one z-plane, clicks are z-quantized to 1.5 um planes) and 1.0 (stricter sensitivity variant). Dry runs r261103-1354985: assigned 63.8% / 75.1% / 86.6% of 119,019 clicks at 0.75 / 1.0 / 1.5 um; shared-object drops 419 / 687 / 1252; outside-mask drops 19 / 74 / 1020; 208 clicks in the 4 empty volumes. No global click-centroid bias (median signed offset < 0.06 um); worst neurons sit in large (p90-size) objects or are ~1 plane off in z.
+
+run r261103-2423961 · pids 2423961, 2423962 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/write_1.5.log, /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/write_1.0.log
+
+## 2026-11-03 18:04 — run
+
+Rerun of the GT writes (r261103-2423961 failed: wbfm add_metadata_to_df_raw_ind needs a likelihood column; now likelihood 1 where assigned).
+
+run r261103-3393482 · pids 3393482, 3393483 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/write_1.5.log, /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/write_1.0.log
+
+## 2026-11-03 18:07 — run
+
+Basic local sweep on the Leifer StarDist resegmentation (user: NeRVE data is saturated; GT still being finalized, so train only, score later): trial 57's config with lambd_obj {0, 0.41, 1} x num_frames {206, 400}, one training seed (Leifer seed spread 0.2 pt), run_pilot.py 5a30d94 --name leifer_reseg --project_path <stardist project> --train_only. Stream e: base, lambd0, lambd1, nf400; stream f: lambd0_nf400, lambd1_nf400. Crop z 8 kept: StarDist objects z extent median 6, p90 7, max 10 (NeRVE 3/4/7), 98% fit. ~4 h per 206-frame run, ~8 h per 400-frame run; done ~14:00 on 2026-11-04.
+
+run r261103-1358870 · pids 1358870, 1445434 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/stream_e.log, /home/charles/.cache/barlow_scratch/train/leifer_reseg/stream_f.log
+
+## 2026-11-03 18:07 — run
+
+Smoke test: eval_accuracy --mode trained --source project on the stardist Leifer project with its new GT (1.5 um), baseline_leifer/trial_0, CPU, first 100 frames, 5 labelprop seeds. Only checks the pipeline end to end; the score is not a benchmark number.
+
+run r261103-671865 · pids 671865 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/smoke.log
+
+## 2026-11-03 18:17 — run
+
+Smoke rerun (r261103-671865 OOM'd: load_barlow_model put the model on the full Titan V despite --device cpu); now CUDA_VISIBLE_DEVICES='' and 50 frames.
+
+run r261103-2200226 · pids 2200226 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/smoke.log
+
+## 2026-11-03 18:28 — todo
+
+r261103-2200226: smoke eval of the stardist Leifer project with its new GT ran end to end (50 frames, baseline_leifer/trial_0, 0.860; pipeline check only). GT built in r261103-3393482 (1.5 um primary, 1.0 um variant); r261103-1354985 dry runs and r261103-437335 cross-check summarized in [[DATA - Leifer NeRVE recording re-segmented with stardist with ground truth assigned from manual clicks]]. Messaged BarlowTrack_local_runs that the GT is ready.
+
+- [x] commit barlow_track/scripts/project_reanalysis/gt_tracks_from_clicks.py and cite the commit in the stardist Leifer DATA note
+
+## 2026-11-03 18:38 — run
+
+Leifer StarDist project GT is ready (from the BarlowTrack_cluster_runs session: 79 Leifer click neurons assigned to StarDist objects within 1.5 um, inside the mask, one GT neuron per object, 86.6% of clicks assigned; final_3d_tracks_df = 3-tracking/manual_annotation/gt_tracks_from_clicks_1.5um.h5; segmentation r261103-1181386; volumes 78, 405, 945, 1516 empty). Scoring on it (score_reseg.py 10939a3; --source project, project = GT, labelprop 25 seeds seed 0, CPU, CUDA hidden): references trial 57 (NeRVE-trained, cluster) and the local NeRVE base retrain, then each leifer_reseg sweep checkpoint as it lands. Note GT is 86.6% of the NeRVE GT's clicks, so scores are not directly comparable with the NeRVE 0.885; the references give the like-for-like baseline.
+
+run r261103-3915910 · pids 3915910 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/score.log
+
+## 2026-11-03 18:38
+
+BarlowTrack_local_runs is scoring checkpoints on the stardist Leifer project against the 1.5 um GT ([[DATA - Leifer NeRVE recording re-segmented with stardist with ground truth assigned from manual clicks]]). Scorer: scratch/s137_pilot/score_reseg.py @10939a3, run r261103-3915910, output ~/.cache/barlow_scratch/train/leifer_reseg/scores.jsonl. It scores the NeRVE-trained references (wk2 Leifer trial 57 and its local retrain), then a 6-run stardist-trained sweep (r261103-1358870). It writes nothing to the project.
+
+## 2026-11-03 19:55 — dead-end
+
+r261103-3915910: first reference (ref_trial57_nerve) FAILED after embedding+tracking, at the record write: extra_record 'weights' collides with the eval's own field. Fixed in 6072f44 (drop the key); scorer restarted (same unit leifer-reseg-score), reusing the cached trial57 embedding.
+
+run r261103-77928 · pids 77928 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/score.log
+
+## 2026-11-03 20:41 — result
+
+r261103-77928: ref_trial57_nerve (wk2 Leifer trial 57, trained on NeRVE) scored on the StarDist project vs its click GT (1.5 um): accuracy 0.9448 (misses 2873, mismatches 2818, of 103052 GT cells; 44 min CPU, labelprop 25 seeds seed 0). Same network on the NeRVE project scored ~0.885, but not comparable: StarDist GT covers 86.6% of clicks (the unassigned 13% may be the hard ones), objects differ. The fair comparison is the reseg-trained sweep runs vs this reference on the same GT.
+
+## 2026-11-03 22:06 — result
+
+r261103-77928: ref_local_nerve (local retrain of Leifer trial 57 on NeRVE, leifer_pilot/base) on the StarDist click GT: 0.9464 (misses 2847, mismatches 2679 of 103052). With ref_trial57_nerve 0.9448, the NeRVE-trained reference is ~0.945 on this GT; the reseg-trained runs compare against that. Training is slower than estimated: 206-frame runs ~5 h (11.7 min/epoch x 26), 400-frame ~9.5 h, so the grid ends ~19:00 2026-11-04. ~300 'centroid outside volume' crop skips per run, mostly StarDist centroids at z 31.5 rounding to plane 32 of a 32-plane volume; negligible against ~3600 steps of crops.
+
+## 2026-11-04 00:16 — result
+
+r261103-1358870 / r261103-77928: leifer_reseg base (trial 57 config, trained on the StarDist project) on the StarDist click GT: 0.9476 (misses 2971, mismatches 2430 of 103052), vs the NeRVE-trained references 0.9448 / 0.9464. +0.1 to +0.3 pt, within Leifer seed spread (~0.2): training on the StarDist segmentation buys nothing measurable over NeRVE training when scored on StarDist objects. Fewer mismatches (2430 vs ~2750) but more misses (2971 vs ~2860).
+
+## 2026-11-04 01:08 — run
+
+Why do 13.4% of the Leifer clicks fail to become StarDist GT (user asks: clean exclusion categories? StarDist misses small?). gt_click_exclusions.py (5db47c7) replays the 1.5 um rule and puts each click in one category. 40-volume check: assigned 86.1%, in a StarDist mask whose centroid is >1.5 um away (median 1.9 um; z voxel is 1.5 um, objects ~6 planes) 9.7% = recoverable by the rule, coincident clicks 1.3%, one mask holding two neurons' clicks 0.8%, background within 1 um of a mask 1.4%, StarDist missed an object NeRVE has 0.5%, background in both 0.1%. Full run on all 1536 volumes started.
+
+run r261104-885770 · pids 885770 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/click_categories/run.log
+
+## 2026-11-04 01:13 — result
+
+r261104-885770 (all 1536 volumes, 119019 clicks; reproduces the GT's 103052 assigned exactly): assigned 86.6%; click inside a StarDist mask no other click is in but centroid >1.5 um (median 1.88, p90 2.67 um) 9.0%; coincident clicks (<1.5 um) 1.1%; one mask holding two neurons' clicks 1.1%; background <=1 um from a mask 1.3%; StarDist missed an object NeRVE has 0.6%; background in both 0.06%; empty volumes 0.2%. Also 939 assigned clicks (0.8%) sit in a mask holding another neuron's click (merge the rule kept, because the other click was beyond 1.5 um). StarDist genuinely missing a neuron is 0.6-2.0% (upper bound counts near-mask). A rule 'click inside a mask that holds no other neuron's click' gives 94.8% coverage (per-neuron p10 0.62 -> 0.90). neuron_070 is an outlier: 35% background, 11% coincident.
+
+## 2026-11-04 01:22 — decision
+
+User: new wbfm project (configs only) with a GT keeping clicks inside masks and near mask edges, then evaluate networks on it. Created Leifer_NeRVE_Worm1_reexport_A2_stardist_maskgt (leifer_resegment/, wbfm make_project_like keeping preprocessing/segmentation/training_data linked to the StarDist project; verified identical masks, centroids, red data at t 0 and 700). gt_tracks_from_clicks.py --rule mask (3e2fdc7, edge 1.0 um, coincide 1.5 um), set as its final_3d_tracks_df. Expected ~96% of clicks. Scoring will use project = StarDist project (cached embeddings) and gt = the maskgt project.
+
+run r261104-3312389 · pids 3312389 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/maskgt.log
+
+## 2026-11-04 01:27 — result
+
+r261104-3312389 first mask GT build 94.65%: edge clicks made masks 'shared' and removed in-mask clicks (fixed 16a906d). r261104-568713 rebuilt (gt_tracks_from_clicks.py --rule mask, edge 1.0 um, coincide 1.5 um) into Leifer_NeRVE_Worm1_reexport_A2_stardist_maskgt, set as its final_3d_tracks_df: 113499 of 119019 clicks = 95.4% (vs 86.6%); per-neuron coverage p10 0.91, median 0.98. Excluded: coincident clicks 1541 (1.3%), mask holding 2+ neurons' clicks 3003 (2.5%; ~850 of them edge clicks whose nearest mask is another neuron's), no mask within 1 um 768 (0.65%), empty volumes 208. Edge assignments 661. Not >96%: near-mask clicks mostly sit next to another neuron's mask.
+
+## 2026-11-04 01:27 — run
+
+Scoring refs + leifer_reseg variants against the maskgt GT (project = StarDist project for cached embeddings, gt = _maskgt project; score_reseg.py d7b6519 --gt --results scores_maskgt.jsonl, same tags).
+
+run r261104-2000932 · pids 2000932 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/score_maskgt.log
+
+## 2026-11-04 01:28 — decision
+
+User: finish the wbfm pipeline (traces) on the GT-tracked projects, dry runs first. Dry run without tracks planned the full wbfm tracking chain (frame objects, tracklets, tracking, combine), which would redo tracking; so each project's GT h5 was copied to 3-tracking/postprocessing/combined_3d_tracks.h5 (final_3d_tracks_df still names the GT file). Dry runs then plan only extract_full_traces + traces on both projects (StarDist 1.5 um GT, _maskgt mask GT). Running locally (no slurm here), sequential, 24 cores.
+
+run r261104-2551987 · pids 2551987 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/traces.log
+
+## 2026-11-04 01:42 — result
+
+r261104-2551987 done: snakemake traces (extract_full_traces) finished on both GT-tracked projects, ~7 min each, no errors in the project logs. 4-traces/ has red/green traces (79 neurons), reindexed masks, paper traces, grid plots. Missing GT frames are zero intensity in the raw traces (fraction 0.065 maskgt, 0.151 StarDist 1.5 um = 1 - GT coverage exactly). paper_traces keep 76 neurons with the mask GT vs 62 with the 1.5 um GT (the paper-trace filter drops neurons with too much missing data).
+
+## 2026-11-04 02:12 — result
+
+r261104-2000932: ref_trial57_nerve on the mask GT (113499 cells): 0.9351 (misses 1258, mismatches 6107) vs 0.9448 on the 1.5 um GT (103052 cells; misses 2873, mismatches 2818). The clicks the mask rule adds are harder: back-of-envelope (sets not exactly nested) accuracy on the ~10.4k added cells ~0.84. So the 1.5 um GT flattered the score by ~1 pt; mismatches doubled, misses halved. Cached embedding reused (44 min = tracking only).
+
+## 2026-11-04 02:57 — result
+
+r261104-2000932: ref_local_nerve on the mask GT: 0.9372 (misses 1279, mismatches 5847) vs 0.9464 on the 1.5 um GT. Both NeRVE references lose ~1 pt on the mask GT (0.935/0.937). base (StarDist-trained) next.
+
+## 2026-11-04 03:43 — result
+
+r261104-2000932: leifer_reseg base on the mask GT 0.9385 (misses 1183, mismatches 5800) vs NeRVE refs 0.9351/0.9372: same +0.1-0.3 pt as on the 1.5 um GT, within seed spread. lambd0_nf400 finished training (r261103-1358870 stream f, now lambd1_nf400); lambd0 still training on stream e.
+
+## 2026-11-04 04:55 — result
+
+r261103-3915910 scorer (restarted as r261103-77928): leifer_reseg lambd0_nf400 (feature term only, 400 frames, StarDist) on the 1.5 um GT 0.9416 (misses 3672, mismatches 2343) vs base 0.9476: -0.6 pt, all of it misses (+700); single seed. lambd0 finished training (stream e now lambd1).
+
+## 2026-11-04 05:28 — surprise
+
+r261104-2000932: lambd0_nf400 on the mask GT 0.9405 (misses 1024, mismatches 5725) vs base 0.9385: +0.2 pt, while on the 1.5 um GT it was -0.6 (0.9416 vs 0.9476, misses 3672). The ranking flips between GTs, so the difference is noise-level; the 1.5 um GT's misses are fragile (same tracking, sparser GT columns).
+
+## 2026-11-04 06:28 — result
+
+lambd0 (lambd_obj 0, nf default) on the Leifer StarDist reseg, 1.5 um GT: 0.9366 (3629 miss / 2908 mismatch), 1.1 pt below base 0.9476; mask-GT score pending
+
+## 2026-11-04 07:00 — result
+
+lambd0 on the Leifer StarDist reseg, mask GT: 0.9351, 0.3 pt below base 0.9385 (1.5 um GT: -1.1 pt). Object term off costs on both GTs at default num_frames; at nf400 it does not (-0.6 / +0.2)
+
+## 2026-11-04 08:08 — run
+
+Rescore older networks on the Leifer StarDist reseg against both GTs (1.5 um and mask), stream 1 of 3: wk2 Leifer trials across the accuracy ranking (does the NeRVE ranking transfer?), wk1 t1, snap1 t0, zimmer_1128 t0 and samuel_137 t63 (cross-dataset). CPU, labelprop 25 seeds, c8da74e
+
+run r261104-2447344 · pids 2447344 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/score_old1.log
+
+## 2026-11-04 08:08 — run
+
+Rescore older networks on the Leifer StarDist reseg against both GTs (1.5 um and mask), stream 2 of 3: wk2 Leifer trials across the accuracy ranking (does the NeRVE ranking transfer?), wk1 t1, snap1 t0, zimmer_1128 t0 and samuel_137 t63 (cross-dataset). CPU, labelprop 25 seeds, c8da74e
+
+run r261104-2447732 · pids 2447732 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/score_old2.log
+
+## 2026-11-04 08:08 — run
+
+Rescore older networks on the Leifer StarDist reseg against both GTs (1.5 um and mask), stream 3 of 3: wk2 Leifer trials across the accuracy ranking (does the NeRVE ranking transfer?), wk1 t1, snap1 t0, zimmer_1128 t0 and samuel_137 t63 (cross-dataset). CPU, labelprop 25 seeds, c8da74e
+
+run r261104-2447888 · pids 2447888 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/score_old3.log
+
+## 2026-11-04 08:12 — dropped
+
+user asked to use the benchmark script instead (run_trials_on_all_ground_truth.py with leifer_stardist datasets)
+
+dropped r261104-2447344
+
+## 2026-11-04 08:12 — dropped
+
+user asked to use the benchmark script instead (run_trials_on_all_ground_truth.py with leifer_stardist datasets)
+
+dropped r261104-2447732
+
+## 2026-11-04 08:12 — dropped
+
+user asked to use the benchmark script instead (run_trials_on_all_ground_truth.py with leifer_stardist datasets)
+
+dropped r261104-2447888
+
+## 2026-11-04 08:14 — run
+
+Benchmark (run_trials_on_all_ground_truth.py, 9a1d725) on the new datasets leifer_stardist + leifer_stardist_maskgt, CPU, 2 workers: round_bayes_wk2_leifer_reexport trials 57 74 65 50 63 37 76 14 9 24 (spread over the NeRVE ranking, ranks 0-79). Results in wbfm_tracker_baseline/leifer_resegment/benchmark/<round>.jsonl
+
+run r261104-4089020 · pids 4089020 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/bench_wk2.log
+
+## 2026-11-04 08:14 — run
+
+Benchmark on leifer_stardist + _maskgt, 1 worker, older and cross-dataset networks in turn: wk1_leifer t1, snap1_leifer t0, wk2_zimmer_1128 t0, wk2_samuel_137 t63
+
+run r261104-4089023 · pids 4089023 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/bench_other.log
+
+## 2026-11-04 08:39 — surprise
+
+r261104-4089020: the trial 9 leifer_stardist cell died on OSError EIO reading red_data from the CIFS mount (/lisc is mounted soft, so a slow read surfaces as an I/O error). Transient: the other cells read on. Its chained maskgt cell embeds by itself and writes the shared cache, so a rerun of the benchmark at the end (skips recorded cells) fills the stardist cell from cache
+
+## 2026-11-04 09:32 — run
+
+Click misses vs the StarDist 180-object cap (user: are no-mask clicks dim objects the cap removed?): objects per volume, click-to-mask distance and brightness per category, all volumes, ac
+
+run r261104-3278557 · pids 3278557 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/click_misses_vs_cap/run.log
+
+## 2026-11-04 09:32
+
+r261104-3278557 runs gt_click_misses_vs_cap.py at 6481f73 (the run line above was cut short)
+
+## 2026-11-04 09:37 — result
+
+r261104-3278557 (6481f73): the StarDist 180-object cap never fired on the Leifer reseg. StarDist 103-145 objects per volume (median 129, 1532 volumes), NeRVE 117-154 (median 125, sampled every 10th; min 37). Clicks with no mask are not dim removed objects: within 1 um of a mask they are brighter than assigned clicks (median 1.5x, red 3x5x5 box, relative to the volume's assigned clicks); the 700 with a NeRVE mask but no StarDist mask within 1 um are dimmer (median 0.51x, p10 0.18x, about the dimmest kept object 0.17x) and sit 1.6 um median from a StarDist mask (p90 7.8). Only ~290 clicks (0.25%) are >2 um from any StarDist object
+
+## 2026-11-04 09:59 — run
+
+NeRVE GT project Leifer_NeRVE_Worm1_reexport_A2_nervegt (make_project_like of the A2 NeRVE project, configs only; user asked for a full project with NeRVE segmentation and GT, traces to compare with the paper). GT by gt_tracks_from_clicks.py --rule segmentation_id --max_label 1000 (7799d00): the NWB's own NeRVE label per click, pseudo masks dropped: 107,000 of 119,019 clicks (89.9%); 10,603 on pseudo masks, 1,416 in the 26 empty volumes, none shared; per-neuron coverage p10 0.81, median 0.97, min 0.0007. GT copied to combined_3d_tracks.h5, dry run planned only extract_full_traces + traces; now running traces
+
+run r261104-1389743 · pids 1389743 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/traces_nervegt.log
+
+## 2026-11-04 10:19 — dead-end
+
+r261104-1389743 wrote empty traces (red_traces.h5 0 columns, no grid plots): wbfm reindex_segmentation's lookup table has 1000 entries, the NeRVE project's pseudo masks are labels >= 1000, so every volume raised IndexError and its reindexed mask was zeroed. Fixed in wbfm (dlc_for_wbfm dev, utils_segmentation.reindex_segmentation pads the table with background for higher labels; uncommitted, synthetic test passes). Removed the empty outputs, dry run planned only extract_full_traces + traces, rerunning
+
+## 2026-11-04 10:19 — run
+
+Traces rerun on the NeRVE GT project with the wbfm lookup-table fix (uncommitted in dlc_for_wbfm)
+
+run r261104-2149802 · pids 2149802 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/traces_nervegt2.log
+
+## 2026-11-04 10:30 — result
+
+r261104-2149802 done: NeRVE GT project traces with the wbfm lookup fix, 0 IndexErrors, 79 neurons in red/green traces (11.8% of frames zero or NaN), 69 in paper_traces, heatmap and grid plots written (sent to the user next to the two StarDist heatmaps)
+
+## 2026-11-04 10:49 — decision
+
+User: labels >= 1000 are a sign of upstream errors, so no wbfm workaround. Reverted the wbfm lookup padding; wbfm (dlc_for_wbfm dev, uncommitted) now raises a clear ValueError naming the volume and label when masks or tracks hold a label >= the 1000-entry table, instead of silently zeroing the volume. The NeRVE GT project got its own NeRVE-only segmentation (drop_mask_labels.py, 7a84d3f): the 12,019 pseudo masks (labels >= 1000, 1,162,620 voxels, in all 1536 volumes) set to background, every other voxel and the metadata unchanged (max metadata label 152; checked at volumes 0, 700, 1500), project_config segmentation -> its own 1-segmentation/segment_config.yaml. The original A2 project is untouched. GT copy refreshed in combined_3d_tracks.h5 (newer masks made the dry run plan the whole tracking chain; after the refresh only extract_full_traces + traces)
+
+## 2026-11-04 10:49 — run
+
+Traces on the NeRVE GT project with its NeRVE-only masks, stock wbfm plus the new label check
+
+run r261104-1391957 · pids 1391957 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/traces_nervegt3.log
+
+## 2026-11-04 10:59 — result
+
+r261104-1391957 done: NeRVE GT project traces on its NeRVE-only masks with stock wbfm (plus the new label check), no IndexError or ValueError, red traces 79 neurons, paper traces 69, plots written: same shapes as the discarded workaround run
+
+## 2026-11-04 11:04 — decision
+
+User (2026-11-04): leave the original A2 NeRVE project's masks as they are; labels >= 1000 only matter for pipeline trace extraction, which is needed once, for the NeRVE GT, and is done in _nervegt
+
+## 2026-11-04 11:13 — result
+
+Trace cliffs in the StarDist GT heatmaps (user: tracking error, or the GT lost a dim neuron?), trace_cliff_check.py 7226561, output ~/.cache/barlow_scratch/train/leifer_reseg/trace_cliffs/. Not tracking: the two cliff neurons (038, 060; paper trace early-minus-late 0.58 and 0.35 in the mask GT, next largest 0.07) have stable GT objects (click to assigned centroid median 0.65 / 0.63 um, longest run > 2 um 4 / 2 frames; 100-frame median object volume within 0.77-1.51x), and over all 79 neurons the longest run > 2 um is 10 frames and no window has the object volume > 2x or < 0.5x. It is wbfm's per-channel exponential bleach correction: raw green/red rises (038: 0.50 early -> 0.63 late), dr_over_r_50 without bleach correction rises too (-0.12 -> 0.14), with it falls (0.32 -> -0.26); background subtraction (75 per pixel x volume) adds a little for 038. Both neurons' red and green fall about 3x over the first ~200 frames, which the single exponential fits badly. The dip at frames ~690-790 (040, 081, 050, 034) is in all three projects including the NeRVE one, so it is in the recording or clicks, not the segmentation. No GT-side filter would remove either; per the user, no filtering on the traces post hoc. 038 is in no NeRVE paper trace because NeRVE never detected it (1495 of 1524 clicks on pseudo masks)
+
+## 2026-11-04 11:21 — result
+
+neuron_038 in the StarDist heatmaps (user: high first half, low second, worse than a jump): the heatmap is not paper_traces but calc_default_traces(dr_over_r_20, interpolate, rolling mean), which puts r0 at the 20th percentile; there 038 averages 0.76 first half vs 0.04 second (mask GT; 0.88 centroid GT; colour scale tops at 0.72), 060 0.47, every other neuron under 0.11. Without bleach correction (bleach_correct=False) 038 rises slowly like every neuron (-0.22 first minus second half; red bleaches faster than green). Its red is 6.5x brighter in frames 0-50 than 300-600 and green 3.3x (median neuron 1.3x and 1.1x), which the per-channel exponential overcorrects. Red crops at its click (t = 5, 40, 150, 400, 800, 1300): one neuron, separate from its neighbour, the same StarDist mask on it every time; it is just very bright at the start (and again near t 800). Not a tracking or GT error. Quick looks (inline), not a recorded result
+
+## 2026-11-04 12:33 — result
+
+lambd1 (lambd_obj 1, object term only) on the Leifer StarDist reseg, mask GT: 0.9383 (920 miss / 6078 mismatch), level with base 0.9385; centroid GT pending
+
+## 2026-11-04 12:37 — result
+
+lambd1 on the Leifer StarDist reseg, centroid GT: 0.9394 (3698 / 2548), 0.8 pt below base 0.9476 (mask GT: level, 0.9383 vs 0.9385)
+
+## 2026-11-04 14:38 — result
+
+r261104-4089020 / r261104-4089023 partial: wk2 t37 leifer_stardist 0.9330, wk2 t24 0.8916; snap1 t0 0.9347 / maskgt 0.9358 (other rounds unit); no new failures
+
+## 2026-11-04 14:40 — decision
+
+Committed the wbfm clear-error change for mask labels >= 1000 (dlc_for_wbfm dev a1cd2225, not pushed), per the user
+
+## 2026-11-04 17:10 — result
+
+r261104-4089020 / r261104-4089023 partial: wk2 t37 maskgt 0.9253, t24 maskgt 0.8721, t57 leifer_stardist 0.9448 (matches the earlier score_reseg ref_trial57_nerve 0.9448), zimmer_1128 t0 on leifer_stardist 0.9256
+
+## 2026-11-04 18:37 — result
+
+r261103-77928 / r261104-2000932: lambd1_nf400 on the Leifer StarDist reseg: centroid GT 0.9414, mask GT 0.9384 (base 0.9476 / 0.9385)
+
+## 2026-11-04 20:25 — result
+
+r261104-4089020 / r261104-4089023 partial: wk2 t50 0.9485 / maskgt 0.9408 (best so far, level with local base), t57 maskgt 0.9351, t63 0.9416, samuel_137 t63 0.9388, zimmer_1128 t0 maskgt 0.9211
+
+## 2026-11-04 20:32 — run
+
+Re-track base (Leifer StarDist reseg) from its cached embedding with --save_tracks, centroid then mask GT, labelprop on GPU, for an error-pattern analysis (are errors in GT entries we were too generous to keep?)
+
+run r261104-3677569 · pids 3677569 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/retrack.log
+
+## 2026-11-04 20:35 — dropped
+
+labelprop on the GPU ran out of memory next to the nf400 training; rerun on CPU
+
+dropped r261104-3677569
+
+## 2026-11-04 20:35 — run
+
+Re-track base (Leifer StarDist reseg) on CPU from its cached embedding with --save_tracks (4ae0c07), centroid and mask GT in parallel, for the error-pattern analysis
+
+run r261104-4092161 · pids 4092161, 4092164 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/retrack_c.log, /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/retrack_m.log
+
+## 2026-11-04 21:50 — run
+
+Overnight CPU queue for the Leifer reseg checks (user: rigorously test the resegmentation; 15 jobs, 4 parallel, all with --save_tracks, scripts at 2b0e31d): (1/7) base, t57, t50, ref_local_nerve embedded and scored on the NeRVE-masks GT project _nervegt; (10) t57 re-tracked on the NWB all-objects path to split errors on pseudo masks; (2) base on the 1.0 um GT (_gt1um copy); (4) merge persistence for StarDist and NeRVE masks; (5) labelprop seeds 1-4 base centroid GT, 1-2 base mask GT, 1-2 t57 centroid GT. Queue: /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/overnight_queue.txt
+
+run r261104-3067468 · pids 3067468 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/logs/queue_status.log
+
+## 2026-11-04 21:50 — decision
+
+User decisions for the Leifer reseg subproject: finish the local training, then test the resegmentation rigorously overnight; it gets a full supp figure. Report accuracy that does not assume the GT is complete (gt_valid matching, next to nandist). More labelprop seeds yes; training seeds no (the user runs GPU sweeps; leave the GPU after nf400). Traces with every segmentation and tracker, and compare them. Also check how the original NeRVE benchmark (0.885, all 119,019 clicks, pseudo masks tracked as objects) treats pseudo-mask clicks.
+
+## 2026-11-04 22:17 — decision
+
+User: trust the GT, drop clicks only for a very good reason; merges and coincident clicks are good reasons (merges get a figure panel); unattached clicks count as StarDist misses and are reported; score with gt_valid. Click jitter (click_jitter.py, 2b0e31d+; per-frame change of click-to-centroid offset, good-size frames): sigma per axis z/x/y 0.35/0.20/0.20 um on StarDist masks (3-d 0.44, p95 of 3-d jitter 1.7 um), 0.27/0.18/0.18 on NeRVE (0.37, p95 1.3). Mask GT with edge 1.5 um (c5a605a) in new copy _maskgt15: 113,689 assigned, 437 no mask within 1.5 um (misses), 208 in 4 empty volumes, 3,144 merges and 1,541 coincident excluded. Scoring base on it.
+
+run r261104-3000639 · pids 3000639 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/logs/base_maskgt15.log
+
+## 2026-11-04 22:23 — run
+
+Click-to-object Mahalanobis distance (object voxel covariance; surface at sqrt 5) for every click, StarDist and NeRVE masks (click_mahalanobis.py, user: centroid distance scaled by object size; the Euclidean mixtures show no clear clusters). Earlier, click_distance_gmm.py (3b45037): background-click edge distance with brightness splits into bright clicks just off a mask (1,690, 0.3-0.8 um, 1.4-1.5x) and dim clicks 1.7 um out (526, 0.41x; 40% within 1.5 um of a mask, so the 1.5 um edge rule would attach ~210 likely misses to a neighbour), plus neuron_038's 59 misclicks (jumps of 4-19 um for 1-4 frames to dim spots no segmentation has, frames 273-1285).
+
+run r261104-3792074 · pids 3792074 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/click_mahalanobis/run.log
+
+## 2026-11-04 22:40 — result
+
+r261104-3792074 (click_mahalanobis.py a1b... see git log): StarDist, every click's Mahalanobis distance to its nearest object (object voxel covariance): one population that falls off sharply at the ellipsoid surface sqrt5 (median 0.50, p99 2.61; GMM BIC picks 1 component); 2,137 clicks (1.8%) beyond sqrt5, 95% of them outside the mask; NeRVE-segmented fraction and brightness fall with distance (2.24-3: 1,539 clicks, 1.5x bright, 51% NeRVE; beyond 4.47: 0.34x, 32%; beyond 10: 0%, 0.18x, mostly neuron_038). NeRVE masks: 4.5% component at d_M ~17 (0.2% NeRVE, 0.29x) = the ~10.6k clicks on pseudo masks, so the measure recovers NeRVE's own misses. gt_click_rules.py: click-to-nearest-click spacing has an excess below ~1 um over even NeRVE's object spacing (StarDist objects never closer than 2.3 um); misclick statistic (pairwise robust motion reference, ±5 frames) has a clean jitter null (p99.9 1.42 um) but 8,456 clicks beyond 2x that, concentrated in neurons 035/038/065/060 and at their own brightness, i.e. real non-rigid motion the null lacks; not yet a justified rule. Earlier mean-of-neighbours reference was biased by missing neighbours (dead end).
+
+## 2026-11-04 23:05 — decision
+
+User decisions on the Leifer GT for the supp figure: headline accuracy is StarDist strict (a click outside every StarDist mask counts as a missed segmentation, i.e. an error), gt_valid matching, over every kept click; merges and coincident clicks excluded, each with its own justification panel (coincident cutoff 1.0 um, from the click-spacing excess over object spacing). Supp: four accuracies, each with a panel on why it is not the headline: NeRVE masks only; NeRVE plus pseudo masks for clicks it missed (the original 0.885, needs the strongest justification); StarDist plus added masks for clicks outside it; StarDist with growing attachment shells (edge 0.5-3 um, and Mahalanobis sqrt5), noting the shell bias: the GT then names the nearest object, which the tracker is also drawn to. Implementation: gt_tracks_from_clicks.py writes per-click fates (_status.npz) for mask and segmentation_id rules (coincident exclusion now in both, Mahalanobis attach, status-only mode for the NWB label space); score_gt_variants.py scores one run's saved tracks against every variant offline (labelprop never sees the GT); add_click_masks.py builds the StarDist + click-masks project.
+
+## 2026-11-04 23:11 — run
+
+Build the Leifer GT variants (gt_tracks_from_clicks.py at the commit above, coincident 1.0 um everywhere): StarDist strict (in mask only, headline), edge shells 0.5/1/1.5/2/3 um, Mahalanobis sqrt5; NeRVE masks only (max_label 1000); NeRVE + pseudo masks in NWB label space (status only). Into each project's 3-tracking/manual_annotation/variants/.
+
+run r261104-2025465 · pids 2025465 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/gt_variants/sd_strict.log
+
+## 2026-11-04 23:27 — run
+
+Device control: base seed 0 on the StarDist centroid GT re-tracked with labelprop on the GPU (CPU embedding cache), starts when nf400 training (pid 3460809) exits; compare with the CPU 0.9476 before moving more tracking to the GPU (user: GPU free through tomorrow morning). Embedding stays on CPU (i261027-2 GPU crop padding).
+
+run r261104-237552 · pids 237552 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/logs/base_centroidgt_gputrack.log
+
+## 2026-11-04 23:47 — result
+
+r261104-2025465 (GT variants, 891f275) + score_gt_variants.py on base seed 0 CPU tracks: StarDist strict (in mask only, coincident 1.0 um and merges excluded) 112,996 assigned of 115,507 kept, 2,511 segmentation misses; base 0.9404 on assigned, 0.9199 over all kept (headline), gt_valid = nandist at this coverage. Shells: Mahalanobis sqrt5 0.9400/0.9219; edge 0.5 0.9393/0.9254; 1.0 0.9385/0.9305; 1.5 0.9376/0.9324; 2.0 0.9371/0.9330; 3.0 0.9368/0.9336. Strict to 3 um attaches 1,004 clicks of which ~53% are tracked to the attached object (tracker errors +471): the shell-attached clicks are much harder than average. NeRVE masks only: 106,552 assigned, 11,663 missed of 118,215 kept (no merges); NeRVE+pseudo: all 118,215 assigned.
+
+## 2026-11-05 00:10 — run
+
+StarDist + click masks control (supp variant C; add_click_masks.py at 2a.. see git log): new project Leifer_NeRVE_Worm1_reexport_A2_stardist_clickmasks (make_project_like, own segmentation): an ellipsoid of median StarDist extent (semi-axes 2.68 z, 6.87 x, 6.71 y voxels) on background voxels around each of the strict GT's 2,511 missed clicks (median 366 voxels); then its strict GT (coincident 1.0 um) set as final tracks; then base embedded (CPU) and tracked (labelprop CPU) with --save_tracks.
+
+run r261105-2217669 · pids 2217669 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/logs/base_clickmasks.log
+
+## 2026-11-05 00:10 — run
+
+base on the original NeRVE scoring (NWB, every object incl. pseudo masks, segmentation_id GT mapping; supp variant B), CPU embedding and tracking, --save_tracks, to score against the nerve_pseudo variant next to trial 57.
+
+run r261105-2247910 · pids 2247910 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/logs/base_nwb_allobj.log
+
+## 2026-11-05 00:16 — result
+
+nf400 finished training (leifer-reseg-e done; all six sweep variants trained); the scorers pick it up on CPU (centroid and mask GT, old metrics). GPU free; device control r261104-237552 starts on it.
+
+## 2026-11-05 02:37 — decision
+
+r261104-237552: GPU label propagation on base seed 0 (Leifer StarDist, 1.5 um centroid GT) gives 0.9476, the same as CPU (misses 2984 vs 2971, mismatches 2416 vs 2430). Not bitwise identical, but equal accuracy, so further label-propagation runs may use the GPU; embedding stays on CPU (i261027-2).
+
+## 2026-11-05 02:37 — run
+
+Leifer NWB all-object re-tracks (t57, base) failed at argparse (--lab leifer_reexport); relaunched with --lab leifer and GPU label propagation, for the original-NeRVE panel of the Leifer supp figure
+
+run r261105-2919358 · pids 2919358, 2919361 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/logs/t57_nwb_allobj.log, /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/logs/base_nwb_allobj.log · for [[QUE - How much do the segmentation and the ground truth conversion change Leifer tracking accuracy and traces]]
+
+## 2026-11-05 02:37
+
+r261104-3000639 (base on the 1.5 um mask GT, maskgt15 project) ended; tracks saved to base_maskgt15.h5, scored with score_gt_variants with the other runs. r261105-2247910 failed at argparse (bad --lab), relaunched above.
+
+## 2026-11-05 02:38 — run
+
+Rerun of the wk2 trial 9 leifer_stardist benchmark cell (first run hit OSError EIO reading masks from the mount; the maskgt cell with the same embedding succeeded, 0.9141)
+
+run r261105-2920870 · pids 2920870 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/bench_wk2_t9.log
+
+## 2026-11-05 02:41 — run
+
+GPU label-propagation re-track (saved tracks, then score_gt_variants on sd_strict, Mahalanobis and edge shells) of every network benchmarked on the Leifer StarDist project: 14 benchmark cells, 6 local sweep variants, wk2 t50/t57 seeds 1-4; queue /home/charles/.cache/barlow_scratch/train/leifer_reseg/gpu_retrack/queue.txt (scripts at ab90a41)
+
+run r261105-2924449 · pids 2924449 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/gpu_retrack/logs/queue_status.log · for [[QUE - How much do the segmentation and the ground truth conversion change Leifer tracking accuracy and traces]]
+
+## 2026-11-05 02:42 — result
+
+r261104-3067468 (overnight queue) nervegt part: networks tracked on the NeRVE-masks-only Leifer project and scored (score_gt_variants, ab90a41) against nerve_only (NeRVE masks, pseudo-mask clicks counted as segmentation misses: 11,663 of 118,215 kept). gt_valid accuracy on assigned / all kept: base 0.8925/0.8045, t57 0.8909/0.8030, t50 0.8865/0.7991, ref_local_nerve (trained on NeRVE masks) 0.8879/0.8003. About 10k mismatches vs about 2.4k on the StarDist project with the same networks, so the NeRVE segmentation is harder to track even on the clicks it segments, and a network trained on it does no better.
+
+## 2026-11-05 02:42 — result
+
+r261104-3067468 seeds and GT copies, scored on the StarDist variants (gt_valid, assigned/all kept): base seed0 strict 0.9404/0.920, seed1 0.9411/0.921, seed2 0.9381/0.918; edge 3 um shell 0.9343-0.9373/0.931-0.934. Seed 0 tracks from the 1.0 um, mask and maskgt15 project copies score identically to 4 digits (label propagation never sees the GT; tracks differ by a few clicks between CPU runs). GPU tracks (r261104-237552) match CPU to 4 digits on every variant.
+
+## 2026-11-05 02:42 — result
+
+Leifer benchmark on the StarDist project complete except wk2 trial 9 centroid cell (rerun r261105-2920870): wk2 t50 0.9485, t57 0.9448, t63 0.9416, t74 0.9408, t65 0.9402, t76 0.9402, t37 0.9330, t14 0.9266, t24 0.8916 (1.5 um centroid GT, nandist); mask GT 0.8721-0.9418. These cells saved no tracks; r261105-2924449 re-tracks them on the GPU to score them on the strict GT.
+
+## 2026-11-05 02:44 — result
+
+r261104-3067468 merges part (gt_merge_persistence.py 2b0e31d, mask label under each click voxel): StarDist 3,484 clicks (2.9%) in a mask that also holds another neuron's click, 127 pairs; NeRVE masks 4,073 (3.4%), 121 pairs. Merges are brief: no pair has a run of 50+ frames (longest 11, neuron_050/070, click distance median 1.4 um); 2 StarDist and 3 NeRVE pairs share masks in 100+ frames in total; most merged pairs' clicks are 1.5-5 um apart, i.e. two clicked neurons the segmentation fused for a few frames. For the merge panel: a fused mask cannot be right for both neurons, and the rate is the same on both segmentations, so excluding merges does not favour StarDist. NeRVE's own segmentation_id is one-to-one although 3.4% of its clicks sit on a voxel of a mask shared with another click: NeRVE's assignment is not mask membership (check for the NeRVE panel).
+
+## 2026-11-05 02:44 — dropped
+
+GPU OOM with two label propagations at once (wk2_t57_s0); restarted one at a time with OOM retry
+
+dropped r261105-2924449
+
+## 2026-11-05 02:44 — run
+
+GPU re-track queue restarted one job at a time with OOM retry (same queue, same scripts ab90a41)
+
+run r261105-2927825 · pids 2927825 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/gpu_retrack/logs/queue_status.log · for [[EVD - On the strict Leifer StarDist ground truth the base network tracks 92 percent of kept clicks]]
+
+## 2026-11-05 02:55 — run
+
+Traces for GT- vs tracker-tracked comparison (item 8): tracks_to_project.py (9f14b48) made three copies with final tracks = StarDist strict GT (_stardist_strictgt), base tracker tracks matched gt_valid on sd_strict (_stardist_track_base; reproduces 0.9404), base tracker tracks on NeRVE masks matched on nerve_only (_nervegt_track_base). Matched tracks are written at every volume they hold an object (6,275 volumes beyond the GT's assigned clicks for base on StarDist). Dry runs plan only extract_full_traces + traces; snakemake traces sequential, 16 cores.
+
+run r261105-2936414 · pids 2936414 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/traces_cmp/traces.log · for [[QUE - How much do the segmentation and the ground truth conversion change Leifer tracking accuracy and traces]]
+
+## 2026-11-05 02:57 — result
+
+compare_traces.py (validated before commit; reran at the commit below for the record) on existing GT-tracked traces: StarDist 1.5 um centroid GT vs mask GT (same segmentation): raw ratio r = 1.000 on shared frames and same object 100%, paper traces median r 0.992 (only the gap interpolation differs). NeRVE masks vs StarDist mask GT, both GT-tracked: raw green/red ratio per-neuron r median 0.908 (p10 0.78, min 0.56, 33 of 78 below 0.9), paper traces median 0.841 (p10 0.60, 51 of 69 below 0.9). The segmentation alone moves the traces noticeably.
+
+## 2026-11-05 05:10 — run
+
+r261105-2919358 failed: both NWB all-object re-tracks hit CUDA OOM in label propagation (the GPU re-track queue held 6.65 GB). Rerun one after the other on the free GPU from the cached embeddings.
+
+run r261105-3009009 · pids 3009009 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/logs/t57_nwb_allobj.log, /home/charles/.cache/barlow_scratch/train/leifer_reseg/error_patterns/logs/base_nwb_allobj.log · for [[EVD - Networks tracked on NeRVE's own Leifer masks score 5 points lower than on StarDist masks]]
+
+## 2026-11-05 05:12 — result
+
+r261105-2927825 done (28/28): every network benchmarked on the Leifer StarDist project re-tracked on the GPU from its cached embedding (labelprop seed 0) and scored on the strict GT (gt_valid = nandist to 4 digits). Strict all-kept: wk2 t50 0.9223 (seeds 0-4: 0.9220-0.9239), t74 0.9231, lambd0_nf400 0.9215, t63 0.9213, nf400 0.9207, t65 0.9204, base 0.9199, lambd1 0.9200, lambd1_nf400 0.9199, t76 0.9198, ref_local_nerve 0.9198, snap1 t0 0.9176, t57 0.9167 (seeds 0-4: 0.9162-0.9186), lambd0 0.9160, wk1 t1 0.9117, t14 0.9094, samuel137 t63 0.9082, t37 0.9078, zimmer1128 t0 0.9029, t9 0.8964, t24 0.8562. Strict ranks t57 below t74/t63/t65 (it was second on the 1.5 um centroid GT); the top 12 lie within 0.4 pt, about two labelprop-seed spreads (t50 0.19 pt, t57 0.24 pt).
+
+## 2026-11-05 05:12 — result
+
+r261105-2920870 done: wk2 trial 9 leifer_stardist (1.5 um centroid GT) 0.9247, misses 3718, mismatches 4037; benchmark round complete (20/20). The partial rerun had rewritten round_bayes_wk2_leifer_reexport_unified.json with its single record (the driver writes the run's own records); rebuilt it from the jsonl, latest record per tag (20).
+
+## 2026-11-05 05:12 — result
+
+r261105-2217669 done (StarDist + click masks, control C): base embedded and tracked on the _stardist_clickmasks project (2,511 added masks), strict GT there assigns all 115,507 kept clicks: 0.9350 (gt_valid = nandist; tracker misses 968, mismatches 6,538) vs 0.9199 on all kept on plain StarDist strict. So about 1,700 of the 2,511 added-mask clicks (about 69%) are tracked correctly, if the rest is unchanged: a segmentation that misses nothing (built from the GT) gains 1.5 pt.
+
+## 2026-11-05 05:12 — result
+
+r261105-2936414 done: snakemake traces on _stardist_strictgt, _stardist_track_base, _nervegt_track_base (13 min each, exit 0). compare_traces.py (5c74d01), per-neuron Pearson r median (ratio of summed green/red; paper traces): tracker vs GT on StarDist 0.987 / 0.975 (8 of 79 neurons below 0.9 on ratio; same object median 98.7% of shared frames); tracker vs GT on NeRVE masks 0.943 / 0.938 (24 of 78 below 0.9); NeRVE vs StarDist both GT-tracked 0.908 / 0.842 (33 below 0.9); NeRVE GT vs StarDist tracker 0.881 / 0.816. On StarDist masks the tracker changes traces less than the segmentation choice does. Output ~/.cache/barlow_scratch/train/leifer_reseg/traces_cmp/compare/ (summary.json, per-pair csv, trace_agreement.png).
+
+## 2026-11-05 05:23 — result
+
+r261105-3009009 done (NWB all objects incl. pseudo masks, segmentation_id GT, GPU labelprop): t57 0.8859 (misses 1421, mismatches 12157 of 119,019), base 0.8849, reproducing the original NeRVE benchmark (0.885). score_gt_variants --split_label_at 1000 (45a04d2) on nerve_pseudo (gt_valid, coincident 1.0 um excluded, 118,215 kept): t57 0.8899 overall, 0.8949 on the 106,552 clicks NeRVE segmented, 0.8444 on the 11,663 pseudo-mask clicks; base 0.8887 / 0.8932 / 0.8478. Tracking the pseudo masks as objects barely changes accuracy on NeRVE's own clicks (t57 0.8909 without them), so the low NeRVE number is not caused by the pseudo masks: NeRVE-segmented clicks carry ~10.4k mismatches either way.
+
+## 2026-11-05 07:31 — run
+
+fDNC (published model) on the Leifer recording with the new segmentations: StarDist project and NeRVE-masks-only project, every detection, 4 axis conventions, templates 10 + 4 spread plus the GT-free vote, GT-free rescale (fdnc_track_and_score.py @579dea7, --save_tracks). Tracks scored offline with score_gt_variants.py against sd_strict / nerve_only / nerve_pseudo. Axis convention to be picked by fDNC's mean match probability (GT-free), as on Samuel. Paper reports fDNC 79.1%, NeRVE 82.9% on this recording (per-volume template-match accuracy, Yu et al. 2021).
+
+run r261105-3083686 · pids 3083686, 3083837, 3083724, 3083840, 3083653, 3083660, 3083657, 3083663 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/fdnc/leifer/logs/stardist_default.log, /home/charles/.cache/barlow_scratch/fdnc/leifer/logs/stardist_swap.log, /home/charles/.cache/barlow_scratch/fdnc/leifer/logs/stardist_mirror.log, /home/charles/.cache/barlow_scratch/fdnc/leifer/logs/stardist_swap_mirror.log, /home/charles/.cache/barlow_scratch/fdnc/leifer/logs/nervegt_default.log, /home/charles/.cache/barlow_scratch/fdnc/leifer/logs/nervegt_swap.log, /home/charles/.cache/barlow_scratch/fdnc/leifer/logs/nervegt_mirror.log, /home/charles/.cache/barlow_scratch/fdnc/leifer/logs/nervegt_swap_mirror.log · for [[EVD - Published trackers run on the shared NWB benchmark]]
+
+## 2026-11-05 07:31 — decision
+
+Misclick rule (user, 2026-11-05): clicks with no segmentation nearby cannot be settled without more manual annotation. They stay in the strict GT and count as segmentation misses; no drop rule.
+
+## 2026-11-05 07:31 — decision
+
+NeRVE's pointStatsNew has tracked points without masks: rows past pointIdx in straightPoints / trackIdx are 'error correction' positions (NeRVE tutorial). 158,778 tracked detections and 21,799 tracked extra points (12%); per track median 3%, 90th pct 39%. Detections' pointIdx = the re-export's NeRVE mask labels (centroids within ~0.35 px). Plan (agreed with user): score NeRVE's tracks only on NeRVE masks; headline = detections only; supplement = extra points mapped through NeRVE's own CLstraight transforms to the mask they land in. Never transfer NeRVE points onto StarDist masks (user: the points would differ with another segmentation).
+
+## 2026-11-05 07:35 — run
+
+NeRVE's own tracks to saved tracks (nerve_tracks.py @82c84fb): detections only, and detections + error-correction points mapped to the mask under them in the NeRVE-only project and in the NWB segmentation (with pseudo masks). 4-volume check: detections' straightPoints map back to their own mask label 100%, rawPoints within 0.28 px; 53 of 67 extra points land inside a NeRVE mask (being counted: tracked vs untracked detection).
+
+run r261105-3087916 · pids 3087916 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/nerve_tracker/nerve_tracks.log · for [[EVD - Published trackers run on the shared NWB benchmark]]
+
+## 2026-11-05 07:38 — result
+
+Worst Leifer trace neurons (inspect_trace_neurons.py @f8f20c1, out ~/.cache/barlow_scratch/train/leifer_reseg/traces_cmp/inspect/). StarDist, GT-tracked vs base-tracked: the 4 neurons with r_paper < 0.5 (023, 015, 068, 024) and 058 are the same low-activity neurons that also disagree GT vs GT across segmentations (SNR 2.0-3.8 vs median 4.5 for r >= 0.9; Spearman r_paper vs SNR 0.43). Differences are hundreds of short runs (longest 4-27 volumes), almost never a swap with another GT neuron (diff_to_other_gt <= 0.05): one side holds an unannotated object 3-4 um away. Two kinds: ambiguous clicks (023, 058: click about equidistant, within 1 um, from both objects on 77-88% of differing frames; 023's click sits 1.19 um from its object even on agreeing frames vs 0.53 typical) and clear tracker flicker (015, 024, 068: click 0.6-1.0 um from the GT object, tracker's object 2.8-3.5 um away). Spikiness (median |x_t - mean of neighbours|) of the ratio trace: the tracker's trace is smoother than the GT-tracked one in 73 of 79 neurons and all 7 with r_paper < 0.8 (023 0.030 vs 0.059, 024 0.022 vs 0.058): single-volume ratio spikes in the GT traces coincide with differing frames, i.e. the clicks hop between two objects. On NeRVE masks the tracker is smoother in only 58%. Caveat: smoother is not proof of correct; a tracker consistently on the wrong neighbour is smooth too.
+
+## 2026-11-05 07:39 — idea
+
+Nguyen et al. 2017 (PLoS CB, NeRVE) on this recording: GT 'previously hand annotated and published' (Nguyen 2016), 'nine researchers collectively annotated 70 neurons from each of the 1519 volumes' with a MATLAB GUI; not said whether annotators saw NeRVE output (likely independent, it predates NeRVE). NeRVE fills missing neurons by consensus + TPS interpolation and also REPLACES a detected position more than 3 s.d. from the consensus (the pointStatsNew extra points). Their accuracy pairs automated and manual neurons by closest match, only 'neurons consistently found by both', error = matched to a manual neuron other than its most frequent one. fDNC paper (Yu 2021) on the same recording: fDNC 79.1%, NeRVE 82.9%, single-template NeRVE 73.1% (per-volume match accuracy vs a template).
+
+## 2026-11-05 07:48 — result
+
+r261105-3083686 (fDNC) and r261105-3087916 (NeRVE tracks) recorded in [[EVD - On the new Leifer ground truths fDNC tracks 82 percent and NeRVE 89 percent of assigned clicks]]: fDNC 0.821 on StarDist strict (base 0.940), NeRVE detections-only 0.886 on its own masks (base 0.893). NeRVE's 12% extra points mostly sit on detections another NeRVE track holds (17,830 of 21,799) and recover only 4.2% of the clicks NeRVE did not segment, so they do not explain the gap on all-kept clicks. Leifer cell of [[EVD - Published trackers run on the shared NWB benchmark]].
+
+## 2026-11-05 07:58 — result
+
+Coincident clicks in the Samuel GTs (NWB clicks, grid spacing from the NWB; quick inline check): other-neuron click within 1.0 um: 153 46 of 120,923 clicks (0.04%, one pair neuron_003/014, 23 frames in 9 runs, median distance 2.62 um), 137 none, 184 366 of 210,336 (0.17%, 10 pairs). Leifer for reference: 804 of 119,019 (0.68%, 74 pairs). Within 1.5 um: 153 0.26%, 137 0.04%, 184 7.87%, Leifer 1.30%. 184 is denser overall (nearest other click median 2.20 um vs 3.2-3.4 in 153/137, 4.5 Leifer; 36% of clicks have a neighbour within 2 um) and has persistent close pairs: neuron_054/080 median 1.28 um over 2,310 shared frames (p10 1.07), 004/022 median 1.58, 018/055 1.71: either tightly packed neighbours or one neuron annotated twice; not checkable without the images (and 184's 0.3 um xy spacing, unlike 0.45 for 153/137, is unverified). Samuel evals give the tracker the clicks as objects, so 1 um coincidences can cost at most ~0.2 pt.
+
+## 2026-11-05 08:03 — result
+
+gt_click_coincidence.py @43203f6 on Samuel 153/137/184, Flavell, Leifer re-export: recorded in [[EVD - Coincident GT clicks are rare in the Samuel and Flavell ground truths and in Leifer are brief jumps onto a neighbour]]. Leifer's coincident pairs are normally 2.6-5 um apart and touch in short runs (one click jumping to the neighbour), supporting their exclusion panel.
+
+## 2026-11-05 08:05 — result
+
+r: neuron_removal_scores.py @62921a6 recorded in [[EVD - Half of the base network's Leifer StarDist errors are clicks where every tracker agrees on another object]]; consensus_error_clicks.csv (3,618 clicks) prepared for the user's manual check of suspect Leifer neurons.
+
+## 2026-11-05 08:26 — run
+
+Labelprop seeds 1-4 for wk2 t74, wk2 t63 and lambd0_nf400 on the Leifer StarDist project (GPU queue, one job at a time, saved tracks scored on sd_strict and shell variants), for seed spread in the strict-GT network table; base, t50 and t57 already have 5 seeds.
+
+run r261105-3124433 · pids 3124433 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/gpu_retrack/logs/queue_status.log · for [[EVD - On the strict Leifer StarDist ground truth the base network tracks 92 percent of kept clicks]]
+
+## 2026-11-05 08:26 — done
+
+committed at 891f275 and cited in the StarDist DATA notes
+
+Done: commit barlow_track/scripts/project_reanalysis/gt_tracks_from_clicks.py and cite the commit in the stardist Leifer DATA note
+
+## 2026-11-05 08:55 — run
+
+Click snapshots for the user's manual check (click_snapshots.py @c85a7fc), 16 consensus-error clicks for each of the 10 suspect Leifer neurons, out /home/charles/.cache/barlow_scratch/train/leifer_reseg/neuron_removal/snapshots/. First look, neuron_023: a pair of touching nuclei with the click on their boundary in all 8 sampled volumes; the GT object and the trackers' object are the two halves, so its 36% consensus errors are an ambiguous annotation, not tracking.
+
+run r261105-3145457 · pids 3145457 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/neuron_removal/snapshots.log
+
+## 2026-11-05 08:57 — run
+
+NeRVE vs StarDist per-click comparison for base seed 0 (nerve_vs_stardist_clicks.py), all volumes: why NeRVE masks are harder. 30-volume test: clicks failing only on NeRVE have NeRVE splitting the StarDist object into 2+ masks in 68% (12% for clicks correct on both), nearest NeRVE neighbour 2.57 vs ~3.6 um; NeRVE masks are ~4x smaller overall (median ~120 vs ~520 voxels).
+
+run r261105-3147438 · pids 3147438 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/nerve_vs_stardist/run.log · for [[EVD - Networks tracked on NeRVE's own Leifer masks score 5 points lower than on StarDist masks]]
+
+## 2026-11-05 08:59 — issue
+
+Samuel 184-004's NWB grid_spacing (0.3, 0.3, 1.75 um) is probably wrong: wbfm convert_harvard_data.py writes 0.45 for Harvard data, and in pixels 184's head matches 153/137 (click-cloud s.d. major/minor 43.3/11.5 px vs 46.9/12.0 and 42.8/12.9; nearest xy click 3.7 vs 3.8/4.3 px). At 0.45 um, 184 has no coincident clicks within 1 um (vs 366 at 0.3) and its 'persistent close pairs' vanish (nearest other click median 3.01 um, like 153/137). Consequence: make_per_recording_rounds.voxel_aspect read the NWB, so round_wk1_samuel_184 and round_bayes_wk3_samuel_184 trained with visnet_z_scale 5.833 instead of 3.889 (z stretched 1.5x in the ViSNet position input). Only 184 is affected; crop sizes are in voxels. Needs confirmation from the Samuel lab or the raw metadata.
+
+- [ ] issue i261105-1 · affects [[DATA - Samuel lab recordings 137 and 184-004 with ground truth]], [[EVD - Coincident GT clicks are rare in the Samuel and Flavell ground truths and in Leifer are brief jumps onto a neighbour]]
+
+## 2026-11-05 08:59
+
+i261105-1: [[EVD - Coincident GT clicks are rare in the Samuel and Flavell ground truths and in Leifer are brief jumps onto a neighbour]] revised in place with the 0.45 um row for 184; its conclusion no longer depends on 184's spacing.
+
+## 2026-11-05 09:00 — result
+
+r261105-3147438 done: NeRVE's deficit is its over-splitting of nuclei (recorded in [[EVD - Networks tracked on NeRVE's own Leifer masks score 5 points lower than on StarDist masks]]). r261105-3145457 done: snapshots for 10 neurons. Quick look: 023 and 044 are touching-nucleus pairs with the click on or near the shared boundary (ambiguous GT); 072's clicks sit clearly in the GT object while every tracker takes the nucleus below (real tracking errors, keep).
+
+## 2026-11-05 09:07 — decision
+
+Sweep accuracy objective refactored (f3fadf8): the eval now runs inside the trial's GPU job with label propagation on the GPU (objective_track_device defaults to cuda, objective_crop_window defaults to slide like training per i261027-2, CUDA OOM redoes all seeds on CPU). objective_cpu_job is opt-in only. Reason: Leifer labelprop takes ~2 min on a GPU vs 822 s on 16 cluster CPUs (job 7770675), and the CPU job also embeds on CPU (827 s). Past round_* templates keep objective_cpu_job: true as the record; new rounds should drop it and cut objective_minutes. AGENTS.md updated (git-ignored).
+
+- [ ] new round templates: drop objective_cpu_job, lower objective_minutes
+
+## 2026-11-05 09:13 — decision
+
+Eval bottleneck found and fixed (43e7a0a): wbfm's get_all_neuron_metadata_for_single_time evaluates volumes_with_no_neurons (scans every frame) on each call, 0.2-0.3 s a frame on Leifer/Zimmer, ~5-8 min per full-video eval on GPU and CPU alike (training already bypassed it in volume_data). data_loading._single_time_metadata gives identical output on 4 projects incl. empty frames at ~0.0005 s a frame. Scores unchanged by construction. Unrelated: test_barlow_position projector-norm tests (2) fail on HEAD before this change.
+
+## 2026-11-05 09:14
+
+r261105-3124433: wk2 t74, t63 and lambd0_nf400 seeds 1-4 done; seed s.d. 0.08-0.17 points on strict all-kept for all five 5-seed networks, means t50 .923 > t74 .922 > lambd0_nf400 .921 > t63 .920 > t57 .917. Added to [[EVD - On the strict Leifer StarDist ground truth the base network tracks 92 percent of kept clicks]].
+
+## 2026-11-05 09:15
+
+r261102-3398854 (z-split stage 1, pairs): 53,396 vertically touching mask pairs in 1,536 frames, contact_frac p10/50/90 0.05/0.36/0.91; used as the input of stage 2 (r261102-3403676), whose result is recorded there.
+
+## 2026-11-05 09:17 — decision
+
+CPU label-propagation phase profile (labelprop_phases.py at 6bec9b4, Leifer wk2 t57 embedding, 196,626 objects, 3 seeds, local Xeon): propagation is ~97% of CPU labelprop time, 517 s/seed on 1 thread, 102 s/seed on 16 (8.3 cores busy, so torch_sparse spmm scales sub-linearly); NNDescent 34 -> 11 s, spectral 7 s, SVD 5 s, Python edge loop 1.6 s (vectorised in the commit after 43e7a0a, identical edge_index). No other single-threaded step of note in labelprop; the one in the eval was the per-frame metadata scan (43e7a0a). GPU labelprop ~2.3 s/seed. Local 16-thread seed time is 3x the cluster job 7770675's 30 s/seed (other CPU, not checked).
+
+## 2026-11-05 09:17 — run
+
+Cluster state 2026-11-05 09:15, read from the round folders (no squeue here).
+
+wk3 Bayesian rounds: all 8 dispatchers alive, 52-73 of 120 trials scored per recording. No traceback in any job log since 2026-11-03 17:00.
+
+Best (trial) against the earlier best under the same scoring:
+- flavell 0.982 (t57) vs 0.949 (wk1 t4)
+- 0316-03 0.989 (t49) vs 0.974
+- 0324-02 0.980 (t47) vs 0.956
+- 0330-02 0.970 (t61) vs 0.947
+- samuel 153 0.985 (t49) vs 0.984
+- samuel_184 0.957 (t27) vs 0.933
+- zimmer_1123 0.987 (t45) vs 0.979 (visnet_full t27)
+- zimmer_1210 0.942 (t28) vs 0.920
+
+On every recording, fusion add beats visual_only (best add vs best visual_only, 1-22 pt; 0330-02 0.970 vs 0.745, samuel 0.985 vs 0.926). visual_only has only 12-17 trials per round, mostly before Ax converged, so its bests are undersampled.
+
+The winning lambd_obj differs by recording: about 0-0.05 on flavell 2025-07-01 and zimmer_1210 (top 2), 0.35-0.8 elsewhere. self_layers 0, 1 or 2 by recording.
+
+wk1 grid restarts:
+- zimmer_1128 nf100: 10/12 done, all 0.958-0.976 (saturated).
+- wk1f30 nf30: 10/12 done. lambd_obj 0 costs visual_only 4-5 pt (0.920/0.887 vs 0.959/0.941 at 0.67) but not add (0.954/0.961 vs 0.962).
+- samuel_137: 3/9 done. visual_only lambd_obj 1.0 at seed 43 scored 0.587, against 0.853/0.829 at 0 and 0.67.
+
+All scores are the sweep objective (each trial scored on its own training recording), best of about 60 trials.
+
+## 2026-11-05 09:17 — done
+
+done 2026-11-05: wk3 bests above in the notebook; zimmer_1210 and wk1 grid dispatchers running
+
+Done: On return: check zimmer_1210 and wk1 grid dispatchers started; tally wk3 per-recording bests with best_of_table.py
+
+## 2026-11-05 10:16 — done
+
+2026-11-05: GPU ~2.3 s/seed vs 102 s/seed on 16 local threads (labelprop_phases.py, 6bec9b4) and 30 s/seed in cluster job 7770675; sweeps now track on the trial GPU by default (f3fadf8)
+
+Done: Speed: time full-video label propagation on GPU (--track_device cuda) in its own job vs CPU
+
+## 2026-11-05 10:17 — run
+
+End-to-end check of the new sweep default (f3fadf8 + 43e7a0a + 167a169) on an idle local GPU: full Leifer StarDist eval of wk2 trial 57 as a trial job now runs it (fresh embedding, --device cuda --crop_window slide, labelprop on cuda, 25 seeds, project GT). Wall time sets objective_minutes; accuracy should match the GPU re-track of the cached CPU embedding (r261105-2927825).
+
+run r261105-3209644 · pids 3209644 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/train/leifer_reseg/gpu_inline_eval/eval.log
+
+## 2026-11-05 10:24 — surprise
+
+i261105-1: Susoy et al. 2021 (Cell 184:5122, doi:10.1016/j.cell.2021.08.024, zotero:975IU5CK), STAR Methods p. e3: the Samuel-lab spinning-disc system has a pixel size of 0.45 um and ~1.75 um between optical sections (20 per volume, 256x512 px area). This matches wbfm convert_harvard_data.py (0.45, 0.45, 1.75) and the pixel-space match of 184 with 153/137, so 184's NWB value of 0.3 um xy is very likely wrong. Not proof: 184-004 has 16 planes, not 20, so it may be a different acquisition; the issue stays open until the lab or the raw metadata confirms.
+
+## 2026-11-05 10:25 — result
+
+r261105-3209644 done: full Leifer StarDist eval of wk2 t57 as a sweep trial now runs it (fresh GPU embedding, slide crops, GPU labelprop x25, metadata fix): 7 min 13 s wall (embed 239 s for 1,536 frames / 196,626 objects, track 118 s incl. 25 seeds at 2.3-3.0 s and spectral sync), peak RSS 5.6 GB. Accuracy 0.94479 vs 0.94475 for the GPU re-track of the cached CPU embedding (misses 2,846 vs 2,871). Embeddings agree to p99 relative row difference 1.9e-6; 4 of 196,626 rows differ by > 1e-3 (max 6%). Suggest objective_minutes ~60 for Leifer-size videos on the cluster (local GPU, network-mounted data).
+
+## 2026-11-05 10:32 — decision
+
+User decisions (2026-11-05) for the next sweep:
+1. Hold recordings out of hyperparameter tuning; the frozen base config is chosen on a tuning subset only.
+2. The objective is a lower quantile across the tuning recordings (about the lower quartile), not the mean, which saturated datasets dominate, and not the min, which is too noisy.
+3. The base settings are frozen after this sweep. Hyperparameters may then change per recording only through GT-free information (e.g. crop size from physical voxel size).
+4. Resegmenting Samuel with stardist is a subproject; the user expects problems, because the data look different.
+
+## 2026-11-05 10:32 — surprise
+
+GT-free proxy check (scripts/scratch/gt_free_proxy/proxy_corr.py, proxy_partial.py, uncommitted). Method: 11 wk2/wk3 per-recording rounds (Zimmer 1128 left out, n=9), image-plus-position trials only (37-94 per round); last logged epoch of each trial's stats.json; Spearman correlation with final accuracy.
+
+Raw correlations:
+- The summed val_loss has none (|rho| < 0.4, except Flavell 0316-03 at -0.62).
+- The per-batch val loss and the train loss correlate at -0.46 to -0.83 on most recordings, but only -0.07/-0.47 on Samuel 137 and -0.18/-0.50 on Samuel 184, the least saturated.
+
+Partial correlations, controlling for num_frames, epochs, lr, lambd_obj, self_layers and the three augmentation settings: these shrink to -0.15 to -0.49 (val loss) and +0.05 to -0.59 (train loss). The descriptor mean fraction is the best single one on Samuel 137 (partial -0.64).
+
+Reading: most of the loss-accuracy correlation is training budget. Within a budget, lower loss is weakly better, which is not enough to tune on.
+
+- [x] test tracking self-consistency (agreement between label-propagation seeds, track purity) as a GT-free proxy on the cached embeddings of the wk2/wk3 rounds (emb_cache holds every trial)
+
+## 2026-11-05 10:57 — decision
+
+User approved (2026-11-05) the held-out split for the shared-config sweep.
+- Tuning set: Zimmer 1210 and 1123, Flavell 03-30-02 and 03-24-02, Samuel 137 and 184.
+- Held out: Zimmer 1128, Flavell 2025-07-01, 03-16-03 and 03-30-01, Samuel 153, Leifer stardist.
+- Objective: 25th percentile across the tuning recordings of (accuracy minus that recording's best wk2/wk3 score).
+Also approved: the Samuel stardist resegmentation (start with 153) and testing tracking self-consistency as a GT-free proxy.
+
+## 2026-11-05 11:13 — run
+
+Timing test of the GT-free consistency proxy (consistency_proxy.py) on wk3 zimmer_1210 trial 28. The first attempt (2 trials plus a second-seed run, under timeout 900) never finished a trial, CPU-bound at about 11 cores; this rerun prints per-stage times.
+
+run r261105-3249979 · pids 3249979 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy_test.log
+
+## 2026-11-05 11:14 — answer
+
+Default to true (user, 2026-11-05): frozen view pairs are non-standard and came from a bug, not a design choice. At least one more sweep will run with it on, so problems would show there. Done in 2085014.
+
+answered a261027-1
+
+## 2026-11-05 11:14 — decision
+
+a261027-1 acted on (2085014): reaugment_each_epoch now defaults to true via train_barlow_clusterer.reaugment_enabled (unit test), the project template writes it explicitly, and s137_pilot/run_pilot.py pins false for its recorded variants. Compute is unchanged: the augmentation was already recomputed every epoch from the same seed. The LR is constant, so the Flavell reaug run's stop at epoch 32 has no schedule confound. Saved configs of position runs from 10-05 to 11-05 lack the key and need false to reproduce (AGENTS.md). Cluster rounds change only after a pull, and a killed trial of a running round retrained after the pull would re-augment.
+
+- [ ] weekend round: sweep augmentation strength with reaug on, plus a frozen-vs-reaug control (best config, 2-3 training seeds, Flavell + one other dataset)
+
+## 2026-11-05 11:18 — dropped
+
+GPU label propagation OOM after 9 seeds (fragmentation), CPU fallback ~1 h per trial; restarting with expandable_segments
+
+dropped r261105-3249979
+
+## 2026-11-05 11:18 — run
+
+Rerun of the consistency-proxy timing test with PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+run r261105-3408664 · pids 3408664 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy_test.log
+
+## 2026-11-05 11:23 — run
+
+Label propagation memory: torch_sparse.spmm gathers an (edges x labels) buffer per layer, about 3.6 GB on Zimmer 1210 (260k objects, k=20, ~175 labels), freed and reallocated 100 times per seed at a seed-dependent size. That fragments the CUDA cache, and multi-seed GPU propagation OOMed at seed 10 (r261105-3249979). Not a leak: each seed's result goes to the CPU. Fix (uncommitted): utils_label_propagation.sparse_adjacency builds the normalized adjacency once as CSR, and each layer is adj @ H. Tests: 16/16 pass, including 2 new ones (CSR matches spmm to 1e-5 with identical labels on a kNN graph; a shared adjacency equals one built per call). Real-data check: wk3 zimmer_1210 trial 28 rescored from its cached embedding with GPU label propagation, against the recorded 0.9418 (3007 misses, 6394 mismatches); peak GPU memory logged.
+
+run r261105-3413687 · pids 3413687 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/rescore_t28.log
+
+## 2026-11-05 11:42 — run
+
+Samuel 153 stardist resegmentation (subproject): wbfm_tracker_baseline/samuel_resegment/153_stardist, a copy of samuel/153 (whose masks hold only GT neurons) reading the source's preprocessed volumes (1331 x 20 x 320 x 192). Model students_and_lukas_3d_zarr (Zimmer-trained) at native resolution. Run locally with RUNME.sh -c -s segmentation (alt_preprocessing bbox, then segmentation).
+
+run r261105-3423621 · pids 3423621 · host charles-Precision-7820-Tower · logs /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/wbfm_tracker_baseline/samuel_resegment/153_stardist/snakemake/log_snakemake_local_20261105.out
+
+## 2026-11-05 11:45 — run
+
+CSR vs spmm label comparison on Zimmer 1210 trial 28 (4 seed volumes, 100 layers, GPU and CPU): fraction of objects whose top label differs, and max probability difference
+
+run r261105-3441300 · pids 3441300 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/csr_vs_spmm.log
+
+## 2026-11-05 11:47 — surprise
+
+Other session (BarlowTrack_cluster_runs) replaced torch_sparse.spmm with a CSR adjacency in label propagation (uncommitted, utils_label_propagation.py): fixes GPU OOM at seed 10 on Zimmer 1210 (spmm's edges x labels buffer, ~3.6 GB/layer). CPU check here on the Leifer t57 graph (196,626 objects): spmm 1064 vs CSR 93 ms/layer at 16 threads (8.3 vs 14.7 cores), 571 vs 61 s/seed on 1 thread, max diff 3e-7. So CPU labelprop drops from ~45 to ~4 min per 25-seed eval once committed; the 'propagation is 97% of CPU time' entry above describes spmm.
+
+## 2026-11-05 11:47 — run
+
+Smoke test of the new shared-config dispatcher optimize_shared_config.py (2 trials, tuning samuel_184 + zimmer_1210, 12 frames, 1 epoch, local submitit). Plumbing only.
+
+run r261105-3452335 · pids 3452335 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/round_shared_smoke/smoke.log
+
+## 2026-11-05 11:47
+
+r261105-3441300 (GPU part): CSR adjacency vs torch_sparse spmm on zimmer_1210 t28, 4 seeds x 100 layers: identical top labels, max |prob diff| 3e-7. So r261105-3413687's 0.94166 vs recorded 0.94181 is GPU-vs-CPU float order, not CSR. r261105-3413687: GPU full eval with CSR, 7.3 min, peak 1.05 GB (spmm OOMed at seed ~10). r261105-3408664: first proxy test, agree_mean 0.0096 was the perm-indexing bug (fixed).
+
+## 2026-11-05 11:48 — run
+
+GT-free tracking self-consistency proxy (consistency_proxy.py, CSR propagation on GPU) on 12 accuracy-stratified trials each of wk2_samuel_137, wk3_samuel_184, wk3_zimmer_1210 (the non-saturated recordings), to see whether agreement/confidence/dup rank trials like accuracy does. ~3 min/trial.
+
+run r261105-3461106 · pids 3461106 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy/run_all.log
+
+## 2026-11-05 11:49 — run
+
+GT-free voxel-size consistency check from segmented-object spread (voxel_size_from_masks.py, 6 frames/recording), calibrated on Zimmer (0.325/1.5 um) and Leifer StarDist (0.3226/1.5 um): checks the suspect Samuel 184 xy (0.3 vs 0.45) and Flavell z (0.3 isotropic?) before a um-based crop rule. zimmer_1128 sigma_xy 3.02 vox, sigma_z 1.54; samuel_137 1.80 / 1.05 (implied xy 0.55 um vs stated 0.45; GT-seeded masks, different segmenter).
+
+run r261105-3468094 · pids 3468094 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/voxel_sizes.log
+
+## 2026-11-05 11:53 — decision
+
+Staged (not launched) config_files/round_bayes_wk4_leifer_stardist_strict: wk3's grid on the Leifer StarDist project, scored against the strict click GT under a new benchmark label leifer_stardist_strict (DATASETS entry added; the old leifer_stardist label scores the 1.5 um centroid GT, so reusing it would have mis-skipped cells). num_frames to 1000, eval in the GPU job, train_hours 72. Preflight OK (79 neurons, 1536 frames); template attaches in Ax. Needs the uncommitted DATASETS/make_per_recording_rounds/CSR changes on the cluster.
+
+## 2026-11-05 11:53 — surprise
+
+test_staged_round_templates_create_an_experiment_and_resume failed on a clean tree (KeyError 'values': a staged scratch round has range params); test now takes a range's bounds. 72/72 pass.
+
+## 2026-11-05 11:54 — surprise
+
+r261105-3468094 (voxel_size_from_masks.py, uncommitted; median per-object std of mask voxel coords, 6 frames each), calibrated on Zimmer StarDist (sigma_xy 3.0 vox = 0.98 um). Leifer StarDist comes out at xy 0.322 um vs 0.3226 stated: the xy estimate is right across labs with the same segmenter. z is not (Leifer 1.9 vs 1.5 um): axial blur differs, ignore z. Segmenter matters ~1.45x (Leifer NeRVE masks give 0.47). (1) Samuel 184 sigma_xy 1.64 vox vs 137 1.80 and 153 1.71, all GT-seeded watershed: 184's voxels match 137/153 (stated 0.45 um), so its NWB grid_spacing xy 0.3 is very likely wrong (0.3 would make its nuclei ~1.5x larger in voxels than the others). (2) Flavell (5 recordings, consistent): sigma_xy 1.2 vox, sigma_z 1.75 vox: under the stated 0.3 um isotropic voxels nuclei would be 0.36 um sigma, ~2.7x smaller than Zimmer StarDist's, beyond the segmenter spread; implied xy ~0.8 um/vox. If so, the 64-vox xy crop spans ~50 um on Flavell (Zimmer: 21 um), i.e. half the head, and visnet_z_scale 1.0 is wrong too. Needs Flavell's real voxel size (Atanas 2023 methods; not found by a quick search).
+
+- [ ] Find Flavell's true voxel size (Atanas et al. 2023 Cell methods / NWB provenance) and Samuel 184's; then the um crop rule
+- [x] Commit voxel_size_from_masks.py before citing r261105-3468094 in a node
+
+## 2026-11-05 11:55 — run
+
+Check that eval_accuracy on the _strictgt project (the wk4 Leifer StarDist objective) reproduces BarlowTrack_local_runs' score_gt_variants number: wk2 leifer t57 seed 0, expected accuracy_assigned 0.9370.
+
+run r261105-3497624 · pids 3497624 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/strict_check/eval.log
+
+## 2026-11-05 11:55 — dropped
+
+GPU half done (identical labels, 3e-7); CPU half redundant with BarlowTrack_local_runs' CPU benchmark (3e-7) and its cached 8.2 GB starved the smoke test
+
+Stopped PID 3441300.
+
+dropped r261105-3441300
+
+## 2026-11-05 12:04 — run
+
+Resume test of optimize_shared_config.py on the smoke round: r261105-3452335's two trials each lost one cell to GPU OOM from my leftover r261105-3441300 (8.2 GB cached); the rest of the plumbing worked (per-label accuracy, regret, failed cell fails the trial). Expect: the missing cells are retrained, then the trials complete.
+
+run r261105-3528506 · pids 3528506 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/round_shared_smoke/smoke_resume.log
+
+## 2026-11-05 12:07 — result
+
+r261105-3461106 partial: on 12 accuracy-stratified trials each, mean agreement of the 25 labelprop runs with their spectral-sync consensus tracks accuracy at Spearman 0.99 (all) / 0.94 (top half, n=6) on BOTH wk2_samuel_137 and wk3_samuel_184; mean consensus confidence 0.99/0.89 and 0.98/0.89. Val loss reached at most -0.5 partial. Next: every trial of samuel_137 to control for the settings (budget confound).
+
+## 2026-11-05 12:07 — run
+
+Consistency proxy on all ~109 wk2_samuel_137 trials (seeded with the 12 done), for a partial correlation controlling for num_frames/epochs/lr/lambd_obj/self_layers/augmentation, i.e. whether agreement says more than the training budget.
+
+run r261105-3531457 · pids 3531457 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy/all_samuel137.log
+
+## 2026-11-05 12:08 — run
+
+Samuel 153 StarDist re-segmentation (r261105-3423621) finished: median 51 objects/volume (28-94 over every 60th volume) vs ~76 GT-seeded masks/volume in the NWB. Now assigning the GT centroids to the StarDist masks with Leifer's strict rule (mask at the click voxel, edge 0, coincide 1 um, merges unassigned; voxel 1.75/0.45/0.45 um from the NWB) to measure GT coverage.
+
+run r261105-3532825 · pids 3532825 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/samuel_gt.log
+
+## 2026-11-05 12:10 — run
+
+Samuel 153 StarDist GT coverage (r261105-3532825, strict rule): 30% of 120,923 GT clicks assigned; 36% outside every mask, 34% in masks shared by 2+ GT neurons, median neuron coverage 10%. Unusable as is (the user expected trouble). Likely cause: Samuel nuclei are ~1.7 vox xy spread vs ~3.0 on the Zimmer data the StarDist model was trained on. Testing resampling before StarDist (stardist_rescale_test.py, 8 volumes, zooms z,xy = 1,1 / 1,1.4 / 1,1.75 / 1.17,1.75).
+
+run r261105-3535238 · pids 3535238 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/stardist_rescale.log
+
+## 2026-11-05 12:10 — run
+
+r261105-3497624 died on CUDA OOM loading the model (11:55, while r261105-3441300 held 8.2 GB); relaunched the same strict-GT check (expect 0.9370).
+
+run r261105-3536566 · pids 3536566 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/strict_check/eval.log
+
+## 2026-11-05 12:31 — result
+
+r261105-3535238 (Samuel 153, 8 volumes, 665 GT clicks, strict rule): resampling before StarDist helps a lot. zoom z,xy 1,1: 32% assigned (67% in a mask, 34% in masks shared by 2+ GT neurons, 56 objects); 1,1.4: 58% (84/26, 98); 1,1.75: 70% (88/18, 134); 1.17,1.75 (Zimmer object size): 74% (91/17, 155 objects). Leifer strict for comparison: 95% of clicks. Trying stronger zooms for the remaining merges.
+
+## 2026-11-05 12:32 — run
+
+Samuel StarDist zoom scan, round 2: z,xy 1.17,2.1 / 1.5,1.75 / 1.5,2.1 / 2,2.1 / 1.17,2.5.
+
+run r261105-3554388 · pids 3554388 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/stardist_rescale2.log
+
+## 2026-11-05 12:32 — result
+
+r261105-3528506: optimize_shared_config.py resume works: both smoke trials reattached, only the 2 OOM'd cells retrained, then both completed with objectives (-0.40, -0.29: lower-quartile regret of 2 labels, 12-frame 1-epoch trainings). shared_results.jsonl keeps the earlier failed line per trial; the last line per trial is current. r261105-3461106 (12 trials, wk3_zimmer_1210): agreement separates broken from working networks (rho 0.62 all, agree_p10 0.73) but not within the top half (0.936-0.943; agree_mean rho -0.77, plateau ~0.83). So the consistency proxy works on the hard Samuel recordings, not near saturation.
+
+## 2026-11-05 12:33 — issue
+
+Samuel 184-004's NWB grid_spacing xy (0.3 um) is very likely wrong: its segmented nuclei are the same size in voxels as Samuel 137/153's (0.45 um) within 10% ([[EVD - Segmented nucleus sizes contradict the stated voxel sizes of the Flavell and Samuel 184 recordings]]). Every samuel_184 run with --z_scale_from_voxels (round_bayes_wk3_samuel_184) used visnet_z_scale 1.75/0.3 = 5.83 instead of ~3.9. Accuracies stay valid as measured; the tuned config may be off and the per-recording z-scale rule is wrong for 184.
+
+- [x] issue i261105-2 · affects [[DATA - Samuel lab recordings 137 and 184-004 with ground truth]]
+
+## 2026-11-05 12:33 — issue
+
+Flavell NWBs state 0.3 um isotropic voxels, but their segmented nuclei are ~2.7x smaller in voxels than Zimmer's in xy and taller in z than in xy, implying ~0.6-0.8 um xy pixels ([[EVD - Segmented nucleus sizes contradict the stated voxel sizes of the Flavell and Samuel 184 recordings]]). Flavell runs with --z_scale_from_voxels used visnet_z_scale 1.0, and the 64-voxel xy crop may span ~40-50 um there (Zimmer: 21 um). Need the true voxel size (Atanas et al. 2023 methods / acquisition metadata).
+
+- [ ] issue i261105-3 · affects [[DATA - Flavell lab benchmark recordings]]
+
+## 2026-11-05 12:34 — decision
+
+Staged (not launched) config_files/round_shared_v1: shared-config Ax sweep (optimize_shared_config.py), 6 tuning recordings, lower-quartile regret vs wk2/wk3 bests (unchanged as of 12:35), wk3 grid minus fusion (add fixed), num_frames to 1000, 60 trials x 6 GPU jobs, 4 trials at a time. Template loads and builds all 6 cells with wk3's eval settings. sbatch_dispatcher.sbatch now takes BARLOW_DISPATCHER to run it as a Slurm job. Open: samuel_184 and Flavell z-scales from the suspect grid_spacing (i261105-2/3), kept as in wk3.
+
+## 2026-11-05 12:41 — result
+
+r261105-3554388 (Samuel 153 zoom scan 2, 8 volumes, 665 clicks; assigned / in mask / shared / objects): 1.17,2.1: 79/94/15/180; 1.5,1.75: 76/93/17/176; 1.5,2.1: 83/93/10/198; 2,2.1: 88/94/6.6/236; 1.17,2.5: 83/91/8/194. Larger z zoom cuts merges most. Object counts (236 vs ~83 clicks/volume, ~98 GT neurons) may mean over-splitting: scan 3 adds median object volume (um^3) to compare with Zimmer StarDist (615 vox x 0.158 um^3 = ~97 um^3).
+
+## 2026-11-05 12:41 — run
+
+Samuel zoom scan 3 with object volumes: 1,1 / 1.17,1.75 / 2,2.1 / 2.5,2.1 / 2,2.5 / 3,2.5.
+
+run r261105-3564506 · pids 3564506 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/stardist_rescale3.log
+
+## 2026-11-05 12:58 — result
+
+r261105-3536566: eval_accuracy --mode trained on the _strictgt project (the wk4 Leifer StarDist objective, nandist) reproduces BarlowTrack_local_runs' score_gt_variants number for wk2 leifer t57 seed 0: 0.93707 (1101 misses, 6010 mismatches over 112,996 assigned clicks) vs 0.9370 expected. The staged round_bayes_wk4_leifer_stardist_strict objective is correct. 47 min locally (CPU crops, 25 seeds on GPU).
+
+## 2026-11-05 12:58 — result
+
+Strict-GT objective checked (other session BarlowTrack_cluster_runs): eval_accuracy --mode trained on Leifer_NeRVE_Worm1_reexport_A2_stardist_strictgt (nandist, 25 seeds, GPU labelprop with CSR) gives wk2 t57 seed 0 = 0.93707 over 112,996 GT entries, matching score_gt_variants' sd_strict accuracy_assigned 0.9370. The staged round_bayes_wk4_leifer_stardist_strict objective (label leifer_stardist_strict) is therefore accuracy over assigned clicks; headline all-kept = 0.97826 x it on these masks (README of that round).
+
+## 2026-11-05 12:58 — result
+
+Interim r261105-3531457 (96 wk2_samuel_137 trials): agree_mean rho 0.95 all, 0.72 top half (n=48); partial over 78 fusion=add trials controlling for 8 settings 0.88 (conf_mean 0.90); val loss partial was at most ~0.5. The proxy's top pick is the true best trial (t63, 0.9311); top 3 average 0.924. Replicating on every wk3_samuel_184 trial.
+
+## 2026-11-05 12:58 — run
+
+Consistency proxy on every wk3_samuel_184 trial (replication of the samuel_137 partial correlation).
+
+run r261105-3581004 · pids 3581004 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy/all_samuel184.log
+
+## 2026-11-05 13:05 — result
+
+r261105-3564506 (zoom scan 3, object volumes): raw StarDist objects on Samuel are 117 um^3 (merges; Zimmer ~97); z,xy 1.17,1.75: 45 um^3; 2,2.1: 27; 2.5,2.1: 23; 3,2.5: 14 um^3. The best click-assignment zooms split nuclei. Recorded in [[EVD - Upsampling Samuel volumes before StarDist assigns most ground truth clicks but shrinks objects below nucleus size]]. r261105-3531457 done (109 samuel_137 trials): partial rho 0.89 over 91 add trials; recorded in [[EVD - Agreement of label propagation runs with their consensus ranks Samuel networks by accuracy without ground truth]].
+
+- [ ] Commit the session's scripts (consistency_proxy/corr/partial, proxy_corr/partial, voxel_size_from_masks, stardist_rescale_test, optimize_shared_config) and CSR propagation, then cite commits in the in-progress Evidence and mark them done
+- [ ] Samuel StarDist: re-segment the full video at zoom 1.17,1.75 (and 2,2.1) and score a tracker on each, to see whether fragments hurt tracking
+
+## 2026-11-05 13:05 — done
+
+Done on wk2_samuel_137 (all 109), wk3_samuel_184 and wk3_zimmer_1210 (12 each): agree_mean rho 0.94, partial 0.89 on Samuel 137, picks the true best; Zimmer 1210 only separates broken networks. All samuel_184 trials running (r261105-3581004). See the EVD on label-propagation agreement.
+
+Done: test tracking self-consistency (agreement between label-propagation seeds, track purity) as a GT-free proxy on the cached embeddings of the wk2/wk3 rounds (emb_cache holds every trial)
+
+## 2026-11-05 13:05 — done
+
+Folded into the broader commit to-do of 13:05
+
+Done: Commit voxel_size_from_masks.py before citing r261105-3468094 in a node
+
+## 2026-11-05 13:08 — surprise
+
+Fast test suite with all of today's uncommitted changes: 303 passed, 10 skipped, 1 failed: test_step0_embed_and_augment.py::test_embed_single_volume_subset (CPU input vs CUDA weights), which fails identically on a clean tree, so it predates today's changes; not fixed (project-dependent test, unclear which side should move).
+
+## 2026-11-05 13:55 — result
+
+r261105-3581004 (all 76 wk3_samuel_184 trials) replicates samuel_137: agree_mean rho 0.93, partial 0.87 over 61 add trials (conf_mean 0.95 / 0.89); top half 0.62; the proxy's top pick is the true best (t27, 0.957). Recorded in [[EVD - Agreement of label propagation runs with their consensus ranks Samuel networks by accuracy without ground truth]].
+
+## 2026-11-05 14:19 — decision
+
+The user (2026-11-05): the Samuel recordings should all have the same voxel size. Re-read Susoy et al. 2021 (zotero:975IU5CK) STAR Methods p. e3: one spinning-disc system, 0.45 um pixels, 20 sections ~1.75 um apart, 256x512 px. Note the recordings are of the male TAIL (tail neurons, not head), which may explain why mask-based sizes put Samuel ~20% above 0.45 relative to Zimmer head nuclei. make_per_recording_rounds.voxel_aspect now overrides samuel_184 to (1.75, 0.45) um: visnet_z_scale 3.89 (wk3 used 5.83); round_shared_v1 README updated.
+
+## 2026-11-05 14:19
+
+i261105-2 duplicates i261105-1 (same Samuel 184 grid_spacing problem, logged this morning from convert_harvard_data.py and the paper); track it under i261105-1.
+
+## 2026-11-05 14:19 — resolved
+
+Duplicate of i261105-1
+
+resolved i261105-2
+
+## 2026-11-05 14:27 — decision
+
+Pre-weekend checks (2026-11-05 14:30): 1000-frame training fits (wk2/wk3 median 1.1 s, p90 1.8 s per frame-epoch -> 9-15 h at 1000x30, train_hours 72); volumes are read per item from zarr, so RAM does not grow with num_frames; Leifer StarDist red_data is zarr with one volume per chunk (DataLoader workers on). Shared dispatcher's Slurm path uses the same train_job_params/walltime/failure handling as optimize_hyperparameters. round_bayes_wk3_flavell_2022031603 has recorded nothing since 06:03: its dispatcher is alive and waits on 6 GPU training jobs (e.g. 7898108, 7898221, 7898715, 7898919, submitted 01:54-04:45) that never started (no logs); no dependency, so they are pending in Slurm for an unknown reason (needs squeue). wk3 rounds are at 57-82 of 120 scored.
+
+## 2026-11-05 14:32 — run
+
+Consistency proxy (consistency_proxy.py @2511d60) on every trial of wk3_zimmer_1210, zimmer_1123, flavell_2022033002, flavell_2022032402 (two GPU streams, overnight): (1) is the Zimmer top-half failure just saturation (all 57+ zimmer_1210 trials, partial correlation)? (2) GT-free per-recording references for a proxy-objective shared sweep (the user, 2026-11-05: search on the consistency proxy).
+
+run r261105-3650602 · pids 3650602, 3650603 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy/run_zimmer.log, /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy/run_flavell.log
+
+## 2026-11-05 14:40 — surprise
+
+Spectral sync rounds each run's singular-vector block to a permutation independently (round_block_to_partial_perm), which is not rotation-invariant: on synthetic equal-sized blobs (tied singular values) some runs are misaligned and agreement is only ~0.72. On real data it is near-optimal: Samuel 137 t63 per-run agreement through the perms 0.643 vs 0.664 with the best Hungarian matching of each run to the consensus, no run labels mapped to unused consensus columns. So the consistency proxy measures real run-to-run disagreement. (Diagnostic script: scratchpad perm_diag.py, quick look.)
+
+## 2026-11-05 14:40 — run
+
+Local smoke of optimize_shared_config.py with objective_metric agree_mean (consistency recorded in every eval record via utils_consistency / tracker.labelprop_runs; 2 trials, samuel_184 + zimmer_1210, 12 frames 1 epoch).
+
+run r261105-3662154 · pids 3662154 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/round_shared_smoke_proxy/smoke.log
+
+## 2026-11-05 14:42 — run
+
+The Flavell half of r261105-3650602 matched no trials (Flavell embeddings are emb_<label>_trained_allobj_<tag>.npz; consistency_proxy.py's tag regex did not strip allobj_) and exited at once; fixed the regex, relaunched the Flavell stream.
+
+run r261105-3662972 · pids 3662972 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy/run_flavell.log
+
+## 2026-11-05 14:47 — run
+
+Spectral-sync deep dive (the user, 2026-11-05). Findings from the code: (1) round_block_to_partial_perm rounds each run's block of right singular vectors on its own, which depends on the arbitrary basis of the singular subspace; column weighting (invsqrt-count) gives every consensus label about the same singular value, so that basis is close to arbitrary; (2) the input is top-1 indicators (probabilities discarded: topk=1 and row-normalised); (3) aggregate_consensus loops in Python over every labelled object (most of the 30-44 s). Added opt-in options (defaults unchanged): rounding='cpqr' (rotate onto pivoted-QR anchor rows, Damle et al. 2019), refine_iters (alternating Hungarian re-alignment of each run to the others' consensus), vectorised aggregate (identical output). Synthetic blobs: refine raises agreement 0.72->0.88 and purity 0.72->0.76 (noise 4); cpqr alone no change. Now scoring tracking accuracy of independent / refine / cpqr_refine on 7 cached embeddings (Samuel 137 t63/t50, 184 t27/t32, Zimmer 1210 t52/t36, Flavell 0330-02 t61).
+
+run r261105-3668466 · pids 3668466 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/sync_cmp/run.log
+
+## 2026-11-05 16:35 — run
+
+r261105-3668466 (compare_sync, 711ba82:barlow_track/scripts/scratch/spectral_sync/compare_sync.py): same propagation, only the sync differs, 7 networks. Accuracy independent -> refine -> cpqr_refine: S137 t63 .9313/.9339/.9338, S137 t50 .8765/.8856/.8880, S184 t27 .9571/.9575/.9575, S184 t32 .9254/.9244/.9241, Z1210 t52 .9432/.9407/.9406, Z1210 t36 .9294/.9296/.9316, F033002 t61 .9688/.9713/.9714. Mean +0.16 pt (refine) / +0.22 pt (cpqr_refine), 5/7 not worse; largest gain on the weakest network (+0.9/+1.2 pt), losses up to -0.26 pt (Zimmer t52). Agreement rises in all 7 (+0.015 to +0.035), partly by construction since refinement maximises agreement with the consensus. Sync time ~10 s.
+
+## 2026-11-05 16:35 — decision
+
+Keep the spectral-sync refinement opt-in (default independent rounding) for the weekend shared sweep: the mean gain (~0.2 pt) is below the spread between networks, and switching would shift accuracies and agreement against the wk2/wk3 records the proxy references come from. Revisit after the sweep, e.g. as a final-tracking option.
+
+## 2026-11-05 16:36 — run
+
+r261105-3662154 (local DEBUG smoke of optimize_shared_config with objective_metric agree_mean on samuel_184 + zimmer_1210, 2 Ax trials): end to end OK; shared_results records metric, per-recording value, accuracy and regret; Ax completed both trials. DEBUG-sized training so values are low (agree .34-.41).
+
+## 2026-11-05 16:37 — decision
+
+Switched staged round_shared_v1 to objective_metric agree_mean (cluster config_files/round_shared_v1/shared_template.yaml; accuracy version kept as .accuracy_objective.yaml.bak): references from proxy_references.py, zimmer_1210 .8509, zimmer_1123 .8603, flavell_2022033002 .7906, samuel_137 .6426, samuel_184 .7036; flavell_2022032402 pending r261105-3662972 (dispatcher refuses to start without it).
+
+- [x] add reference_agree_mean for flavell_2022032402 (and refresh zimmer_1123 when its scoring ends) in round_shared_v1/shared_template.yaml
+
+## 2026-11-05 17:15 — decision
+
+Spectral sync now defaults to CPQR rotation + Hungarian refinement (a5cb2f1, the user: turn on the improvement; pushed with 5695edc/711ba82). Accuracies and agreement recorded before a5cb2f1 used independent rounding; consistency records now carry 'sync'. The running proxy scorings r261105-3650602 / r261105-3662972 started before the change and stay on the old sync.
+
+## 2026-11-05 17:15 — run
+
+Re-score the top 5 trials by old agree_mean of samuel_137, samuel_184, flavell_2022033002, zimmer_1210 with the new default sync, to re-derive round_shared_v1's reference_agree_mean (the old references were under independent rounding).
+
+run r261105-3772374 · pids 3772374 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy/run_refs_newsync.log
+
+## 2026-11-05 17:46 — run
+
+r261105-3772374: new-sync (cpqr_refine10) agree_mean of the top-5 old-sync trials -> references samuel_137 .6654 (t63), samuel_184 .7210 (t27), flavell_2022033002 .8169 (t71; old-sync max was t61), zimmer_1210 .8648 (t33). Written into round_shared_v1/shared_template.yaml; old-sync zimmer_1123 value removed so the dispatcher refuses to launch until it is re-derived. (accuracy in these rows is the round's recorded old-sync accuracy.)
+
+## 2026-11-05 17:46 — run
+
+Re-score the top 5 trials of zimmer_1123 (now) and flavell_2022032402 (after r261105-3662972 ends) with the new default sync for round_shared_v1's last two references.
+
+- [x] add zimmer_1123 and flavell_2022032402 new-sync reference_agree_mean (proxy_references.py on scratchpad/proxy/newsync_*.jsonl) to round_shared_v1/shared_template.yaml
+
+run r261105-3795686 · pids 3795686 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy/run_refs_newsync_2.log
+
+## 2026-11-05 17:55 — run
+
+r261105-3795686 (part 1): zimmer_1123 new-sync reference_agree_mean .8730 (t56, recorded acc .9857; round best .9868), added to round_shared_v1. flavell_2022032402 remains (waits for r261105-3662972).
+
+## 2026-11-05 18:54 — run
+
+r261105-3662972 ended: flavell_2022032402 all 75 trials, agree_mean rho all .86 / better half .37 / partial .77 (63 add trials; settings explain .45); old-sync max-agree trial t47 = round best .9798. r261105-3795686 ended: new-sync top-5 agreement 47 .8517, 57 .8564, 73 .8517, 45 .8515, 61 .8483 -> reference .8564; round_shared_v1 now has all 6 references (zimmer_1210 .8648, zimmer_1123 .8730, flavell_2022033002 .8169, flavell_2022032402 .8564, samuel_137 .6654, samuel_184 .7210). A killed wrapper left a second identical chain running, so the newsync files hold duplicate (identical) rows.
+
+## 2026-11-05 18:54 — surprise
+
+Under the new sync the top-5 agreement values bunch within ~0.005-0.008 and the max-agreement trial moves off the true best on two Flavell rounds (033002: t61 .9695 -> t71 .9675; 032402: t47 .9798 -> t57 .9725, recorded old-sync accuracies). Refinement pulls each run towards the consensus, which may blur the proxy among the best networks; 5 trials per round is too few to say.
+
+## 2026-11-05 18:54 — decision
+
+Follow-up to the surprise entry above: no blurring. Among each round's top 5 the new sync's agreement spread is equal or wider (e.g. samuel_184 .022 -> .028, zimmer_1210 .005 -> .008), and its Spearman with recorded accuracy is noise-level either way (n=5; mean over 6 rounds old +0.05, new +0.15). The pick moving on two Flavell rounds is within that noise.
+
+## 2026-11-05 18:54 — done
+
+all 6 new-sync references in round_shared_v1
+
+Done: add reference_agree_mean for flavell_2022032402 (and refresh zimmer_1123 when its scoring ends) in round_shared_v1/shared_template.yaml
+
+## 2026-11-05 18:54 — done
+
+done, r261105-3795686
+
+Done: add zimmer_1123 and flavell_2022032402 new-sync reference_agree_mean (proxy_references.py on scratchpad/proxy/newsync_*.jsonl) to round_shared_v1/shared_template.yaml
+
+## 2026-11-05 19:50 — run
+
+25 vs 100 label-propagation seeds for the agreement proxy (user asked: the tracker default and the paper use 100; eval/sweep use 25). consistency_proxy.py --num_seeds (d782242), default CPQR+refinement sync, same trials at both counts: samuel_137 20 trials evenly spaced in accuracy rank, flavell_2022032402 15 trials from its better half (where the 25-seed ranking was weak, rho .37). Compares Spearman with recorded accuracy and time per trial.
+
+run r261105-3868317 · pids 3868317 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy/run_seeds100.log · for [[EVD - Agreement of label propagation runs with their consensus ranks Samuel networks by accuracy without ground truth]]
+
+## 2026-11-05 20:14 — dead-end
+
+r261105-3868317 failed: every cell died at once because the /lisc CIFS mount was down (OSError 112 Host is down, ~20:10); nothing computed. ygg drop itself also fails while /lisc is down (it stats run logs there).
+
+## 2026-11-05 20:14 — run
+
+Rerun of r261105-3868317 (25 vs 100 seeds), waiting up to 10 h for the /lisc mount to answer, then the same script.
+
+run r261105-3881276 · pids 3881276 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/9f349deb-c45d-4543-9ef0-50ad477ae9d4/scratchpad/proxy/run_seeds100.log · for [[EVD - Agreement of label propagation runs with their consensus ranks Samuel networks by accuracy without ground truth]]
+
+## 2026-11-05 22:34 — decision
+
+r261105-3881276 (25 vs 100 seeds, new sync, same trials): samuel_137 (20 trials, acc .488-.931) agree_mean rho 25 .97 / 100 .98, better half .82 / .88, same pick (t63 = best), rho(25,100) 1.00. flavell_2022032402 better half (15 trials, acc .973-.980) rho 25 .47 / 100 .29, upper half .57 / .57, pick t47 (= best .9798) at 25 vs t45 (.9757) at 100, rho(25,100) .57, so within that 0.7 pt range the ranking is mostly propagation noise at either count. 100 seeds cost 2.7x (Samuel 23 -> 62 s/trial) to 3.2x (Flavell 85 -> 276 s). Decision: keep 25 seeds for the proxy and the sweep; 100 buys nothing measurable.
+
+## 2026-11-06 08:49 — surprise
+
+wk3 per-recording rounds (dispatchers 7781793-7781798, 7781913, 7781914) found cancelled on 2026-11-06 morning; their logs stop 19:28-19:38 on 11-05, around when the /lisc CIFS mount dropped here (~20:10). No cluster notice. Stopped at 63-87 of 120 trials, mostly plateaued (best within the last 1-52 trials; new bests at most +0.1 pt). Not resumed: the shared sweep supersedes them.
+
+## 2026-11-06 08:49 — run
+
+round_shared_v1 launched by the user (dispatcher job 7910480, 2026-11-06 08:45, commit d782242): Ax on the 0.25-quantile of (agree_mean - reference) over the 6 tuning recordings, 60 trials, 4 in flight = 24 GPU jobs, all started at once (cluster quiet). First check: no tracebacks; 23 of 24 cells training normally; trial_2/flavell_2022033002 (job 7910495) logged loss 0 with zero embedding std at step 0, never seen in wk3's 159 jobs on that recording, being watched.
+
+run r261106-j7910480 · jobs 7910480 · host charles-Precision-7820-Tower · logs /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files/round_shared_v1/dispatcher_7910480.log
+
+## 2026-11-06 10:15 — decision
+
+Storage cleanup by the user on the cluster (2026-11-06, /lisc scratch 97% -> 92% full, 390 GB -> 1007 GB free): (1) every trial_*/checkpoints/checkpoint.pth outside round_shared_v1 (1456 resume checkpoints, 317 GB; finished trials keep resnet50.pth); (2) all .pth/.npz/.pt/.pickle in the 14 rounds trained before 2026-10-20 (new_image_embedding, initial_position_embedding[_samuel], v2-v5_position_embedding, round_2x2, round_center, round_bayes_samuel, visnet_test, round_bayes_zimmer, round_flavell, round_visnet_full; ~214 GB). Their exp_results, configs and logs are kept, so the numbers in the notes citing them stay traceable, but those networks and embeddings can no longer be re-scored. Not done: deleting the weaker trials' cached embeddings (list of 901 files, 407 GB, on the local scratchpad).
+
+## 2026-11-06 12:33 — issue
+
+Eval crops of project-source recordings truncate fractional crop centres (evaluate_trained_checkpoint default round_crop_centers=False -> _centroid_boxes int(z)) while training (volume_data.extract_crops) rounds them: objects with a fractional coordinate >= .5 are cropped one voxel off at eval, a whole z-plane in z. Systematic, so every wk2/wk3 and round_shared_v1 accuracy shares it and comparisons within them hold; absolute accuracies on project-source recordings may be low. NWB source rounds. Found by a read-only code review subagent 2026-11-06, not yet measured.
+
+- [ ] issue i261106-1 · affects [[@BarlowTrack revision accuracy evaluation]]
+
+## 2026-11-06 12:33 — decision
+
+Code review subagent (read-only, 2026-11-06): labelprop/spectral-sync core verified (CSR = spmm to 1.8e-7, index alignment, vectorised aggregate, cpqr/refine; synthetic 40% label noise: independent .962, cpqr 1.000, cpqr+refine 1.000). Other findings: smoke runs in a round dir would be resumed as real trials (checked: round_shared_v1's 99 records are all full-length, 25 seeds, cpqr_refine10, so not affected); proxy_references.py does not filter on sync/num_seeds (the shared round's references are 25 seeds + new sync, so not affected); consensus K capped at max seed label + 10 with one null column per run (plausible accuracy loss on every-detection data, untested); refine_perms keeps stale mappings for zero-count labels (tiny effect on agreement); dup_frac accepted as objective but is constant 0; CUDA fallback only catches OutOfMemoryError; minor edge crashes.
+
+- [ ] measure the eval crop-centre rounding issue: re-score a few networks with round_crop_centers=True (needs re-embedding)
+- [ ] test the spectral-sync K cap (max label + 10) on an every-detection recording
+
+## 2026-11-06 12:33 — decision
+
+Held-out scoring mode for optimize_shared_config.py (--score_heldout, --top/--trials, --replicates, --heldout_labels; heldout_results.jsonl) drafted and smoke-tested locally on held-out samuel (2 replicates, 12-frame smoke: .761 / .812). Not in the repo yet: this resumed session's sandbox makes the repo read-only except research/tree; draft in the session scratchpad heldout/optimize_shared_config.py.
+
+## 2026-11-06 14:10 — decision
+
+Code-review fixes prepared as a patch (repo read-only in this session; applies cleanly to d782242, 117 tests pass on a patched copy): shared sweep resumes only records scored at the run's eval length and refuses to mix smoke and full trials (params.yaml now records smoke); dup_frac rejected as an objective; restart after a crash between mkdir and params.yaml no longer dies; proxy_references.py filters on sync and num_seeds; label propagation falls back to CPU on cuSPARSE/cuBLAS/CUDA resource errors too, re-raising others; eval_accuracy maps '<name>_dupNN' to its base object instead of crashing. Plus the held-out scoring mode and the labelprop_opt plan/harness (subagent, harness reproduces the tracker exactly; batch1 = 33 variants x 4 cases x 2 seeds, ~3 h CPU). Deliberately not changed mid-sweep because they shift scores: eval crop-centre rounding (i261106-1), the consensus K cap, stale perms of zero-count labels in refine_perms.

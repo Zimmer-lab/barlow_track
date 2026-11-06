@@ -26,6 +26,7 @@ Results appended as JSON lines to /tmp/claude/exp_results.jsonl
 import argparse
 import json
 import os
+import re
 import time
 from collections import defaultdict
 from types import SimpleNamespace
@@ -299,10 +300,13 @@ def _iter_project_frames(project_data, target_sz, normalizer, frame_list, device
             continue
         name_to_seg = {}
         for n in names:
-            if n in seg2name.values():
-                name_to_seg[n] = int([k for k, v in seg2name.items() if v == n][0])
+            # get_bbox_data_for_volume_with_label renames a repeated name '<name>_dupNN'; it is the same
+            # segmentation object as <name> (as in track_using_barlow)
+            base = re.sub(r'_dup\d+$', '', n)
+            if base in seg2name.values():
+                name_to_seg[n] = int([k for k, v in seg2name.items() if v == base][0])
             else:
-                name_to_seg[n] = int(n.split('_')[-1])  # untracked_time_{t}_{ind}_{seg}
+                name_to_seg[n] = int(base.split('_')[-1])  # untracked_time_{t}_{ind}_{seg}
         if use_gpu:
             zxy = np.array([dat_d[n] for n in names], dtype=np.float32)
             vol_t = torch.from_numpy(np.ascontiguousarray(vol)).to(device, dtype=torch.float32)

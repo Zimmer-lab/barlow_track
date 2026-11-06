@@ -180,7 +180,7 @@ Every row is implemented in `lp_core.py`, so it can be tested without changing t
 | seeds | count (`seeds50`) | 25 | Measured neutral at 100 on S137 (+0.3/+0.5 pt vs the 25-seed mean); skip unless cheap. | ~0 | 2x | arg exists |
 | seeds | choice (`seed_strat`, `seed_complete`) | random | Seeds from volumes with at least the median object count start with nearly all labels; stratified seeds cover posture and time. | 0 to +0.5 | 0 | `select_seed_times` (lib) |
 | prop | layers (`layers30`, `layers300`) | 100 | Early stopping regularises: long clamped propagation drifts toward the harmonic solution, where big clusters bleed. | ±0.5; 3.3x faster at 30 | -/+ | arg exists |
-| prop | label spreading (`spread99`) | hard clamp | Soft clamping tolerates seeds that are mislabelled in their own volume. | ±0.5 | 0 | `alpha` already plumbed, unused (lib) |
+| prop | label spreading (`spread90`, `spread97`) | hard clamp | Not about mislabelled seeds: a seed volume's labels are its own objects, so they cannot be wrong. Decay with distance is also not the issue: each row is renormalised before top-k, so only the label proportions at a node matter. Spreading, H = aAH + (1-a)Y, discounts a seed's vote by about a^hops (horizon about 1/(1-a): 10 or 33 hops). That is a smooth version of `layers30`, and a = 0.99 (horizon 100 hops) would be about the same as `base`. Seed rows are not clamped and take a little neighbour mass. Worth more if `layers30` wins. | ±0.5 | 0 | `alpha` already plumbed, unused (lib) |
 | prop | class-mass norm (`classnorm`) | none | Corrects labels whose mass spreads widely (Zhu et al. 2003). | 0 to +0.3 | 0 | lib |
 | prop | soft cannot-link (`framenorm`) | none | Each label's mass within a volume is capped at 1 after every layer, so one seed cannot claim two objects of one volume. This directly attacks swaps. | 0 to +1 | +30% prop | lib |
 | sync | probability-weighted input (`probw`) | 1.0 per entry | Uses propagation confidence in the consensus. | ±0.5 | 0 | `normalize_input_rows` arg exists (not plumbed) |
@@ -265,9 +265,9 @@ objects make up half of the errors or more.
 
 ### Batch 1: one-change screen (ready to run)
 
-* Variants: `batch1` in variants.py, 34 plus `base`. The 13 graph-level ones (`whiten`, `pca`, `l2`,
+* Variants: `batch1` in variants.py, 35 plus `base`. The 13 graph-level ones (`whiten`, `pca`, `l2`,
   `svd100`, `k10`, `k40`, `sym`, `mutual`, `nosame`, `gauss`, `exact`, `temporal1`, `temporal5`) each
-  rebuild the graph and propagate again. 8 are propagation-level (`layers30`, `layers300`, `spread99`,
+  rebuild the graph and propagate again. 9 are propagation-level (`layers30`, `layers300`, `spread90`, `spread97`,
   `classnorm`, `framenorm`, `seed_strat`, `seed_complete`, `seeds50`, `seeds100`). The other 12 reuse the memoised
   propagation (sync and post only).
 * Cases (`cases.sh` DEV_CASES): S137 t50 (.877, weak, 85k objects), S184 t27 (.957, 210k), Z1210 t36 (.929,
@@ -290,7 +290,10 @@ objects make up half of the errors or more.
     (`local`, `batch5` equal `base`), reproduces the recorded GPU accuracies (section 4), and times
     `exact` on the GPU, all in about 1 h.
 
-Launch (local, GPU, two streams; `DEVICE=cpu THREADS=16` and three streams if the GPU is busy):
+Launch (local, GPU). Each process is mostly serial CPU work: the sync is a Python loop, and project or GT
+loading takes about 4.5 min on Zimmer. GPU work is seconds per variant. So run 8 streams, one per (case, RNG
+seed), with 7 threads each: `ONLY_CASE=<case> THREADS=7 bash run_local.sh batch1 dev <seed>` (as in
+$WORK/launch_batch1_8streams.sh). The two-stream form below underuses this machine:
 
 ```bash
 cd barlow_track/scripts/scratch/labelprop_opt

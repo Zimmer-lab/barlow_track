@@ -7,7 +7,7 @@
 #   bash run_local.sh speed dev "0"             # speed/equivalence check (base, local, batch5, layers)
 #
 # Env: WORK (scratch dir, default ~/.cache/barlow_scratch/labelprop_opt), DEVICE (default cuda),
-#      THREADS (CPU threads for NNDescent / sync / scoring, default 16)
+#      THREADS (CPU threads for NNDescent / sync / scoring, default 16), ONLY_CASE (one case)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 source "$HERE/cases.sh"
@@ -21,6 +21,8 @@ mkdir -p "$WORK"
 export NUMBA_CACHE_DIR=${NUMBA_CACHE_DIR:-$WORK/numba} MPLCONFIGDIR=${MPLCONFIGDIR:-$WORK/mpl} TQDM_DISABLE=1
 export OMP_NUM_THREADS=$THREADS MKL_NUM_THREADS=$THREADS OPENBLAS_NUM_THREADS=$THREADS NUMBA_NUM_THREADS=$THREADS
 if [ "$SET" = dev ]; then CASES=("${DEV_CASES[@]}"); else CASES=("${CONFIRM_CASES[@]}"); fi
+# ONLY_CASE=round:trial:label runs one case of the set (parallel streams, one per case and seed)
+[ -n "${ONLY_CASE:-}" ] && CASES=("$ONLY_CASE")
 VARG=(); [ ${#VARIANTS[@]} -gt 0 ] && VARG=(--variants "${VARIANTS[@]}")
 for c in "${CASES[@]}"; do
   # one process per case: frees GPU / host memory between recordings

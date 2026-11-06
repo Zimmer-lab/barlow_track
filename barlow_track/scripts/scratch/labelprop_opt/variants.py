@@ -24,7 +24,8 @@ BATCH1 = {
     # --- seeds / propagation
     'layers30': dict(num_layers=30),
     'layers300': dict(num_layers=300),
-    'spread99': dict(alpha=0.99),                 # label spreading instead of hard clamping
+    'spread90': dict(alpha=0.90),                 # label spreading: votes discounted ~alpha^hops (horizon ~10
+    'spread97': dict(alpha=0.97),                 # / ~33 hops), a smooth version of fewer layers; no clamp
     'classnorm': dict(class_norm=True),           # class-mass normalisation
     'framenorm': dict(frame_norm=True),           # soft cannot-link inside each volume during propagation
     'seed_strat': dict(seed_select='stratified'),

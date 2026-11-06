@@ -3372,3 +3372,19 @@ dropped r261106-384883
 Batch 1 resumed (32 records kept) as 12 streams with only Z1210 s0 and F0330 s0 on the GPU and CUDA_VISIBLE_DEVICES='' for the CPU streams, at barlow_track@da3555b (harness unchanged since 3fb6198).
 
 run r261106-400753 · pids 400753 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch1.log · for [[EVD - One-change screen of label propagation variants on four development recordings]]
+
+## 2026-11-06 15:34 — dropped
+
+restarted with confidence metrics (mass, top-1 prob, hops as predictors of correctness)
+
+dropped r261106-398256
+
+## 2026-11-06 15:34 — surprise
+
+User recalls (from building the tracker): low-mass nodes did not predict correctness, and dropping them hurt final accuracy. Diag smoke S137 t50 (2 runs): mass is NOT ~1 after 100 clamped layers (median 0.008; walks rarely hit a seed volume in 100 steps), so it decays with distance; it predicts a correct per-run label weakly (AUC 0.69) but flags absent-neuron objects better (0.83). Top-1 probability predicts correctness best (AUC 0.85; dropping its lowest 20% removes 38% of wrong, 5% of correct votes). Whether dropping helps FINAL accuracy is what thr03 in batch 1 tests.
+
+## 2026-11-06 15:34 — run
+
+Depth/hop/confidence diagnostic on the 4 dev cases, 5 runs each (diag_layers_hops.py at 5094974).
+
+run r261106-416617 · pids 416617 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_samuel_137.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_samuel_184.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_zimmer_1210.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_flavell_2022033002.log · for [[EVD - Per-run label accuracy falls with propagation depth beyond about 30 layers]]

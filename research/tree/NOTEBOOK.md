@@ -3406,3 +3406,9 @@ Depth diagnostic r261106-416617 done (4 dev cases, 5 runs each). Per-run accurac
 ## 2026-11-06 16:57 — decision
 
 NWB: does a newer stack make the branch's table skipping (fix 2) unnecessary? Plain full pynwb read of the Zimmer no-image NWB (1667 per-volume tables), scratch Python 3.11 env: pynwb 4.2.0 / hdmf 6.2.0 / HDF5 2.0.0 39.9 s vs wbfm env pynwb 2.8.3 / hdmf 3.14.6 / HDF5 1.14.2 116.2 s (load ~30). docval calls 0.51M vs 2.73M (type-map regression fixed upstream). The branch's fast read is 6.7 s on Python 3.8, so per-object construction (~20 ms/table) still dominates: the skipping is needed with any version. HDF5 itself is not the bottleneck (h5py attrs/name ~5 s).
+
+## 2026-11-06 17:56 — run
+
+Ax round 1 over label propagation settings (ax_labelprop.py at 5e40a5b): driver + Samuel CPU workers now, Zimmer/Flavell GPU+CPU workers after the batch-1 GPU queues end.
+
+run r261106-506551 · pids 506551 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round1/driver.log · for [[EVD - Bayesian search over label propagation settings on four development recordings]]

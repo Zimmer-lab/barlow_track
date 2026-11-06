@@ -4,10 +4,11 @@ nodeInstanceId: 01a1b26c-b087-7ac0-af36-66610b44930f
 status: in-progress
 priority: high
 dateCreated: 2026-11-06T20:53:49+01:00
-dateModified: 2026-11-06T20:53:49+01:00
-confidence: low
+dateModified: 2026-11-06T22:09:28+01:00
+confidence: medium
 projects:
   - "[[barlowtrack]]"
+outcome: failed
 ---
 
 ## Purpose
@@ -16,16 +17,21 @@ Batch 1 showed that no tracker setting reduces fragmentation ([[EVD - Fragment e
 
 ## Method
 
-`lp_core.merge_fragments` (barlow_track@3fab4ee, labelprop_opt): candidate pairs of final labels by nearest embedding centroids (10 per label); merge greedily when the centroid distance is within `merge_ratio` RMS spreads, the two groups share at most `merge_overlap` of the smaller one's volumes, and optionally the consensus affinity is at least `merge_aff`. The smaller group takes the larger's label; per volume the more confident object keeps it. `diag_merge.py` caches the base labels of Z1210 t36 and F0330 t61 at seed 0 (CPU), reports how well each pair feature separates true fragment pairs (same majority GT neuron) from others (AUC), and scores a grid ratio {0.5..3} x overlap {0.02..0.2} x affinity {0..0.1}. A setting chosen here must then pass on the confirmation cases, including Leifer.
+`lp_core.merge_fragments` (barlow_track@3fab4ee, labelprop_opt): candidate pairs of final labels by nearest embedding centroids (10 per label); merge greedily when the centroid distance is within `merge_ratio` RMS spreads, the two groups share at most `merge_overlap` of the smaller one's volumes, and optionally the consensus affinity is at least `merge_aff`. The smaller group takes the larger's label; per volume the more confident object keeps it. `diag_merge.py` caches the base labels at seed 0 (CPU), reports how well each pair feature separates true fragment pairs (same majority GT neuron) from other candidate pairs (AUC), and scores a grid ratio {0.5, 0.75, 1, 1.5, 2, 3} × overlap {0.02, 0.05, 0.1, 0.2} × affinity {0, 0.02, 0.05, 0.1}. Run r261106-602653 on Z1210 t36 and F0330 t61; r261106-606521 (Leifer StarDist t57) queued after it.
 
 ## Results
 
-Running.
+| case | labels | candidate pairs | true pairs | overlap of true pairs, q10 / median | AUC ratio / overlap / affinity | best grid point |
+|---|---|---|---|---|---|---|
+| Z1210 | 176 | 1067 | 85 | 0.76 / 0.98 | .78 / .68 / .84 | 2 merges, +0.25 pt (ratio 3, overlap 0.2) |
+| F0330 | 173 | 1100 | 36 | 0.73 / 0.99 | .83 / .53 / .95 | no merges anywhere |
+
+Unmerged accuracy Z1210 .9312 (merge bound .9601), F0330 .9716 (bound .9811).
 
 ## Conclusion
 
-Pending.
+Merging final labels cannot recover the fragment errors on Z1210 and F0330: the label pairs that share a GT neuron run side by side through 98-99% of the same volumes (median), instead of covering different stretches of time, so no merge rule that keeps one object per label per volume finds them (at most 2 merges, +0.25 pt, over 96 settings). Consensus affinity does identify the partner pairs (AUC .84 Zimmer, .95 Flavell), but what those pairs need is a per-volume choice between two objects, not a merge. [[EVD - Fragmented neurons on Zimmer swap with a neighbouring nucleus for long stretches]] shows what the partner objects are.
 
 ## Caveats
 
-Thresholds chosen on two dev recordings at one seed; the merge never splits tracks, so it cannot fix a distractor track that holds a neuron in volumes where the neuron's own track also has an object.
+One network per recording, seed 0 only. The merge bound counts each label's GT objects for its majority neuron, which only per-volume reassignment can reach, so it overstates what merging could do. Leifer StarDist result pending (r261106-606521); the 8.9 pt Leifer bound came from a 100-volume smoke, where tracks are short and time-disjoint pieces are more likely.

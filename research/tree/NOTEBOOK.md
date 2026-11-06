@@ -3452,3 +3452,25 @@ run r261106-602653 · pids 602653 · host charles-Precision-7820-Tower · logs /
 The user: the StarDist Leifer re-segmentation (strict click GT) is probably the paper's Leifer, so test it too. Added it to the harness (EXTRA_LABELS; embedding of wk2 Leifer t57 on the StarDist objects from the benchmark cache) and to CONFIRM_CASES (3756753). Batch 2 on it, seeds 0-2, CPU. Its base at seed 0 should reproduce 0.9371 (r261105-3536566).
 
 run r261106-606174 · pids 606174 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_stardist.log, /home/charles/.cache/barlow_scratch/labelprop_opt/batch2_confirm_leifer_stardist_strict_s0.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-06 20:58 — run
+
+Fragment-merging diagnostic queued on Leifer StarDist t57 (after r261106-602653).
+
+run r261106-606521 · pids 606521 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_merge_leifer_stardist_strict.log · for [[EVD - Fragment merging of final label propagation tracks on recordings with distractors]]
+
+## 2026-11-06 22:01 — run
+
+r261106-595574: its wait on round 1 never ended (`ls jobs claimed` prints the directory headers even when both are empty); killed the launcher (CPU workers kept), set round 1's STOP, started the Zimmer GPU worker and the driver by hand. Round 2 imported round 1's 8 trials (best ax4 seeds100 .9418, Z1210 .9414; ax1 svd100 .9429) and attached trials 8-12.
+
+run r261106-633070 · pids 633070 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round2/launch_part2.log, /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round2/driver.log · for [[EVD - Bayesian search over label propagation settings on four development recordings]]
+
+## 2026-11-06 22:01 — surprise
+
+Fragment merging on Z1210 t36 s0 (r261106-602653): of 85 true fragment pairs (same majority GT neuron) among 1067 candidates, the median shares 98% of the smaller label's volumes (10th percentile 76%), so the fragments are not time-disjoint pieces of one track but concurrent tracks, mostly with low GT share (distractor tracks), that hold the neuron in some volumes. A time-disjoint merge rule finds almost none (2 merges, +0.25 pt at ratio 3, overlap 0.2). AUCs: centroid ratio .78, overlap .68, consensus affinity .84. The merge bound (+2.5 pt here) needs per-volume reassignment between a neuron track and its distractor partner, not label merging.
+
+## 2026-11-06 22:02 — run
+
+Fragment-pair diagnostic on Z1210 t36 s0: are the partner tracks of fragmented neurons pieces of the same nucleus (over-segmentation) or neighbouring nuclei? Flavell's merge diagnostic showed the same concurrency as Zimmer (36 true pairs, median overlap 0.99; consensus affinity AUC .95).
+
+run r261106-640685 · pids 640685 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_fragment_pairs_zimmer_1210.log · for [[EVD - Fragment merging of final label propagation tracks on recordings with distractors]]

@@ -42,6 +42,36 @@ def binned(values, keys, edges):
     return out
 
 
+def _auc(score, y):
+    """ROC AUC of score for binary y (None if one class is missing)."""
+    from sklearn.metrics import roc_auc_score
+    y = np.asarray(y, bool)
+    if y.all() or not y.any():
+        return None
+    return float(roc_auc_score(y, score))
+
+
+def confidence_stats(ok, mass, p, hops, present):
+    """Does propagated mass, top-1 probability or hop distance predict a correct label, or a neuron
+    present in the seed volume? And what would dropping the lowest-scoring labels remove? Arrays are
+    over labelled GT objects outside the seed volume."""
+    out = dict(n=int(len(ok)), acc=float(ok.mean()) if len(ok) else None,
+               mass_quantiles={q: float(np.quantile(mass, q)) for q in (0.01, 0.1, 0.5, 0.9)} if len(ok) else None)
+    for name, sc in (('mass', mass), ('prob', p), ('neg_hops', -hops.astype(float))):
+        d = dict(auc_correct=_auc(sc, ok), auc_present=_auc(sc, present))
+        drops = []
+        order = np.argsort(sc, kind='stable')
+        for q in (0.05, 0.1, 0.2, 0.3, 0.5):
+            kept = np.ones(len(sc), bool)
+            kept[order[:int(q * len(sc))]] = False
+            drops.append(dict(q=q, acc_kept=float(ok[kept].mean()) if kept.any() else None,
+                              wrong_removed=float((~ok & ~kept).sum() / max((~ok).sum(), 1)),
+                              correct_removed=float((ok & ~kept).sum() / max(ok.sum(), 1))))
+        d['drop_lowest'] = drops
+        out[name] = d
+    return out
+
+
 def run_one(adj, seed_objs, gt_obj, lin_t, t_seed, alpha, torch):
     n = adj.shape[0]
     C = len(seed_objs)
@@ -81,18 +111,20 @@ def run_one(adj, seed_objs, gt_obj, lin_t, t_seed, alpha, torch):
                           cov_present=float(labelled[evp].mean()) if evp.any() else None,
                           cov_absent=float(labelled[eva].mean()) if eva.any() else None,
                           distractor_labelled=float(labelled[~isgt & notseed].mean()) if (~isgt & notseed).any() else None)
-            at[L] = (labelled, correct)
+            at[L] = (labelled, correct, rs.numpy().copy(), p.copy())
     hops = np.where(first < 0, 10 ** 8, first)
     dt = np.abs(lin_t - t_seed)
-    by = {}
+    by, conf = {}, {}
     for L in (30, 100, 300):
-        labelled, correct = at[L]
+        labelled, correct, mass, p = at[L]
+        m = ev & labelled
+        conf[L] = confidence_stats(correct[m], mass[m], p[m], hops[m], present[m])
         by[L] = dict(acc_by_hop=binned(correct[ev].astype(float), hops[ev], HOP_BINS),
                      present_by_hop=binned(present[ev].astype(float), hops[ev], HOP_BINS),
                      accp_by_hop=binned(correct[evp].astype(float), hops[evp], HOP_BINS),
                      cov_by_hop=binned(labelled[ev].astype(float), hops[ev], HOP_BINS),
                      acc_by_dt=binned(correct[ev].astype(float), dt[ev], DT_BINS))
-    return dict(by_layers=res, by_bins=by, hop_quantiles={q: float(np.quantile(hops[ev], q)) for q in (0.5, 0.9, 0.99, 1.0)},
+    return dict(by_layers=res, by_bins=by, confidence=conf, hop_quantiles={q: float(np.quantile(hops[ev], q)) for q in (0.5, 0.9, 0.99, 1.0)},
                 n_unreached=int((first[ev] < 0).sum()), C=C, n_distractor_seeds=int((owner < 0).sum()))
 
 
@@ -162,6 +194,20 @@ def main():
             ms = [m for m in ms if m is not None]
             if ms:
                 print(f"    dt [{b['lo']}, {b['hi']}): acc {np.mean(ms):.3f}")
+    for mode in ['clamp'] + [f'spread{a:g}' for a in args.alphas]:
+        for L in (30, 100):
+            print(f"  {mode} L={L}: AUC for a correct label / for a present neuron; dropping the lowest 20% "
+                  f"removes (wrong, correct) votes:")
+            for name in ('mass', 'prob', 'neg_hops'):
+                rr = [x[mode]['confidence'][L][name] for x in out['runs']]
+                a1 = [r['auc_correct'] for r in rr if r['auc_correct'] is not None]
+                a2 = [r['auc_present'] for r in rr if r['auc_present'] is not None]
+                d20 = [[d for d in r['drop_lowest'] if d['q'] == 0.2][0] for r in rr]
+                print(f"    {name:8s} auc_correct {np.mean(a1) if a1 else float('nan'):.3f}  auc_present "
+                      f"{np.mean(a2) if a2 else float('nan'):.3f}  drop20 removes wrong "
+                      f"{np.mean([d['wrong_removed'] for d in d20]):.2f}, correct {np.mean([d['correct_removed'] for d in d20]):.2f}")
+            mq = [x[mode]['confidence'][L]['mass_quantiles'] for x in out['runs']]
+            print(f"    mass quantiles 1/10/50/90%: {[round(float(np.mean([q[k] for q in mq])), 4) for k in (0.01, 0.1, 0.5, 0.9)]}")
     print(f"wrote {path}")
 
 

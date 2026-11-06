@@ -3496,3 +3496,21 @@ run r261106-673582 · pids 673582 · host charles-Precision-7820-Tower · logs /
 Leifer StarDist t57 s0 (r261106-606521, r261106-647605): base .9371 reproduces the strict-GT objective (.93707, r261105-3536566). Fragments are 5.6% of GT points (merge bound .9878); 98 true fragment pairs, median overlap 0.985, no merge passes anywhere in the grid; chain voting +0.17 pt at most (chain_w 1). Fragment-pair diagnostic on it now.
 
 run r261106-674571 · pids 674571 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_fragment_pairs_leifer_stardist_strict.log · for [[EVD - Fragmented neurons on Zimmer swap with a neighbouring nucleus for long stretches]]
+
+## 2026-11-06 23:06 — run
+
+Batch 2 rescheduled: the Leifer StarDist CPU streams (r261106-606174, 6 records in 2 h) and the add-on launcher (r261106-673582; its S137 reruns keep going) stopped. One GPU queue now runs StarDist s0-2 first, after the running Z1210 t52 s0, then Z1210 s1, s2, s0 and Leifer re-export s0-2 for the chain variants; S184 and F0324 CPU streams rerun for the chain variants when theirs end.
+
+run r261106-677223 · pids 677223 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_v3.log, /home/charles/.cache/barlow_scratch/labelprop_opt/batch2_confirm_leifer_stardist_strict_s0.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-06 23:06 — dropped
+
+moved to the GPU queue of r261106-677223 (CPU too slow); its 6 records are kept
+
+dropped r261106-606174
+
+## 2026-11-06 23:06 — dropped
+
+replaced by r261106-677223; its S137 reruns continue
+
+dropped r261106-673582

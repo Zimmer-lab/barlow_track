@@ -3434,3 +3434,15 @@ Ax round 1 stopped after its 8 attached trials (driver killed before any Sobol t
 Ax round 2 started (driver waits for round 1's queue to empty).
 
 run r261106-595574 · pids 595574 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round2/launch.log, /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round2/driver.log · for [[EVD - Bayesian search over label propagation settings on four development recordings]]
+
+## 2026-11-06 20:48 — run
+
+r261106-595573: the 3 F0324 streams failed at once (parallel streams copied the embedding to the same .part file; fixed in afe2dce), and the GPU queue ran Z1210 before Leifer (CONFIRM_CASES order); stopped it. Relaunched both with Leifer first.
+
+run r261106-598057 · pids 598057 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_fix.log, /home/charles/.cache/barlow_scratch/labelprop_opt/batch2_confirm_leifer_reexport_s0.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-06 20:53 — run
+
+Fragment-merging diagnostic on Z1210 t36 and F0330 t61, seed 0, CPU (S137 smoke: no candidate merges, as expected without distractors).
+
+run r261106-602653 · pids 602653 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_merge_zimmer_1210.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_merge_flavell_2022033002.log · for [[EVD - Fragment merging of final label propagation tracks on recordings with distractors]]

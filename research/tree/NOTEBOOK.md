@@ -3392,3 +3392,13 @@ run r261106-416617 · pids 416617 · host charles-Precision-7820-Tower · logs /
 ## 2026-11-06 16:14 — decision
 
 NWB load speed (subagent, wbfm branch nwb-load-speed, 7 commits on a1cd2225, worktree /home/charles/Current_work/repos/dlc_for_wbfm_nwbspeed): per-read type-map copy (hdmf 3.14 deep-copied it per attribute; fixed upstream in hdmf 4.2), vectorised convert_nwb_to_trace_dataframe, pynwb skips Seg_tpoint_1..N (voxel masks via h5py), hybrid loading keeps NWB segmentation lazy and skips NWB traces the project has, no h5py path searches on dereferenced objects. Verified here: 6 new tests pass; Zimmer 1210 project load + finished-neuron GT (lazy segmentation, as the harness) 287.6 s on dev vs 20.6 s on the branch under load ~50, with df_gt, final_tracks and segmentation metadata at t=0/1/833/1666 exactly equal. Not merged: waiting on the user.
+
+## 2026-11-06 16:57 — run
+
+Batch 1: Zimmer and Flavell at seeds 1/2 ran on CPU at ~30 min propagation per variant under load (prop_s 1750-1870 s, vs ~23 s on the GPU); stopped them (records kept) and queued them on the GPU after the Zimmer s0 stream ends: two queues, Z1210 s1->s2 and F0330 s1->s2.
+
+run r261106-473331 · pids 473331 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/gpu_queues.log · for [[EVD - One-change screen of label propagation variants on four development recordings]]
+
+## 2026-11-06 16:57 — surprise
+
+Depth diagnostic r261106-416617 done (4 dev cases, 5 runs each). Per-run accuracy on present neurons vs layers (L=30 / 100 / 300): S137 .654/.632/.585, S184 .839/.821/.789, Z1210 .859/.858/.857, F0330 .837/.837/.832. Bleeding with depth is a Samuel effect; the distractor recordings are flat from L=20. Z1210: 6% of GT objects are unreachable from a seed volume (disconnected graph pieces; Flavell ~0.3%). Correctness AUC, mass / top-1 prob / -hops: S137 .64/.81/.60, S184 .64/.90/.61, Z1210 .61/.75/.59, F0330 .64/.82/.61: mass is a weak predictor everywhere (agrees with the user's memory), prob is better. Yet in batch 1 (partial) thr03 (drop prob<0.3 before sync) is -0.32 pt and probw -0.28 pt: the per-run signal does not carry into the final accuracy, again as the user found.

@@ -345,6 +345,18 @@ most (section 3a), so report its fragment columns separately. Adopt
 per section 4. Then run the 100-seed check of the adopted recipe on 2 cases (the paper uses 100). The
 seed count interacts with run weighting and seed choice.
 
+### Batch 2b: Bayesian search with Ax (added 2026-11-06)
+
+`ax_labelprop.py` runs the same Ax machinery as the network sweeps (`AxClient`, Sobol then GPEI) over the
+knobs with batch-1 signal: `svd_dim`, `svd_mode`, `graph` (knn/mutual), `k`, `edge_weight`, `num_layers`,
+`per_run_unique`, `num_seeds`, `seed_select` and `temporal_smooth`. The objective is the mean over the 4 dev
+cases of the mean accuracy at RNG seeds 0 and 1. The first trials are attached: `base`, the batch-1
+leaders as single changes, and one combination of them. Workers are persistent processes, one or two per dev
+case, each loading its case once. They take (trial, case, seed) jobs from a file queue, so the driver and
+workers resume after a crash. Selection uses the dev cases only, so the winner (and the runner-up, if it is
+simpler) must still pass the section-4 adoption rule against `base` on CONFIRM_CASES with seeds 0-2. Ax
+can overfit 4 networks, and that check is the guard.
+
 ### Batch 3: structural options (need library changes or more code)
 
 Only where the error decomposition (full-length batch-1 base rows) leaves a gap. Swaps dominate on Samuel;

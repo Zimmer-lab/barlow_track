@@ -80,6 +80,12 @@ BATCH2 = {
     'c_all_notemp': dict(_C, temporal_w=0.0),
     'c_all_gh': dict(_C, edge_weight='gauss', per_run_unique='hungarian'),   # + the two near-misses
     'c_all_l30': dict(_C, num_layers=30),                                     # + the speed option
+    # added 2026-11-06 22:30 after diag_chain (seed 0, cached consensus: Z1210 +1.6, S137 +0.5, F0330 +0.1 pt
+    # at chain_w 0.5; worse above 2); run after the first 16 (resumable)
+    'chain05': dict(chain_w=0.5),
+    'chain1': dict(chain_w=1.0),
+    'c_all_chain': dict(_C, temporal_smooth=0.0, chain_w=0.5),
+    'c_all_gh_chain': dict(_C, temporal_smooth=0.0, chain_w=0.5, edge_weight='gauss', per_run_unique='hungarian'),
 }
 
 BATCHES = dict(batch1=BATCH1, speed=SPEED, batch2=BATCH2)

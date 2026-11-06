@@ -3446,3 +3446,9 @@ run r261106-598057 · pids 598057 · host charles-Precision-7820-Tower · logs /
 Fragment-merging diagnostic on Z1210 t36 and F0330 t61, seed 0, CPU (S137 smoke: no candidate merges, as expected without distractors).
 
 run r261106-602653 · pids 602653 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_merge_zimmer_1210.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_merge_flavell_2022033002.log · for [[EVD - Fragment merging of final label propagation tracks on recordings with distractors]]
+
+## 2026-11-06 20:58 — run
+
+The user: the StarDist Leifer re-segmentation (strict click GT) is probably the paper's Leifer, so test it too. Added it to the harness (EXTRA_LABELS; embedding of wk2 Leifer t57 on the StarDist objects from the benchmark cache) and to CONFIRM_CASES (3756753). Batch 2 on it, seeds 0-2, CPU. Its base at seed 0 should reproduce 0.9371 (r261105-3536566).
+
+run r261106-606174 · pids 606174 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_stardist.log, /home/charles/.cache/barlow_scratch/labelprop_opt/batch2_confirm_leifer_stardist_strict_s0.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]

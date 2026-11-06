@@ -3360,3 +3360,15 @@ run r261106-384883 · pids 384883 · host charles-Precision-7820-Tower · logs /
 Per-run depth/hop diagnostic (diag_layers_hops.py at da3555b) on the 4 dev cases, 5 seed runs each, clamp + spread 0.9/0.97. Smoke on S137 t50 (3 runs): per-run accuracy on neurons present in the seed volume peaks at L=30 (0.652) and falls at 100 (0.629) and 300 (0.577) while coverage is already 1.0 by L=20 (max hop 11): fewer layers helps by less bleeding, not by abstaining. spread0.9 plateaus at 0.649. Objects whose neuron is absent from the seed volume (19%) are always labelled, necessarily wrongly; they are 95% of objects at >=10 hops. No dependence on |t - t_seed|.
 
 run r261106-398256 · pids 398256 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_samuel_137.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_samuel_184.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_zimmer_1210.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_flavell_2022033002.log
+
+## 2026-11-06 15:18 — dropped
+
+8 of 12 streams hit CUDA OOM: CPU streams opened 368 MB CUDA contexts each and 4 GPU streams peak ~3.5 GB; stopped, 32 records kept, resumed as r-next
+
+dropped r261106-384883
+
+## 2026-11-06 15:18 — run
+
+Batch 1 resumed (32 records kept) as 12 streams with only Z1210 s0 and F0330 s0 on the GPU and CUDA_VISIBLE_DEVICES='' for the CPU streams, at barlow_track@da3555b (harness unchanged since 3fb6198).
+
+run r261106-400753 · pids 400753 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch1.log · for [[EVD - One-change screen of label propagation variants on four development recordings]]

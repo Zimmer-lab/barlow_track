@@ -17,4 +17,5 @@ CONFIRM_CASES=(
   round_bayes_wk3_zimmer_1210:52:zimmer_1210                 # .943 best Z1210
   round_bayes_wk2_leifer_reexport:57:leifer_reexport         # .885 held-out lab; NWB every detection
   round_bayes_wk3_flavell_2022032402:28:flavell_2022032402   # .973 held-out recording (median trial)
-)
+  round_bayes_wk2_leifer_reexport:57:leifer_stardist_strict  # .937 Leifer on StarDist masks, strict click GT
+)                                                            # (the paper's Leifer; added 2026-11-06)

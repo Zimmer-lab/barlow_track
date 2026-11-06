@@ -58,6 +58,17 @@ class LRU(collections.OrderedDict):
         return val, False
 
 
+# Benchmark labels scored on another recording than the trial's own round (cross-segmentation cells of
+# run_trials_on_all_ground_truth.py): where their embeddings are, under which label, and the project
+# whose objects were embedded (from make_per_recording_rounds.TRAIN_PROJECTS, GT from its DATASETS).
+EXTRA_LABELS = {
+    # The Leifer recording re-segmented with StarDist, scored against the strict click GT (the headline
+    # Leifer GT since 2026-11-05); embeddings of wk2 Leifer networks on the StarDist objects
+    'leifer_stardist_strict': dict(emb_dir=os.path.expanduser('~/.cache/barlow_scratch/train/leifer_reseg/benchmark_emb'),
+                                   emb_label='leifer_stardist'),
+}
+
+
 def case_settings(rnd, trial, label):
     """(weights, emb path, train cfg, eval kwargs) exactly as compare_sync derives them."""
     import yaml
@@ -65,9 +76,14 @@ def case_settings(rnd, trial, label):
     from barlow_track.scripts.scratch.make_per_recording_rounds import round_files
     tag = f'{rnd}_trial{trial}_{label}'
     weights = os.path.join(C, rnd, f'trial_{trial}', 'resnet50.pth')
-    emb = glob.glob(os.path.join(C, rnd, 'emb_cache', f'emb_*_trained_*{tag}.npz'))[0]
     with open(os.path.join(os.path.dirname(weights), 'train_config.yaml')) as f:
         cfg = yaml.safe_load(f)
+    if label in EXTRA_LABELS:
+        x = EXTRA_LABELS[label]
+        emb = glob.glob(os.path.join(x['emb_dir'], f"emb_*_trained_{rnd}_trial{trial}_{x['emb_label']}.npz"))[0]
+        cfg = dict(cfg, project_path=round_files(rnd, label, cfg, {})[0]['project_path'])
+    else:
+        emb = glob.glob(os.path.join(C, rnd, 'emb_cache', f'emb_*_trained_*{tag}.npz'))[0]
     tp = os.path.join(C, rnd, 'hyperparameter_search_template.yaml')
     tpl = yaml.safe_load(open(tp)) if os.path.exists(tp) else {}
     _, cell_tpl = round_files(rnd, label, cfg, {k: v for k, v in tpl.items()

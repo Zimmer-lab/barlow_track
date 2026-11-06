@@ -50,20 +50,22 @@ PARAMETERS = [
     dict(name='num_seeds', type='choice', values=[25, 50, 100], value_type='int', is_ordered=True),
     dict(name='seed_select', type='choice', values=['random', 'stratified'], value_type='str', is_ordered=False),
     dict(name='temporal_smooth', type='choice', values=[0.0, 0.5, 1.0], value_type='float', is_ordered=True),
+    # round 2: adjacent-volume mutual-NN edges (batch 1: temporal5 +1.4 pt on Z1210, +0.46 mean)
+    dict(name='temporal_w', type='choice', values=[0.0, 1.0, 2.0, 5.0, 10.0], value_type='float', is_ordered=True),
 ]
 BASE = dict(svd_dim=50, svd_mode='scaled', graph='knn', k=20, edge_weight='uniform', num_layers=100,
-            per_run_unique='greedy', num_seeds=25, seed_select='random', temporal_smooth=0.0)
-# Attached first: the tracker, the batch-1 leaders as single changes, and one combination of them.
+            per_run_unique='greedy', num_seeds=25, seed_select='random', temporal_smooth=0.0, temporal_w=0.0)
+# Attached first (round 2; round 1 at 5e40a5b attached base, svd100, whiten, mutual, seeds100, layers30,
+# hungrun_gauss and a combo, which --import_records brings in): the batch-1 promotions not yet tried and
+# their combination (batch 1 final, 12 pairs: svd100, seeds100, temporal5, seeds50, seed_strat, tsmooth05).
 START = [
     ('base', {}),
-    ('svd100', dict(svd_dim=100)),
-    ('whiten', dict(svd_mode='whiten')),
-    ('mutual', dict(graph='mutual')),
-    ('seeds100', dict(num_seeds=100)),
-    ('layers30', dict(num_layers=30)),
-    ('hungrun_gauss', dict(per_run_unique='hungarian', edge_weight='gauss')),
-    ('combo', dict(svd_dim=100, graph='mutual', num_layers=30, per_run_unique='hungarian', edge_weight='gauss',
-                   num_seeds=50)),
+    ('temporal5', dict(temporal_w=5.0)),
+    ('seed_strat', dict(seed_select='stratified')),
+    ('tsmooth05', dict(temporal_smooth=0.5)),
+    ('c_all', dict(svd_dim=100, num_seeds=50, seed_select='stratified', temporal_w=5.0, temporal_smooth=0.5)),
+    ('c_all_gh', dict(svd_dim=100, num_seeds=50, seed_select='stratified', temporal_w=5.0, temporal_smooth=0.5,
+                      edge_weight='gauss', per_run_unique='hungarian')),
 ]
 
 
@@ -180,6 +182,27 @@ def worker(args):
 
 # ---------------------------------------------------------------- driver
 
+def _import_records(path, labels, seeds):
+    """Completed trials of an earlier round from its records.jsonl: (name, params, objective, per_case).
+
+    A trial counts only if it has a record for every (label, seed); parameters missing from the earlier
+    space take their BASE value (round 1 had no temporal_w, i.e. 0)."""
+    by = {}
+    for line in open(path):
+        r = json.loads(line)
+        if r['label'] in labels and r['seed'] in seeds:
+            by.setdefault(r['variant'], {})[(r['label'], r['seed'])] = r
+    out = []
+    names = [p['name'] for p in PARAMETERS]
+    for v, recs in sorted(by.items(), key=lambda kv: int(kv[0][2:]) if kv[0][2:].isdigit() else 0):
+        if len(recs) < len(labels) * len(seeds):
+            continue
+        p = dict(BASE, **{k: x for k, x in next(iter(recs.values()))['params'].items() if k in names})
+        per_case = {lab: float(np.mean([recs[(lab, s)]['accuracy'] for s in seeds])) for lab in labels}
+        out.append((v, p, float(np.mean(list(per_case.values()))), per_case))
+    return out
+
+
 def driver(args):
     from ax.service.ax_client import AxClient, ObjectiveProperties
     from ax.core.base_trial import TrialStatus
@@ -209,8 +232,20 @@ def driver(args):
                              objectives={'accuracy': ObjectiveProperties(minimize=False)},
                              choose_generation_strategy_kwargs=dict(num_initialization_trials=args.n_sobol,
                                                                     max_parallelism_override=args.parallel))
+        seen = []
+        for path in args.import_records or []:
+            for nm, p, y, per_case in _import_records(path, labels, seeds):
+                _, idx = ax.attach_trial(parameters=p)
+                ax.experiment.trials[idx].update_run_metadata({'start_name': nm, 'imported_from': path})
+                ax.complete_trial(trial_index=idx, raw_data={'accuracy': (y, None)})
+                seen.append(p)
+                say(f"imported trial {idx} ({nm}) accuracy {y:.4f} | "
+                    + ' '.join(f"{k} {v:.4f}" for k, v in per_case.items()) + f" | {p}")
         for nm, ov in START:
             p = dict(BASE, **ov)
+            if p in seen:
+                say(f"skip start {nm}: already imported")
+                continue
             _, idx = ax.attach_trial(parameters=p)
             ax.experiment.trials[idx].update_run_metadata({'start_name': nm})
             say(f"attached trial {idx} ({nm}): {p}")
@@ -292,6 +327,8 @@ def main():
     dr.add_argument('--n_sobol', type=int, default=6)
     dr.add_argument('--ax_seed', type=int, default=0)
     dr.add_argument('--poll', type=int, default=30)
+    dr.add_argument('--import_records', nargs='*', default=None,
+                    help="earlier rounds' records.jsonl: their complete trials are attached and completed first")
     wk = sub.add_parser('worker')
     wk.add_argument('--exp_dir', required=True)
     wk.add_argument('--work', required=True)

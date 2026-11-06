@@ -57,9 +57,29 @@ SPEED = {
     'layers30': dict(num_layers=30),
 }
 
-# Combined candidates for batch 2: fill in from the batch-1 winners (PLAN.md section 5)
+# Batch 2 (confirmation, CONFIRM_CASES x seeds 0-2): the six batch-1 promotions singly, one neighbouring
+# value of each tunable promotion, and cross-stage combinations (embed x seeds x graph x post).
+_C = dict(svd_dim=100, num_seeds=50, seed_select='stratified', temporal_w=5.0, temporal_smooth=0.5)
 BATCH2 = {
     'base': {},
+    # promoted singly (batch 1: +0.34 to +0.74 pt, >= 9/12 wins)
+    'svd100': dict(svd_dim=100),
+    'seeds50': dict(num_seeds=50),
+    'seeds100': dict(num_seeds=100),
+    'seed_strat': dict(seed_select='stratified'),
+    'temporal5': dict(temporal_w=5.0),
+    'tsmooth05': dict(temporal_smooth=0.5),
+    # neighbours
+    'svd150': dict(svd_dim=150),
+    'temporal2': dict(temporal_w=2.0),
+    'temporal10': dict(temporal_w=10.0),
+    # combinations
+    'c_seeds': dict(num_seeds=50, seed_select='stratified'),
+    'c_all': dict(_C),
+    'c_all_s100': dict(_C, num_seeds=100),
+    'c_all_notemp': dict(_C, temporal_w=0.0),
+    'c_all_gh': dict(_C, edge_weight='gauss', per_run_unique='hungarian'),   # + the two near-misses
+    'c_all_l30': dict(_C, num_layers=30),                                     # + the speed option
 }
 
 BATCHES = dict(batch1=BATCH1, speed=SPEED, batch2=BATCH2)

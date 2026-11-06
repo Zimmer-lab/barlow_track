@@ -3316,3 +3316,21 @@ labelprop_opt PLAN.md updated for the local GPU: speed batch first (GPU reproduc
 Label propagation tracker screen on the local GPU (labelprop_opt, uncommitted edits on ec7d6ed): chain script /home/charles/.cache/barlow_scratch/labelprop_opt/chain_speed_batch1.sh runs the speed batch (GPU reproduction check), then batch 1 (34 variants + base, 4 dev cases, seeds 0/1) as two GPU streams.
 
 run r261106-361651 · pids 361651 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/speed_dev.log, /home/charles/.cache/barlow_scratch/labelprop_opt/batch1_dev_s0.log, /home/charles/.cache/barlow_scratch/labelprop_opt/batch1_dev_s1.log · for [[EVD - One-change screen of label propagation variants on four development recordings]]
+
+## 2026-11-06 14:39 — run
+
+r261106-361651 speed batch, S137 t50 seed 0: base 0.8879 reproduces the recorded 0.8880; local and batch5 equal base exactly on GPU; exact kNN 0.8881 with graph 1.5 s vs 24.6 s. layers30 0.8960 (+0.81 pt) and layers50 0.8945, one seed only: batch 1 tests it on 8 pairs.
+
+## 2026-11-06 14:46 — decision
+
+r261106-361651: chain stopped before batch 1 (killed the chain shell only); the speed batch continues as pid 361654. Speed so far: base reproduces S137 t50 (0.8879 vs 0.8880) and S184 t27 (0.9577 vs 0.9575); local and batch5 are identical to base; exact is +0.02 pt with a 5x faster graph. layers30 is +0.82 on S137 t50 and +0.03 on S184 t27. Machine was underused: each process is serial CPU (Python sync, 4.5 min Zimmer load) with seconds of GPU work, so batch 1 now runs as 8 streams.
+
+## 2026-11-06 14:46 — decision
+
+spread99 replaced by spread90/spread97 (9a32928): its rationale (mislabelled seeds) cannot apply, because seed labels are the seed volume's own objects; alpha=0.99 is about base; lower alpha gives a smooth hop discount comparable to fewer layers (question from the user).
+
+## 2026-11-06 14:46 — run
+
+Batch 1 of the label propagation screen, 8 streams (4 dev cases x seeds 0/1, 7 threads each, shared GPU), at barlow_track@9a32928; starts when the speed batch (pid 361654) ends.
+
+run r261106-369804 · pids 369804 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch1.log · for [[EVD - One-change screen of label propagation variants on four development recordings]]

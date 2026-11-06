@@ -211,8 +211,22 @@ class Scorer:
         # the gain over acc_fast bounds what fragment merging could recover
         merge = float(Cm.max(1).sum()) if len(ul) else 0.0
         n_frag_labels = int(len(ul) - len(r))
+        # what kind of fragment: a label that is mostly non-GT objects (a distractor track that captured this
+        # neuron in some volumes; checked first), else a piece of this object's own neuron (the unmatched
+        # label's majority GT neuron is this one: a split track, which merging fixes), else another neuron's
+        frag_split = frag_distr = 0
+        if frag and len(ul):
+            fm = mapped == -2
+            maj = Cm.argmax(1)[li[fm]]
+            n_all = np.bincount(np.searchsorted(ul, lab[np.isin(lab, ul)]), minlength=len(ul))
+            gt_share = Cm.sum(1) / np.maximum(n_all, 1)
+            distr = gt_share[li[fm]] < 0.5
+            same = (maj == g[on][fm]) & ~distr
+            frag_split, frag_distr = int(same.sum()), int(distr.sum())
         return dict(acc_fast=correct / T, acc_merge_bound=merge / T, n_labels=int(len(ul)),
                     n_unmatched_labels=n_frag_labels, err_unlabelled=unl / T, err_swapped=swapped / T, err_fragment=frag / T,
+                    err_frag_split=frag_split / T, err_frag_distractor=frag_distr / T,
+                    err_frag_other=(frag - frag_split - frag_distr) / T,
                     err_no_detection=(T - n_gt_obj) / T)
 
 

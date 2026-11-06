@@ -30,6 +30,7 @@ BATCH1 = {
     'seed_strat': dict(seed_select='stratified'),
     'seed_complete': dict(seed_select='complete'),
     'seeds50': dict(num_seeds=50),
+    'seeds100': dict(num_seeds=100),             # the paper's count; cheap on GPU. Read err_fragment, not only accuracy
     # --- sync
     'probw': dict(prob_weight=True),              # keep propagated probabilities (not 1.0) in the sync
     'thr0': dict(input_probability_threshold=0.0),

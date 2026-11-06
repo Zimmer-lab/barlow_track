@@ -2,7 +2,7 @@
 
 Scope: improve tracking accuracy of `WormClusterTracker.track_using_label_propagation_clusterer` by
 re-tracking cached sweep embeddings (no retraining), within the current runtime and memory. Nothing here
-changes library code. Files in this folder (to be moved to `barlow_track/scripts/scratch/labelprop_opt/`):
+changes library code. Files in this folder:
 
 | file | what |
 |---|---|
@@ -21,7 +21,10 @@ changes library code. Files in this folder (to be moved to `barlow_track/scripts
     re-export (NWB, every detection), the harness labels equal `track_using_label_propagation_clusterer`'s
     exactly (1.000000), with the same official accuracy. All four scoring paths are covered.
   * At full size, `local` (local graph and propagation code) and `batch5` give the same accuracy as `base`.
-* **Re-tracking is cheap. CPU is enough; no GPU is needed.** S137 t63, 85k objects, 16 CPU threads:
+* **Re-tracking is cheap. CPU is enough, but run on the GPU now that one is available** (TITAN V, 12 GB,
+  about 10.5 GB free on 2026-11-06). On the GPU, propagation drops to about 2.5 s per seed at 190k objects.
+  Graphs, syncs and scoring stay on the CPU and become the cost (section 5). S137 t63, 85k objects,
+  16 CPU threads:
   * SVD 1.7 s; graph 24 s (NNDescent takes 6 s, the rest is its numba JIT);
   * 25-seed propagation 19.6 s (0.8 s per seed with the CSR adjacency); sync 8 s; scoring 0.5 s.
   * Scoring is 5-11 s on Zimmer: `add_metadata_to_df_raw_ind`.
@@ -50,7 +53,10 @@ changes library code. Files in this folder (to be moved to `barlow_track/scripts
   that wanders between a neuron and distractors. **Track merging, or anything else that reduces
   fragmentation, is the largest single lever on Leifer, and a real one on Zimmer and Flavell.** The bound
   is optimistic: every label goes to its majority neuron, and 100-volume labels are small. Re-measure it at
-  full length on batch 1's base rows (`acc_merge_bound`) before building the merge step.
+  full length on batch 1's base rows (`acc_merge_bound`) before building the merge step. Records now split
+  `err_fragment` into `err_frag_split` (a piece of the object's own neuron; merging fixes it),
+  `err_frag_distractor` (a label made mostly of non-GT objects; merging does not fix it) and
+  `err_frag_other`. Section 3a explains why the split matters.
 * **Highest-value accuracy candidates.** These are hypotheses, ranked by expected effect over cost; the
   100-150-volume smokes are one seed each and say nothing about sign. For example, `mutual` was -7.4 pt on
   Zimmer, +1.4 on Flavell and -0.6 on Leifer, so effects are probably recording-dependent and need the
@@ -186,6 +192,43 @@ Every row is implemented in `lp_core.py`, so it can be tested without changing t
 | post | re-propagation (`reprop09/07`, `reprop09_w4`) | none | One extra propagation seeded by every confidently labelled object in every volume, mixed into the consensus. Low-confidence objects are then labelled from nearby confident ones rather than from 25 distant seed volumes. | 0 to +1 (weak nets most) | 1 prop | lib |
 | post | fragment merging | none | `err_fragment` is 1.9-9.7 pt on distractor recordings (100-volume smokes); perfect merging bound +1.6 (Flavell) / +8.9 pt (Leifer). Merge consensus labels whose time supports barely overlap and whose embedding centroids (or adjacent-volume MNN links) are close, using a Hungarian or greedy on a label x label affinity. Not implemented: build it in batch 3 if the full-length bound in batch 1 holds up (> 0.5 pt). | 0 to several pt (distractor data) | small | lib |
 
+### 3a. Fragmentation: where it comes from, and whether seeds help
+
+"Fragment" errors are GT objects whose final label is matched to no GT neuron. The tracker can produce
+one in three ways, and they need different fixes:
+
+1. **A neuron is absent from most seed volumes** (undetected, merged into a neighbouring mask, or out
+   of the field of view). Runs seeded in those volumes have no label for it. They give its objects a
+   neighbour's or a distractor's label, and the consensus label for the neuron rests on the few runs that
+   saw it. *More seeds and better seeds help directly here:* `seeds50`, `seeds100`, and `seed_complete`
+   (only volumes with at least the median object count). This is the only cause that seed count targets.
+2. **The sync splits one neuron into two consensus labels.** If the embedding drifts over the video (for
+   example with posture), runs seeded early and runs seeded late can label the neuron consistently within
+   their own half and inconsistently across halves. Each group then forms its own consensus label; the
+   per-volume Hungarian picks one or the other, and the neuron is split in time (`err_frag_split`). More
+   runs make each group's label more stable but do not bridge the two. *More varied seeds*
+   (`seed_strat`, one per time bin) put runs in every regime, which fixes coverage but can make this kind of
+   split worse unless something links the regimes. What links them: temporal edges (`temporal1/5`, labels
+   flow along time and not only through embedding similarity), re-propagation from confident consensus
+   labels (`reprop*`, every volume becomes a seed), and an explicit merge of labels whose time supports
+   barely overlap (batch 3).
+3. **Distractor tracks.** Seed volumes contain distractors, and each gets a label. A distractor has no
+   stable identity, so its label wanders and, in some volumes, takes a GT neuron (`err_frag_distractor`).
+   More seeds give more distractor labels, not fewer. What helps: the soft cannot-link `framenorm` (a
+   label cannot hold two objects of one volume during propagation), `thr03`, and `runw`/`drop20`. After
+   the sync, labels that are mostly low-confidence across volumes could be dropped (not yet a variant).
+
+The existing seed-count measurement (100 seeds neutral on S137) **says nothing about fragmentation**:
+Samuel tracks GT objects only, and its `err_fragment` is 0. Judge seed variants on Zimmer and Flavell,
+and on the fragment columns as well as accuracy:
+`analyze.py ... --metric err_frag_split --cases zimmer flavell` (for `err_*` metrics, lower is better, so
+ignore the verdict column). Whichever cause dominates decides the next step:
+* `seeds100` or `seed_complete` cuts `err_fragment` on Zimmer/Flavell: cause 1 is real, and seeds are the
+  cheap fix.
+* mostly `err_frag_split`, and seeds do not move it: cause 2, so the temporal and re-propagation
+  variants, then the batch 3 merge.
+* mostly `err_frag_distractor`: cause 3, so cannot-link and label pruning, not merging.
+
 Each record carries `err_unlabelled` / `err_swapped` / `err_fragment` / `err_no_detection` (fast
 GT-optimal matching; `acc_fast` is its accuracy), plus `acc_merge_bound` (every label assigned to its
 majority neuron) and `n_labels` / `n_unmatched_labels`. Batch 1's base rows therefore also say where the errors
@@ -222,37 +265,47 @@ objects make up half of the errors or more.
 
 ### Batch 1: one-change screen (ready to run)
 
-* Variants: `batch1` in variants.py, 33 plus `base`. The 13 graph-level ones (`whiten`, `pca`, `l2`,
+* Variants: `batch1` in variants.py, 34 plus `base`. The 13 graph-level ones (`whiten`, `pca`, `l2`,
   `svd100`, `k10`, `k40`, `sym`, `mutual`, `nosame`, `gauss`, `exact`, `temporal1`, `temporal5`) each
   rebuild the graph and propagate again. 8 are propagation-level (`layers30`, `layers300`, `spread99`,
-  `classnorm`, `framenorm`, `seed_strat`, `seed_complete`, `seeds50`). The other 12 reuse the memoised
+  `classnorm`, `framenorm`, `seed_strat`, `seed_complete`, `seeds50`, `seeds100`). The other 12 reuse the memoised
   propagation (sync and post only).
 * Cases (`cases.sh` DEV_CASES): S137 t50 (.877, weak, 85k objects), S184 t27 (.957, 210k), Z1210 t36 (.929,
   261k, distractors), F0330-02 t61 (.969, 228k, every detection). This is one network per lab except
   Leifer, which is held out.
 * RNG seeds 0 and 1.
 * Cost, CPU at 16 threads, from the S137 measurement scaled by objects x labels:
-  * per (case, seed): about 22 propagations (layers300 counts 3, seeds50 counts 2), 35 syncs and
+  * per (case, seed): about 26 propagations (layers300 counts 3, seeds50 2, seeds100 4), 36 syncs and
     15 graphs;
   * S137: about 22 x 20 s + 35 x 9 s + 15 x 10 s, about 15 min;
   * the 210-260k-object cases: about 22 x 100 s + 35 x 25 s + 15 x 40 s, about 60 min;
   * total about 3.3 h per seed and 6.5-7 h for both, or 2.5-3 h wall time with 3 processes in parallel
     here.
-  * On GPU, propagation is about 2.5 s per seed for 190k objects (notebook 2887), so a
-    (case, seed) is about 35 min, dominated by graphs and syncs on the CPU.
+  * **On GPU (the default now):** propagation is about 2.5 s per seed for 190k objects (notebook
+    2887), so a big (case, seed) is about 35-40 min, dominated by graphs and syncs on the CPU. With two
+    GPU streams (one per RNG seed, 24 CPU threads each; GPU memory per stream is under 2 GB, as dense H is
+    about 0.8 GB at 260k x 250 labels), batch 1 takes about 2.5 h wall time. That matches three CPU
+    streams, leaves CPU cores free, and makes `seeds100` cheap.
+  * Run the speed batch first (below), with base at seed 0 on the GPU. It checks GPU equivalence
+    (`local`, `batch5` equal `base`), reproduces the recorded GPU accuracies (section 4), and times
+    `exact` on the GPU, all in about 1 h.
 
-Launch (local, CPU, three streams; or `DEVICE=cuda` for one GPU stream when the GPU is free):
+Launch (local, GPU, two streams; `DEVICE=cpu THREADS=16` and three streams if the GPU is busy):
 
 ```bash
 cd barlow_track/scripts/scratch/labelprop_opt
 export WORK=$HOME/.cache/barlow_scratch/labelprop_opt
-# three parallel CPU streams of 16 threads, one per seed/case group (resumable; same output file is fine
-# for separate processes only if they write different cases: use per-stream outputs as below)
+mkdir -p $WORK
+# 1. speed / reproduction check (about 1 h)
+DEVICE=cuda THREADS=24 bash run_local.sh speed dev "0" > $WORK/speed_dev.log 2>&1
+# 2. batch 1, one GPU stream per RNG seed (resumable; both append to $WORK/batch1_dev.jsonl)
 for s in 0 1; do
-  DEVICE=cpu THREADS=16 nohup bash run_local.sh batch1 dev "$s" > $WORK/batch1_dev_s$s.log 2>&1 &
+  DEVICE=cuda THREADS=24 nohup bash run_local.sh batch1 dev "$s" > $WORK/batch1_dev_s$s.log 2>&1 &
 done
 # afterwards
-/home/charles/anaconda3/envs/wbfm/bin/python analyze.py $WORK/batch1_dev.jsonl --per_case
+PY=/home/charles/anaconda3/envs/wbfm/bin/python
+$PY analyze.py $WORK/batch1_dev.jsonl --per_case
+$PY analyze.py $WORK/batch1_dev.jsonl --metric err_frag_split --cases zimmer flavell   # section 3a
 ```
 
 (run_local.sh writes `$WORK/batch1_dev.jsonl`. The two seed streams append to it from different
@@ -283,7 +336,9 @@ bash run_local.sh batch2 confirm "0 1 2"          # local
 BATCH=batch2 SET=confirm SEEDS="0 1 2" sbatch --array=0-14 labelprop_opt.sbatch
 ```
 
-Cost: about 10 variants x 15 (case, seed), about 6-8 CPU-h (3 h wall time locally in 3 streams). Adopt
+Cost: about 10 variants x 15 (case, seed), about 6-8 CPU-h, or about 3 h wall time locally in 3 GPU
+streams (one per RNG seed). Leifer is in the confirmation set and is the case where fragmentation matters
+most (section 3a), so report its fragment columns separately. Adopt
 per section 4. Then run the 100-seed check of the adopted recipe on 2 cases (the paper uses 100). The
 seed count interacts with run weighting and seed choice.
 
@@ -304,7 +359,8 @@ fragments and unlabelled objects matter on distractor recordings.
 
 ### Speed batch (run once; small)
 
-`bash run_local.sh speed dev "0"` on GPU (and once with `DEVICE=cpu`) compares `base`, `local` (must be
+Run it first, before batch 1 (launch line above). `bash run_local.sh speed dev "0"` on GPU (and once
+with `DEVICE=cpu` if CPU-only eval jobs matter) compares `base`, `local` (must be
 equal), `exact`, `batch5` (must be equal), `layers50` and `layers30` for time and accuracy.
 
 ## 6. Speed and memory
@@ -326,7 +382,8 @@ seed, 118 s per track.
 
 Cheap wins, in order:
 
-1. **Track on CPU with CSR.** The old 102 s/seed CPU figure was torch_sparse spmm, before the CSR
+1. **Track on the GPU when the eval has one** (the sweep's default, `objective_track_device: cuda`); this
+   harness now defaults to it too. On CPU-only jobs, CSR is enough: the old 102 s/seed CPU figure was torch_sparse spmm, before the CSR
    adjacency. CSR is about 0.8 s/seed at 85k objects on 16 threads. CPU eval jobs (`objective_cpu_job`)
    are therefore no longer slow at label propagation. Re-measure Leifer-size on CPU with the `speed` batch
    before relying on this.

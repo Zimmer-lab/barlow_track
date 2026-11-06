@@ -3474,3 +3474,19 @@ Fragment merging on Z1210 t36 s0 (r261106-602653): of 85 true fragment pairs (sa
 Fragment-pair diagnostic on Z1210 t36 s0: are the partner tracks of fragmented neurons pieces of the same nucleus (over-segmentation) or neighbouring nuclei? Flavell's merge diagnostic showed the same concurrency as Zimmer (36 true pairs, median overlap 0.99; consensus affinity AUC .95).
 
 run r261106-640685 · pids 640685 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_fragment_pairs_zimmer_1210.log · for [[EVD - Fragment merging of final label propagation tracks on recordings with distractors]]
+
+## 2026-11-06 22:12 — run
+
+Fragment errors are long swaps with a neighbour, so try voting along temporal chains (adjacent-volume mutual-NN links) before the final Hungarian: lp_core chain_w. Smoke on S137 t50 s0 (cached consensus): chain_w 1 +0.61 pt, chain_w 5 -0.07. Grid chain_w x tsmooth on S137, Z1210, F0330, then Leifer StarDist.
+
+run r261106-647605 · pids 647605 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_chain_zimmer_1210.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_chain_flavell_2022033002.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_chain_samuel_137.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_chain_leifer_stardist_strict.log · for [[QUE - Can the label propagation tracker be made more accurate on fixed embeddings]]
+
+## 2026-11-06 23:03 — result
+
+Chain voting (chain_w, 7b4f1df), r261106-647605 on cached base consensus at seed 0: Z1210 t36 +1.66 pt at chain_w 1 (+1.61 at 0.5), almost all from unlabelled objects (1.60 -> 0.14%; fragments unchanged, 3.14 -> 3.20%); Zimmer chains are long (median object in a chain of 159 volumes) and 99.8% of links join the same GT neuron. S137 t50 +0.61 at chain_w 1 (+0.52 at 0.5; chains median 7, links 90% right). F0330 t61 +0.09 at 0.25-1 (chains median 15, links 97.6%). chain_w >= 5 hurts everywhere (-0.6 to -1.2 pt on F0330, S137). With tsmooth 0.5 the two overlap: on S137 they cancel. Added chain05, chain1, c_all_chain, c_all_gh_chain (tsmooth 0 in the combos) to batch 2 (b5e20d2).
+
+## 2026-11-06 23:03 — run
+
+Batch 2 add-on: the chain variants for streams started before b5e20d2.
+
+run r261106-673582 · pids 673582 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_addon.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]

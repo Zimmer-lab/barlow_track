@@ -82,8 +82,9 @@ def load_embedding(emb, work, tag, max_frames=None):
     local = os.path.join(work, 'emb', os.path.basename(emb))
     os.makedirs(os.path.dirname(local), exist_ok=True)
     if not os.path.exists(local):
-        shutil.copy(emb, local + '.part')
-        os.replace(local + '.part', local)
+        part = f'{local}.part{os.getpid()}'  # per process: parallel streams of one case copy at once
+        shutil.copy(emb, part)
+        os.replace(part, local)
     with np.load(local, allow_pickle=True) as d:
         X = d['X']
         t2l = d['time_to_lin'].item()

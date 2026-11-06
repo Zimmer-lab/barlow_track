@@ -1,13 +1,15 @@
 ---
 nodeTypeId: node_ygg_evidence
 nodeInstanceId: 01a1b2b1-a387-77d2-9aa7-3694919122a8
-status: in-progress
+status: done
 priority: high
 dateCreated: 2026-11-06T22:09:08+01:00
-dateModified: 2026-11-06T22:09:08+01:00
+dateModified: 2026-11-06T23:05:17+01:00
 confidence: medium
 projects:
   - "[[barlowtrack]]"
+outcome: succeeded
+completedDate: 2026-11-06
 ---
 
 ## Purpose

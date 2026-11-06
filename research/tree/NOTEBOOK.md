@@ -3490,3 +3490,9 @@ Chain voting (chain_w, 7b4f1df), r261106-647605 on cached base consensus at seed
 Batch 2 add-on: the chain variants for streams started before b5e20d2.
 
 run r261106-673582 · pids 673582 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_addon.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-06 23:04 — run
+
+Leifer StarDist t57 s0 (r261106-606521, r261106-647605): base .9371 reproduces the strict-GT objective (.93707, r261105-3536566). Fragments are 5.6% of GT points (merge bound .9878); 98 true fragment pairs, median overlap 0.985, no merge passes anywhere in the grid; chain voting +0.17 pt at most (chain_w 1). Fragment-pair diagnostic on it now.
+
+run r261106-674571 · pids 674571 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_fragment_pairs_leifer_stardist_strict.log · for [[EVD - Fragmented neurons on Zimmer swap with a neighbouring nucleus for long stretches]]

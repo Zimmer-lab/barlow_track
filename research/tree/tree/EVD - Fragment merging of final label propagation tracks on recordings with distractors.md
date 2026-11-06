@@ -1,14 +1,15 @@
 ---
 nodeTypeId: node_ygg_evidence
 nodeInstanceId: 01a1b26c-b087-7ac0-af36-66610b44930f
-status: in-progress
+status: done
 priority: high
 dateCreated: 2026-11-06T20:53:49+01:00
-dateModified: 2026-11-06T22:09:28+01:00
+dateModified: 2026-11-06T23:05:34+01:00
 confidence: medium
 projects:
   - "[[barlowtrack]]"
 outcome: failed
+completedDate: 2026-11-06
 ---
 
 ## Purpose
@@ -25,13 +26,14 @@ Batch 1 showed that no tracker setting reduces fragmentation ([[EVD - Fragment e
 |---|---|---|---|---|---|---|
 | Z1210 | 176 | 1067 | 85 | 0.76 / 0.98 | .78 / .68 / .84 | 2 merges, +0.25 pt (ratio 3, overlap 0.2) |
 | F0330 | 173 | 1100 | 36 | 0.73 / 0.99 | .83 / .53 / .95 | no merges anywhere |
+| Leifer StarDist t57 | 148 | 917 | 98 | 0.80 / 0.985 | .83 / .66 / .85 | no merges anywhere |
 
-Unmerged accuracy Z1210 .9312 (merge bound .9601), F0330 .9716 (bound .9811).
+Unmerged accuracy Z1210 .9312 (merge bound .9601), F0330 .9716 (bound .9811), Leifer StarDist .9371 (bound .9878).
 
 ## Conclusion
 
-Merging final labels cannot recover the fragment errors on Z1210 and F0330: the label pairs that share a GT neuron run side by side through 98-99% of the same volumes (median), instead of covering different stretches of time, so no merge rule that keeps one object per label per volume finds them (at most 2 merges, +0.25 pt, over 96 settings). Consensus affinity does identify the partner pairs (AUC .84 Zimmer, .95 Flavell), but what those pairs need is a per-volume choice between two objects, not a merge. [[EVD - Fragmented neurons on Zimmer swap with a neighbouring nucleus for long stretches]] shows what the partner objects are.
+Merging final labels cannot recover the fragment errors on Z1210, F0330 or Leifer StarDist: the label pairs that share a GT neuron run side by side through 98-99% of the same volumes (median), instead of covering different stretches of time, so no merge rule that keeps one object per label per volume finds them (at most 2 merges, +0.25 pt, over 96 settings). Consensus affinity does identify the partner pairs (AUC .84 Zimmer, .95 Flavell), but what those pairs need is a per-volume choice between two objects, not a merge. [[EVD - Fragmented neurons on Zimmer swap with a neighbouring nucleus for long stretches]] shows what the partner objects are.
 
 ## Caveats
 
-One network per recording, seed 0 only. The merge bound counts each label's GT objects for its majority neuron, which only per-volume reassignment can reach, so it overstates what merging could do. Leifer StarDist result pending (r261106-606521); the 8.9 pt Leifer bound came from a 100-volume smoke, where tracks are short and time-disjoint pieces are more likely.
+One network per recording, seed 0 only. The merge bound counts each label's GT objects for its majority neuron, which only per-volume reassignment can reach, so it overstates what merging could do. The 8.9 pt Leifer bound came from a 100-volume smoke of the NWB re-export; at full length on StarDist masks the bound is 5.1 pt and none of it is reachable by merging ([[EVD - On Leifer StarDist the fragment errors follow an unannotated touching neighbour mask]]).

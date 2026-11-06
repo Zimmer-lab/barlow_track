@@ -3306,3 +3306,13 @@ Held-out scoring mode for optimize_shared_config.py (--score_heldout, --top/--tr
 ## 2026-11-06 14:10 — decision
 
 Code-review fixes prepared as a patch (repo read-only in this session; applies cleanly to d782242, 117 tests pass on a patched copy): shared sweep resumes only records scored at the run's eval length and refuses to mix smoke and full trials (params.yaml now records smoke); dup_frac rejected as an objective; restart after a crash between mkdir and params.yaml no longer dies; proxy_references.py filters on sync and num_seeds; label propagation falls back to CPU on cuSPARSE/cuBLAS/CUDA resource errors too, re-raising others; eval_accuracy maps '<name>_dupNN' to its base object instead of crashing. Plus the held-out scoring mode and the labelprop_opt plan/harness (subagent, harness reproduces the tracker exactly; batch1 = 33 variants x 4 cases x 2 seeds, ~3 h CPU). Deliberately not changed mid-sweep because they shift scores: eval crop-centre rounding (i261106-1), the consensus K cap, stale perms of zero-count labels in refine_perms.
+
+## 2026-11-06 14:32 — decision
+
+labelprop_opt PLAN.md updated for the local GPU: speed batch first (GPU reproduction check), batch 1 as two GPU streams (~2.5 h), added seeds100. Fragment errors now split into err_frag_split / err_frag_distractor / err_frag_other in sweep_labelprop records, because seed count only targets one of three fragmentation causes (neuron absent from seed volumes); the S137 seed-count null says nothing about fragments (Samuel has none).
+
+## 2026-11-06 14:36 — run
+
+Label propagation tracker screen on the local GPU (labelprop_opt, uncommitted edits on ec7d6ed): chain script /home/charles/.cache/barlow_scratch/labelprop_opt/chain_speed_batch1.sh runs the speed batch (GPU reproduction check), then batch 1 (34 variants + base, 4 dev cases, seeds 0/1) as two GPU streams.
+
+run r261106-361651 · pids 361651 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/speed_dev.log, /home/charles/.cache/barlow_scratch/labelprop_opt/batch1_dev_s0.log, /home/charles/.cache/barlow_scratch/labelprop_opt/batch1_dev_s1.log · for [[EVD - One-change screen of label propagation variants on four development recordings]]

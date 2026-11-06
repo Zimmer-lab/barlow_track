@@ -3342,3 +3342,21 @@ Zimmer project load profiled (Z1210, 246 s for two opens): load_final_project_da
 ## 2026-11-06 15:02 — decision
 
 Library check for the user: the kNN graph has no same-volume cannot-link (build_knn_graph is plain NNDescent; one-label-per-volume is enforced only after propagation, by the greedy per-run pass and the final Hungarian). svd_center is close to a no-op in U*S mode (Euclidean distances are translation invariant; only the 50-d subspace changes); it matters only with whitening.
+
+## 2026-11-06 15:08 — dropped
+
+replaced before it started: batch 1 relaunched as 12 streams (seed 2 added, CPU/GPU split) to use the idle machine
+
+dropped r261106-369804
+
+## 2026-11-06 15:08 — run
+
+Batch 1 relaunched as 12 streams (4 dev cases x seeds 0/1/2; Z1210 and F0330 seeds 0/1 propagate on GPU, the rest on CPU) at barlow_track@3fb6198. Speed batch (r261106-361651): Z1210 base 0.9315 vs 0.9316 and F0330 base 0.9717 vs 0.9714 reproduce; layers30 -0.15 pt on F0330 (S137 +0.82, S184 +0.03).
+
+run r261106-384883 · pids 384883 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch1.log · for [[EVD - One-change screen of label propagation variants on four development recordings]]
+
+## 2026-11-06 15:16 — run
+
+Per-run depth/hop diagnostic (diag_layers_hops.py at da3555b) on the 4 dev cases, 5 seed runs each, clamp + spread 0.9/0.97. Smoke on S137 t50 (3 runs): per-run accuracy on neurons present in the seed volume peaks at L=30 (0.652) and falls at 100 (0.629) and 300 (0.577) while coverage is already 1.0 by L=20 (max hop 11): fewer layers helps by less bleeding, not by abstaining. spread0.9 plateaus at 0.649. Objects whose neuron is absent from the seed volume (19%) are always labelled, necessarily wrongly; they are 95% of objects at >=10 hops. No dependence on |t - t_seed|.
+
+run r261106-398256 · pids 398256 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_samuel_137.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_samuel_184.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_zimmer_1210.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_flavell_2022033002.log

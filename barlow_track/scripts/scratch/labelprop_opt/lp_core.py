@@ -64,6 +64,11 @@ DEFAULTS = dict(
     temporal_smooth=0.0,                    # > 0: add this times adjacent-volume mutual-NN consensus rows
     reprop_conf=0.0,                        # > 0: re-propagate from consensus labels with confidence >= this
     reprop_layers=30, reprop_w=1.0,         # layers of that propagation; weight of its result vs consensus
+    merge_ratio=0.0,                        # > 0: merge final labels (fragments) whose embedding centroids are
+                                            # within this many RMS spreads (sqrt(s_a s_b)) of each other ...
+    merge_overlap=0.1,                      # ... and that share at most this fraction of the smaller one's volumes
+    merge_aff=0.0,                          # ... and whose consensus affinity is at least this (0: not used)
+    merge_knn=10,                           # candidate partners per label: nearest centroids
 )
 
 STAGES = dict(
@@ -73,7 +78,8 @@ STAGES = dict(
           'top_k', 'batch_seeds'),
     sync=('input_probability_threshold', 'prob_weight', 'per_run_unique', 'rounding', 'refine_iters',
           'k_extra', 'run_weight', 'drop_worst_frac'),
-    post=('min_prob_threshold', 'temporal_smooth', 'reprop_conf', 'reprop_layers', 'reprop_w'),
+    post=('min_prob_threshold', 'temporal_smooth', 'reprop_conf', 'reprop_layers', 'reprop_w', 'merge_ratio',
+          'merge_overlap', 'merge_aff', 'merge_knn'),
 )
 
 
@@ -495,7 +501,117 @@ def finalize(sync_out, time_to_lin, v, Xs=None, graph=None):
         cons = sm
     labels, probs = ss.enforce_temporal_uniqueness_hungarian(cons, time_to_lin, R=R,
                                                             min_prob_threshold=v['min_prob_threshold'])
-    return labels[:, 0], probs[:, 0]
+    labels, probs = labels[:, 0], probs[:, 0]
+    if v['merge_ratio'] > 0:
+        labels, probs, _ = merge_fragments(labels, probs, Xs, time_to_lin, v, cons=cons)
+    return labels, probs
+
+
+def label_stats(labels, Xs, time_to_lin):
+    """Per final label (1-indexed; -1 = none): ids, sizes, centroids, RMS spreads, volume sets."""
+    n = len(labels)
+    t = frame_of(time_to_lin, n)
+    on = labels >= 1
+    ul, li = np.unique(labels[on], return_inverse=True)
+    cnt = np.bincount(li, minlength=len(ul)).astype(float)
+    Xo = np.asarray(Xs[on], dtype=np.float64)
+    mu = np.zeros((len(ul), Xo.shape[1]))
+    np.add.at(mu, li, Xo)
+    mu /= cnt[:, None]
+    sq = ((Xo - mu[li]) ** 2).sum(1)
+    spread = np.sqrt(np.bincount(li, weights=sq, minlength=len(ul)) / cnt)
+    frames = [set() for _ in ul]
+    for i, tt in zip(li, t[on]):
+        frames[i].add(int(tt))
+    return dict(ul=ul, li=li, on=on, t=t, cnt=cnt, mu=mu, spread=spread, frames=frames)
+
+
+def merge_candidates(st, v, cons=None, labels=None):
+    """Label pairs (a, b) (indices into st['ul']) with features: centroid ratio, volume overlap, consensus affinity."""
+    from sklearn.neighbors import NearestNeighbors
+    mu, spread, cnt, frames = st['mu'], st['spread'], st['cnt'], st['frames']
+    L = len(st['ul'])
+    s_floor = np.median(spread[cnt >= 5]) if (cnt >= 5).any() else 1.0
+    s_eff = np.where(cnt >= 5, spread, np.maximum(spread, s_floor))
+    m = min(int(v['merge_knn']) + 1, L)
+    d, nb = NearestNeighbors(n_neighbors=m).fit(mu).kneighbors(mu)
+    pairs = {}
+    for a in range(L):
+        for dd, b in zip(d[a, 1:], nb[a, 1:]):
+            key = (min(a, b), max(a, b))
+            if key in pairs:
+                continue
+            fa, fb = frames[key[0]], frames[key[1]]
+            ov = len(fa & fb) / max(1, min(len(fa), len(fb)))
+            pairs[key] = dict(ratio=float(dd / np.sqrt(s_eff[a] * s_eff[b])), overlap=ov)
+    if cons is not None and labels is not None:
+        # affinity: mean consensus mass that one label's objects give the other label (both directions, max)
+        on, li, ul = st['on'], st['li'], st['ul']
+        idx = np.flatnonzero(on)
+        C = np.asarray(cons[idx][:, ul - 1], dtype=np.float64)
+        rs = np.asarray(cons[idx].sum(1)).ravel()
+        C = C / np.maximum(rs, 1e-12)[:, None]
+        M = np.zeros((L, L))
+        np.add.at(M, li, C)
+        M /= st['cnt'][:, None]
+        for (a, b), f in pairs.items():
+            f['aff'] = float(max(M[a, b], M[b, a]))
+    return pairs
+
+
+def merge_fragments(labels, conf, Xs, time_to_lin, v, cons=None):
+    """Greedy merging of final labels that look like pieces of one track: close embedding centroids (ratio
+    <= merge_ratio), little shared time (overlap <= merge_overlap of the smaller group's volumes, checked
+    for whole merged groups), optional consensus affinity >= merge_aff. The smaller group takes the larger
+    one's label; where a merged group has two objects in one volume, the more confident keeps the label and
+    the other is unlabelled (-1). Returns (labels, conf, merges [(kept label, merged label, ratio)])."""
+    labels = np.asarray(labels).copy()
+    conf = np.asarray(conf, dtype=float).copy()
+    st = label_stats(labels, Xs, time_to_lin)
+    if len(st['ul']) < 2:
+        return labels, conf, []
+    pairs = merge_candidates(st, v, cons=cons if v['merge_aff'] > 0 else None, labels=labels)
+    cand = sorted((f['ratio'], a, b) for (a, b), f in pairs.items()
+                  if f['ratio'] <= v['merge_ratio'] and f['overlap'] <= v['merge_overlap']
+                  and (v['merge_aff'] <= 0 or f.get('aff', 0.0) >= v['merge_aff']))
+    parent = list(range(len(st['ul'])))
+    gframes = [set(f) for f in st['frames']]
+    gsize = list(st['cnt'])
+
+    def root(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    merges = []
+    for r, a, b in cand:
+        ra, rb = root(a), root(b)
+        if ra == rb:
+            continue
+        ov = len(gframes[ra] & gframes[rb]) / max(1, min(len(gframes[ra]), len(gframes[rb])))
+        if ov > v['merge_overlap']:
+            continue
+        if gsize[ra] < gsize[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        gframes[ra] |= gframes[rb]
+        gsize[ra] += gsize[rb]
+        merges.append((int(st['ul'][ra]), int(st['ul'][rb]), float(r)))
+    if not merges:
+        return labels, conf, []
+    new_of = np.array([st['ul'][root(i)] for i in range(len(st['ul']))])
+    on = st['on']
+    labels[on] = new_of[st['li']]
+    # one object per (volume, label): keep the most confident
+    idx = np.flatnonzero(on)
+    order = np.lexsort((-conf[idx], labels[idx], st['t'][idx]))
+    srt = idx[order]
+    key_t, key_l = st['t'][srt], labels[srt]
+    dup = np.zeros(len(srt), bool)
+    dup[1:] = (key_t[1:] == key_t[:-1]) & (key_l[1:] == key_l[:-1])
+    labels[srt[dup]] = -1
+    conf[srt[dup]] = 0.0
+    return labels, conf, merges
 
 
 def repropagate(cons, R, time_to_lin, v, graph):

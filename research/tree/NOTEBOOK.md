@@ -3402,3 +3402,7 @@ run r261106-473331 · pids 473331 · host charles-Precision-7820-Tower · logs /
 ## 2026-11-06 16:57 — surprise
 
 Depth diagnostic r261106-416617 done (4 dev cases, 5 runs each). Per-run accuracy on present neurons vs layers (L=30 / 100 / 300): S137 .654/.632/.585, S184 .839/.821/.789, Z1210 .859/.858/.857, F0330 .837/.837/.832. Bleeding with depth is a Samuel effect; the distractor recordings are flat from L=20. Z1210: 6% of GT objects are unreachable from a seed volume (disconnected graph pieces; Flavell ~0.3%). Correctness AUC, mass / top-1 prob / -hops: S137 .64/.81/.60, S184 .64/.90/.61, Z1210 .61/.75/.59, F0330 .64/.82/.61: mass is a weak predictor everywhere (agrees with the user's memory), prob is better. Yet in batch 1 (partial) thr03 (drop prob<0.3 before sync) is -0.32 pt and probw -0.28 pt: the per-run signal does not carry into the final accuracy, again as the user found.
+
+## 2026-11-06 16:57 — decision
+
+NWB: does a newer stack make the branch's table skipping (fix 2) unnecessary? Plain full pynwb read of the Zimmer no-image NWB (1667 per-volume tables), scratch Python 3.11 env: pynwb 4.2.0 / hdmf 6.2.0 / HDF5 2.0.0 39.9 s vs wbfm env pynwb 2.8.3 / hdmf 3.14.6 / HDF5 1.14.2 116.2 s (load ~30). docval calls 0.51M vs 2.73M (type-map regression fixed upstream). The branch's fast read is 6.7 s on Python 3.8, so per-object construction (~20 ms/table) still dominates: the skipping is needed with any version. HDF5 itself is not the bottleneck (h5py attrs/name ~5 s).

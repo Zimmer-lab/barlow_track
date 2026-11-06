@@ -4,7 +4,7 @@ nodeInstanceId: 01a1b113-4b8e-751e-8541-c015c8b610f0
 status: in-progress
 priority: high
 dateCreated: 2026-11-06T14:36:34+01:00
-dateModified: 2026-11-06T14:46:39+01:00
+dateModified: 2026-11-06T15:02:14+01:00
 confidence: low
 projects:
   - "[[barlowtrack]]"
@@ -16,7 +16,7 @@ Find which single changes to the label propagation tracker raise accuracy on sav
 
 ## Method
 
-Harness barlow_track/scripts/scratch/labelprop_opt (sweep_labelprop.py, lp_core.py, variants.py `batch1`; batch 1 at barlow_track@9a32928, run r261106-369804; speed batch at 8f22a22, run r261106-361651, continuing as pid 361654). 35 one-change variants plus `base` (the tracker as the sweep runs it) on 4 dev cases × RNG seeds 0 and 1:
+Harness barlow_track/scripts/scratch/labelprop_opt (sweep_labelprop.py, lp_core.py, variants.py `batch1`; batch 1 at barlow_track@3fb6198 (9a32928 plus a project-load fix that leaves results unchanged), run r261106-369804; speed batch at 8f22a22, run r261106-361651, continuing as pid 361654). 35 one-change variants plus `base` (the tracker as the sweep runs it) on 4 dev cases × RNG seeds 0 and 1:
 - S137 t50 (round_bayes_wk2_samuel_137, weak, .877);
 - S184 t27 (round_bayes_wk3_samuel_184, .957);
 - Z1210 t36 (round_bayes_wk3_zimmer_1210, project segmentation with distractors);

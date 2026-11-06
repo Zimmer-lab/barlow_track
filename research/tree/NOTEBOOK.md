@@ -3334,3 +3334,11 @@ spread99 replaced by spread90/spread97 (9a32928): its rationale (mislabelled see
 Batch 1 of the label propagation screen, 8 streams (4 dev cases x seeds 0/1, 7 threads each, shared GPU), at barlow_track@9a32928; starts when the speed batch (pid 361654) ends.
 
 run r261106-369804 · pids 369804 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch1.log · for [[EVD - One-change screen of label propagation variants on four development recordings]]
+
+## 2026-11-06 15:02 — decision
+
+Zimmer project load profiled (Z1210, 246 s for two opens): load_final_project_data_from_nwb spends ~95 s per open in pynwb read (hdmf constructs ~17k containers incl. 3334 per-volume segmentation objects; arg checks + type-map deepcopies) and ~23 s in convert_nwb_to_trace_dataframe; volumes themselves are lazy. run_eval and the harness opened the same project twice; fixed in 3fb6198 (reuse when GT path == project path), ~2 min saved per Zimmer eval. Further speedup would need a cache of seg metadata + GT tracks or a lazier wbfm NWB loader.
+
+## 2026-11-06 15:02 — decision
+
+Library check for the user: the kNN graph has no same-volume cannot-link (build_knn_graph is plain NNDescent; one-label-per-volume is enforced only after propagation, by the greedy per-run pass and the final Hungarian). svd_center is close to a no-op in U*S mode (Euclidean distances are translation invariant; only the 50-d subspace changes); it matters only with whitening.

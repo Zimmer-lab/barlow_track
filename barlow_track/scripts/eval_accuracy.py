@@ -839,7 +839,7 @@ def run_eval(args):
             from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind
             df_pred = add_metadata_to_df_raw_ind(df_pred, src_data.segmentation_metadata)
             # Accuracy vs GT on raw_segmentation_id level (paper recipe)
-            df_gt = _load_project_gt(gt_path)
+            df_gt = _load_project_gt(gt_path, project_data=src_data, project_path=project_path)
             print(f"[{args.lab}/project] GT: {len(df_gt.columns.get_level_values(0).unique())} neurons, "
                   f"{len(df_gt)} frames; pred: {len(df_pred)} frames", flush=True)
             match_col = 'raw_segmentation_id'
@@ -1007,10 +1007,21 @@ def _save_embeddings(emb_path, **arrays):
     os.replace(tmp, emb_path)
 
 
-def _load_project_gt(gt_path):
-    """Ground-truth tracks of a project: its finished neurons, else all final_tracks."""
-    from wbfm.utils.projects.finished_project_data import ProjectData
-    gt_data = ProjectData.load_final_project_data(gt_path, allow_hybrid_loading=True, verbose=0)
+def _same_path(a, b):
+    return a is not None and b is not None and os.path.realpath(str(a)) == os.path.realpath(str(b))
+
+
+def _load_project_gt(gt_path, project_data=None, project_path=None):
+    """Ground-truth tracks of a project: its finished neurons, else all final_tracks.
+
+    project_data / project_path: an already-loaded ProjectData and the path it was loaded from. When
+    gt_path is that same path, it is reused instead of opened again (opening an NWB-backed project
+    builds the whole pynwb object tree, about 2 min for a Zimmer recording)."""
+    if project_data is not None and _same_path(gt_path, project_path):
+        gt_data = project_data
+    else:
+        from wbfm.utils.projects.finished_project_data import ProjectData
+        gt_data = ProjectData.load_final_project_data(gt_path, allow_hybrid_loading=True, verbose=0)
     df_gt = gt_data.get_final_tracks_only_finished_neurons()[0]
     if df_gt is None or df_gt.empty:
         df_gt = gt_data.final_tracks

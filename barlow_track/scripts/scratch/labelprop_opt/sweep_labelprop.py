@@ -146,7 +146,7 @@ class Scorer:
         else:
             src = ProjectData.load_final_project_data(cfg['project_path'], allow_hybrid_loading=True, verbose=0)
             self.seg_meta = src.segmentation_metadata
-            df_gt = ea._load_project_gt(gt_path)
+            df_gt = ea._load_project_gt(gt_path, project_data=src, project_path=cfg['project_path'])
             self.match_col = 'raw_segmentation_id'
         self.df_gt = df_gt
         self.load_s = round(time.time() - t0, 1)

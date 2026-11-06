@@ -3412,3 +3412,25 @@ NWB: does a newer stack make the branch's table skipping (fix 2) unnecessary? Pl
 Ax round 1 over label propagation settings (ax_labelprop.py at 5e40a5b): driver + Samuel CPU workers now, Zimmer/Flavell GPU+CPU workers after the batch-1 GPU queues end.
 
 run r261106-506551 · pids 506551 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round1/driver.log · for [[EVD - Bayesian search over label propagation settings on four development recordings]]
+
+## 2026-11-06 18:00 — run
+
+Ax round 1: started early CPU workers for Zimmer and Flavell (the launcher's GPU workers wait for the batch-1 GPU queues, and no Ax trial completes without all 4 cases).
+
+run r261106-510144 · pids 510144, 510145 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round1/worker_z_cpu0.log, /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round1/worker_f_cpu0.log · for [[EVD - Bayesian search over label propagation settings on four development recordings]]
+
+## 2026-11-06 20:46 — run
+
+Batch 2 (confirmation) started at d8a1335: 16 variants (base, the six batch-1 promotions, svd150, temporal2, temporal10, and combinations c_seeds, c_all = svd100+seeds50+stratified+temporal5+tsmooth05, c_all_s100, c_all_notemp, c_all_gh, c_all_l30) on CONFIRM_CASES x seeds 0-2. Leifer t57 then Z1210 t52 in one GPU queue; S137 t63, S184 t32, F0324 t28 as 9 CPU streams. The user asked to make sure Leifer is tested.
+
+run r261106-595573 · pids 595573 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2.log, /home/charles/.cache/barlow_scratch/labelprop_opt/batch2_confirm_leifer_reexport_s0.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-06 20:46 — decision
+
+Ax round 1 stopped after its 8 attached trials (driver killed before any Sobol trial; the launcher's STOP file was removed so the workers finish the queue). Reason: the search space lacked temporal_w, and temporal5 is the largest Zimmer gain in batch 1 (+1.38 pt). Round 2 (d8a1335) adds temporal_w in {0,1,2,5,10}, imports round 1's complete trials as completed Ax trials, and attaches temporal5, seed_strat, tsmooth05, c_all, c_all_gh; 50 trials, 4 Sobol.
+
+## 2026-11-06 20:46 — run
+
+Ax round 2 started (driver waits for round 1's queue to empty).
+
+run r261106-595574 · pids 595574 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round2/launch.log, /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round2/driver.log · for [[EVD - Bayesian search over label propagation settings on four development recordings]]

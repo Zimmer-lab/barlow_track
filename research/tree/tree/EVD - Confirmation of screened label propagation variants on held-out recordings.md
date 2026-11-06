@@ -1,7 +1,7 @@
 ---
 nodeTypeId: node_ygg_evidence
 nodeInstanceId: 01a1b113-4cff-7dde-892d-b7ad89e9cfe4
-status: open
+status: in-progress
 priority: high
 dateCreated: 2026-11-06T14:36:34+01:00
 dateModified: 2026-11-06T14:36:34+01:00

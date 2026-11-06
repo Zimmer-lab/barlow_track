@@ -3388,3 +3388,7 @@ User recalls (from building the tracker): low-mass nodes did not predict correct
 Depth/hop/confidence diagnostic on the 4 dev cases, 5 runs each (diag_layers_hops.py at 5094974).
 
 run r261106-416617 · pids 416617 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/diag_samuel_137.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_samuel_184.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_zimmer_1210.log, /home/charles/.cache/barlow_scratch/labelprop_opt/diag_flavell_2022033002.log · for [[EVD - Per-run label accuracy falls with propagation depth beyond about 30 layers]]
+
+## 2026-11-06 16:14 — decision
+
+NWB load speed (subagent, wbfm branch nwb-load-speed, 7 commits on a1cd2225, worktree /home/charles/Current_work/repos/dlc_for_wbfm_nwbspeed): per-read type-map copy (hdmf 3.14 deep-copied it per attribute; fixed upstream in hdmf 4.2), vectorised convert_nwb_to_trace_dataframe, pynwb skips Seg_tpoint_1..N (voxel masks via h5py), hybrid loading keeps NWB segmentation lazy and skips NWB traces the project has, no h5py path searches on dereferenced objects. Verified here: 6 new tests pass; Zimmer 1210 project load + finished-neuron GT (lazy segmentation, as the harness) 287.6 s on dev vs 20.6 s on the branch under load ~50, with df_gt, final_tracks and segmentation metadata at t=0/1/833/1666 exactly equal. Not merged: waiting on the user.

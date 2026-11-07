@@ -36,7 +36,7 @@ def consensus_run(Xs, time_to_lin, lin_to_t_seg, seed, device, num_seeds=25):
     from barlow_track.utils.utils_tracking import WormClusterTracker
     t0 = time.time()
     tracker = WormClusterTracker(Xs, dict(time_to_lin), linear_ind_to_t_and_seg_id=lin_to_t_seg, seed=seed)
-    tracker.track_using_label_propagation_clusterer(num_seeds=num_seeds, device=device)
+    tracker.track_using_label_propagation_clusterer(num_seeds=num_seeds, device=device, recipe='legacy')
     print(f'  label propagation + spectral sync {time.time() - t0:.0f}s', flush=True)
     return tracker
 

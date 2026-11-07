@@ -84,4 +84,6 @@ def tracker_consistency(tracker, lin_to_t, n_frames):
                               lin_to_t, n_frames)
     # agreement depends on the sync's rounding (refinement raises it); compare only like with like
     m['sync'] = runs.get('sync', 'independent_refine0')
+    # and on the label propagation recipe (runs from before recipes existed are legacy)
+    m['labelprop'] = (runs.get('settings') or {}).get('recipe', 'legacy')
     return m

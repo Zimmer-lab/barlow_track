@@ -228,9 +228,9 @@ def record_tag(trial_parent_dir, trial_num, dataset_label):
 # decide "already done" or "latest wins" compare these as well as the tag.
 RECORD_SETTINGS = ('source', 'gt', 'descriptor_stage', 'cluster', 'num_seeds', 'seed',
                    'center_per_volume', 'l2_per_volume', 'nwb_objects', 'max_frames',
-                   'svd', 'gt_matching', 'nwb_gt_mapping')
+                   'svd', 'gt_matching', 'nwb_gt_mapping', 'labelprop')
 # What records written before a setting existed were measured with
-_LEGACY_SETTINGS = dict(svd='scaled', gt_matching='nandist')
+_LEGACY_SETTINGS = dict(svd='scaled', gt_matching='nandist', labelprop='legacy')
 
 
 def _setting_value(rec, key):

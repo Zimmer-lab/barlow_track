@@ -169,7 +169,7 @@ def track_head(X_svd, time_to_lin, lin_to_t_seg, num_seeds, seed):
     from barlow_track.utils.utils_tracking import WormClusterTracker
     seed_all(seed)
     tracker = WormClusterTracker(X_svd, dict(time_to_lin), linear_ind_to_t_and_seg_id=lin_to_t_seg, seed=seed)
-    return tracker.track_using_label_propagation_clusterer(num_seeds=num_seeds, device=None, seed=seed)
+    return tracker.track_using_label_propagation_clusterer(num_seeds=num_seeds, device=None, seed=seed, recipe='legacy')
 
 
 def ensure_paper_code(root):
@@ -218,7 +218,7 @@ def paper_code_worker(f_in, f_out):
     tracker = WormClusterTracker(d['X_svd'], dict(d['time_to_lin']), linear_ind_to_t_and_seg_id=d['lin_to_t_seg'],
                                  svd_components=50, cluster_directly_on_svd_space=True,
                                  n_clusters_per_window=3, n_volumes_per_window=120, opt_db={}, opt_umap={})
-    df_pred = tracker.track_using_label_propagation_clusterer(num_seeds=d['num_seeds'])
+    df_pred = tracker.track_using_label_propagation_clusterer(num_seeds=d['num_seeds'], recipe='legacy')
     with open(f_out, 'wb') as f:
         pickle.dump(df_pred, f, protocol=4)
 

@@ -56,6 +56,39 @@ def make_seed_labels_no_dict(mask, num_timepoints):
     return y
 
 
+def gauss_knn_adjacency(X, k=20, random_state=None, sigma_neighbor=7):
+    """Row-normalised kNN adjacency with self-tuning Gaussian edge weights, as a torch CSR matrix (CPU).
+
+    The same NNDescent graph as build_knn_graph (same k, same random_state, the point itself as its first
+    neighbour). Edge i -> j gets w_ij = exp(-d_ij^2 / (sigma_i sigma_j)), with sigma_i the distance from i
+    to its sigma_neighbor-th neighbour (Zelnik-Manor & Perona's local scaling), so near neighbours count
+    more than far ones and dense and sparse regions of the embedding are treated alike. A self loop of
+    weight 1 is added (as add_self_loops in normalized_adjacency) and each row is divided by its sum, so
+    propagation averages over the neighbourhood. With uniform weights this is what normalized_adjacency
+    amounts to on the kNN graph, whose out-degree is constant.
+    """
+    import scipy.sparse as sp
+    index = NNDescent(X, n_neighbors=k, metric="euclidean", random_state=random_state)
+    nbrs, dists = index.neighbor_graph
+    nbrs = np.asarray(nbrs, dtype=np.int64)
+    dists = np.asarray(dists, dtype=np.float64)
+    n = nbrs.shape[0]
+    rows = np.repeat(np.arange(n), nbrs.shape[1])
+    cols = nbrs.reshape(-1)
+    d = dists.reshape(-1)
+    sig = np.maximum(dists[:, min(sigma_neighbor, dists.shape[1] - 1)], 1e-12)
+    w = np.exp(-d ** 2 / (sig[rows] * sig[cols]))
+    W = sp.csr_matrix((w, (rows, cols)), shape=(n, n)) + sp.identity(n, format='csr')
+    deg = np.asarray(W.sum(axis=1)).ravel()
+    Wn = (sp.diags(1.0 / deg) @ W).tocsr()
+    return torch.sparse_csr_tensor(torch.from_numpy(Wn.indptr.astype(np.int64)),
+                                   torch.from_numpy(Wn.indices.astype(np.int64)),
+                                   torch.from_numpy(Wn.data.astype(np.float32)), size=(n, n))
+
+
+EDGE_WEIGHTS = ('uniform', 'gauss')
+
+
 def normalized_adjacency(edge_index):
     """Symmetric-normalized adjacency weights, on edge_index's device.
 
@@ -153,9 +186,10 @@ def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k
     adj: precomputed sparse_adjacency (same device); built per call if None
     """
     if device is not None:
-        edge_index = edge_index.to(device)
+        if edge_index is not None:
+            edge_index = edge_index.to(device)
         y = y.to(device)
-    if edge_norm is None:
+    if edge_norm is None and adj is None:
         edge_index, edge_norm = normalized_adjacency(edge_index)
     mask = (y != -1)  # seeds
 
@@ -211,8 +245,11 @@ def run_label_propagation(edge_index, y, num_layers=50, alpha=0.95, return_top_k
 
 
 def multi_seed_propagation(X, slices, time_index_to_linear_feature_indices, k=20, device=None,
-                           random_state=None, **kwargs):
+                           random_state=None, edge_weight='uniform', **kwargs):
     """Propagate labels from each seed time; device=None keeps the CPU backup path.
+
+    edge_weight: 'uniform' (historical: every kNN edge counts the same) or 'gauss' (gauss_knn_adjacency:
+    self-tuning Gaussian weights on the same kNN graph).
 
     The kNN graph is built once on CPU; with a device, edge weights move there
     once (adjacency normalization hoisted out of the per-seed loop) and results
@@ -222,7 +259,12 @@ def multi_seed_propagation(X, slices, time_index_to_linear_feature_indices, k=20
     random_state is forwarded to the kNN graph builder: the graph is the only
     random step here, so fixing it makes the whole multi-seed run reproducible.
     """
-    edge_index = build_knn_graph(X, k=k, random_state=random_state)
+    if edge_weight == 'uniform':
+        edge_index = build_knn_graph(X, k=k, random_state=random_state)
+    elif edge_weight == 'gauss':
+        edge_index = gauss_knn_adjacency(X, k=k, random_state=random_state)  # a CSR adjacency, not edges
+    else:
+        raise ValueError(f"edge_weight {edge_weight!r}; use one of {EDGE_WEIGHTS}")
     if device is not None and torch.device(device).type == 'cuda':
         try:
             return _propagate_all_seeds(edge_index, X.shape[0], slices, time_index_to_linear_feature_indices,
@@ -251,11 +293,19 @@ def _is_cuda_resource_error(e):
 
 
 def _propagate_all_seeds(edge_index, num_nodes, slices, time_index_to_linear_feature_indices, device, **kwargs):
-    """Every seed time's propagation on one device (None = CPU); results as numpy."""
-    if device is not None:
-        edge_index = edge_index.to(device)
-    edge_index, edge_norm = normalized_adjacency(edge_index)
-    adj = sparse_adjacency(edge_index, edge_norm, num_nodes)  # once, shared by every seed
+    """Every seed time's propagation on one device (None = CPU); results as numpy.
+
+    edge_index is either kNN edges (normalised here) or an already normalised sparse CSR adjacency
+    (gauss_knn_adjacency).
+    """
+    if edge_index.layout == torch.sparse_csr:
+        adj = edge_index.to(device) if device is not None else edge_index
+        edge_index, edge_norm = None, None
+    else:
+        if device is not None:
+            edge_index = edge_index.to(device)
+        edge_index, edge_norm = normalized_adjacency(edge_index)
+        adj = sparse_adjacency(edge_index, edge_norm, num_nodes)  # once, shared by every seed
     labelings = []
     probabilities = []
     for t in tqdm(slices, desc="Propagating labels from seed times", leave=False):

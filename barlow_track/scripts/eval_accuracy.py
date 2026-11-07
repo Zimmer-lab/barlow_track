@@ -512,7 +512,15 @@ def _parse_args(argv=None):
     ap.add_argument('--mode', choices=['image', 'position', 'posonly', 'attention', 'trained', 'both'], default='both')
     ap.add_argument('--weights', default=None, help='trained checkpoint for mode=trained (load_barlow_model)')
     ap.add_argument('--cluster', choices=['global', 'labelprop'], default='labelprop')
-    ap.add_argument('--num_seeds', type=int, default=25)
+    ap.add_argument('--num_seeds', type=int, default=None,
+                    help='label propagation seed volumes (default: 25 with --labelprop legacy, as every '
+                         'recorded score; the recipe\'s own number otherwise)')
+    ap.add_argument('--labelprop', choices=['legacy', 'v2'], default='legacy',
+                    help="label propagation recipe (utils/labelprop_recipes.py), with its SVD dimension: "
+                         "'legacy' (default, every recorded score: 50 components, random seed volumes, "
+                         "uniform kNN edges, greedy per-run uniqueness) or 'v2' (150 components, "
+                         "stratified seed volumes, Gaussian kNN edges, Hungarian per-run uniqueness; the "
+                         "library tracker's default since 2026-11-07)")
     ap.add_argument('--seed', type=int, default=0,
                     help='single seed for every random step: head init, SVD, seed times, kNN graph')
     ap.add_argument('--skip_embed', action='store_true',
@@ -527,9 +535,10 @@ def _parse_args(argv=None):
     ap.add_argument('--l2_per_volume', action='store_true',
                     help='row-wise L2-normalize descriptors before saving embeddings')
     ap.add_argument('--svd', choices=['scaled', 'whiten'], default='scaled',
-                    help="50-component SVD before tracking: 'scaled' (default, every recorded "
-                         "score) keeps U*S; 'whiten' keeps U, as production tracking "
-                         "(track_using_barlow._robust_svd) does on real videos")
+                    help="SVD before tracking (the --labelprop recipe's number of components): "
+                         "'scaled' (default, every recorded score) keeps U*S; 'whiten' keeps U, as "
+                         "production tracking (track_using_barlow._robust_svd) did on real videos "
+                         "before the v2 recipe")
     ap.add_argument('--gt_matching', choices=['nandist', 'gt_valid'], default='nandist',
                     help="track-to-GT column matching: 'nandist' (default, every recorded score) "
                          "also counts a prediction where the GT is NaN as a disagreement; "
@@ -579,8 +588,17 @@ def _parse_args(argv=None):
                     help='h5 to write the scored tracks to (keys gt, pred_matched, pred_all: one column per neuron '
                          'or predicted track, values in the matched ID space), for error analysis; one mode only')
     args = ap.parse_args(argv)
+    _resolve_labelprop(args)
     _check_args(args)
     return args
+
+
+def _resolve_labelprop(args):
+    """Fill args.labelprop (default legacy) and the number of seed volumes it implies."""
+    from barlow_track.utils.labelprop_recipes import eval_num_seeds, labelprop_recipe
+    args.labelprop = getattr(args, 'labelprop', None) or 'legacy'
+    labelprop_recipe(args.labelprop)  # unknown name -> ValueError here, before any embedding
+    args.num_seeds = eval_num_seeds(args.labelprop, getattr(args, 'num_seeds', None))
 
 
 def _check_args(args):
@@ -787,7 +805,9 @@ def run_eval(args):
                     f"checkpoint (weights: {args.weights})")
 
         from sklearn.decomposition import TruncatedSVD
-        svd = TruncatedSVD(n_components=min(50, X.shape[1] - 1), random_state=args.seed)
+        from barlow_track.utils.labelprop_recipes import labelprop_recipe
+        svd_dim = labelprop_recipe(getattr(args, 'labelprop', 'legacy'))['svd_dim']
+        svd = TruncatedSVD(n_components=min(svd_dim, X.shape[1] - 1), random_state=args.seed)
         Xs = svd.fit_transform(X)
         if getattr(args, 'svd', 'scaled') == 'whiten':
             Xs = Xs / svd.singular_values_  # U, as production tracking on real videos
@@ -798,7 +818,8 @@ def run_eval(args):
         # only for quick debugging).
         if args.cluster == 'labelprop':
             df_pred = tracker.track_using_label_propagation_clusterer(
-                num_seeds=args.num_seeds, device=resolve_track_device(args, device))
+                num_seeds=args.num_seeds, device=resolve_track_device(args, device),
+                recipe=getattr(args, 'labelprop', 'legacy'))
         else:
             df_pred = tracker.track_using_global_clusterer()
         print(f"[{args.lab}/{mode}] tracked in {time.time()-t2:.0f}s; df {df_pred.shape}", flush=True)
@@ -887,6 +908,7 @@ def run_eval(args):
                    tag=args.tag, weights=os.path.abspath(args.weights) if args.weights else None,
                    train_config=train_config,
                    cluster=args.cluster, num_seeds=args.num_seeds,
+                   labelprop=getattr(args, 'labelprop', 'legacy'),
                    fuse_norm=bool(args.fuse_norm and mode == 'position'),
                    fusion=_fusion,
                    head_init='trained' if mode == 'trained' else 'random-backbone-only',
@@ -1063,7 +1085,7 @@ def preflight_trained_eval(project, gt=None, source='project'):
 
 def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir,
                                 lab=None, gt=None, source='project', device=None,
-                                cluster='labelprop', num_seeds=25, seed=0,
+                                cluster='labelprop', num_seeds=None, seed=0, labelprop='legacy',
                                 descriptor_stage='auto', max_frames=None,
                                 center_per_volume=False, l2_per_volume=False,
                                 track_device='cpu', skip_embed=True, extra_record=None,
@@ -1093,7 +1115,8 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
         l2_per_volume=l2_per_volume, device=device, track_device=track_device,
         results_jsonl=results_jsonl, emb_dir=emb_dir, tag=tag, extra_record=extra_record,
         crop_window=crop_window, round_crop_centers=round_crop_centers, nwb_objects=nwb_objects,
-        svd=svd, gt_matching=gt_matching, nwb_gt_mapping=nwb_gt_mapping)
+        svd=svd, gt_matching=gt_matching, nwb_gt_mapping=nwb_gt_mapping, labelprop=labelprop)
+    _resolve_labelprop(args)
     _check_args(args)
     return run_eval(args)[-1]
 

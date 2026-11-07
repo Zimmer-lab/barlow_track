@@ -21,6 +21,31 @@ from wbfm.utils.general.utils_filenames import pickle_load_binary
 from wbfm.utils.external.utils_neuron_names import name2int_neuron_and_tracklet
 from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind, combine_metadata_from_two_dataframes
 from barlow_track.utils.utils_tracking import WormClusterTracker, get_target_size_from_args
+from barlow_track.utils.labelprop_recipes import DEFAULT_LABELPROP_RECIPE, labelprop_recipe
+
+
+def _labelprop_svd_settings(tracking_config, num_frames=None):
+    """(recipe, svd_components, whiten) for the embedding step, from the tracking config.
+
+    labelprop_recipe (default DEFAULT_LABELPROP_RECIPE, 'v2') names the label propagation recipe
+    (utils/labelprop_recipes.py); its svd_dim is the number of SVD components kept (with num_frames given,
+    videos of 500 volumes or fewer keep num_frames / 10, as always). svd_whiten, if set, wins; otherwise
+    'legacy' keeps the historical None (U on real videos, see _robust_svd) and every other recipe the U*S
+    space it was validated in (False).
+    """
+    cfg = tracking_config.config
+    recipe = cfg.get('labelprop_recipe', DEFAULT_LABELPROP_RECIPE)
+    svd_components = labelprop_recipe(recipe)['svd_dim']
+    if num_frames is not None and num_frames <= 500:
+        svd_components = int(num_frames / 10)
+    whiten = cfg.get('svd_whiten', None if recipe == 'legacy' else False)
+    return recipe, svd_components, whiten
+
+
+def _tracking_recipe(tracking_config, tracker):
+    """Label propagation recipe for tracking: the config's labelprop_recipe, else the one the tracker was
+    embedded for (trackers pickled before recipes existed were reduced for 'legacy')."""
+    return tracking_config.config.get('labelprop_recipe', getattr(tracker, 'labelprop_recipe', None) or 'legacy')
 
 
 def embed_using_barlow_from_config(project_config: ModularProjectConfig,
@@ -127,7 +152,8 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
                     f"Resume needs {fname_t_and_seg} (or legacy {fname_legacy}); "
                     f"re-run embedding to regenerate resume artifacts.")
 
-            svd_components = 50 if project_data.num_frames > 500 else int(project_data.num_frames / 10)
+            recipe, svd_components, whiten = _labelprop_svd_settings(project_config.get_tracking_config(),
+                                                                     project_data.num_frames)
 
             # Mirror the fresh path: it stores SVD-reduced features in the tracker
             # when do_svd=True. embedding.zarr holds raw features, so reduce here
@@ -136,14 +162,14 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
                 project_data.logger.info(
                     f"Reducing resumed embedding with SVD to {svd_components} components "
                     f"(raw shape: {X.shape}) to match fresh path")
-                X = _robust_svd(X, svd_components,
-                                whiten=project_config.get_tracking_config().config.get('svd_whiten', None))
+                X = _robust_svd(X, svd_components, whiten=whiten)
 
             opt = dict(time_index_to_linear_feature_indices=time_index_to_linear_feature_indices,
                        svd_components=svd_components,
                        cluster_directly_on_svd_space=True,
                        n_clusters_per_window=3,
-                       n_volumes_per_window=120)
+                       n_volumes_per_window=120,
+                       labelprop_recipe=recipe)
             opt.update(tracker_kwargs)
             tracker = WormClusterTracker(X, **opt)
         else:
@@ -184,21 +210,21 @@ def embed_using_barlow_from_config(project_config: ModularProjectConfig,
                         seed=tracker_cfg.config.get('seed', None))
 
         # Save embeddings and trackers
-        svd_components = 50 if project_data.num_frames > 500 else int(project_data.num_frames / 10)
+        recipe, svd_components, whiten = _labelprop_svd_settings(tracker_cfg, project_data.num_frames)
         opt = dict(time_index_to_linear_feature_indices=time_index_to_linear_feature_indices,
                    svd_components=svd_components,
                    cluster_directly_on_svd_space=True,
                    n_clusters_per_window=3,
                    n_volumes_per_window=120,
-                   linear_ind_to_t_and_seg_id=linear_ind_to_t_and_seg_id)
+                   linear_ind_to_t_and_seg_id=linear_ind_to_t_and_seg_id,
+                   labelprop_recipe=recipe)
         opt.update(tracker_opt)
 
         X = np.vstack(X)
         if do_svd:
             project_config.logger.info(f"Truncating feature space using {svd_components} PCA components "
                                     f"(original matrix size: {X.shape})")
-            X_svd = _robust_svd(X, svd_components, random_state=tracker_opt['seed'],
-                                whiten=tracker_cfg.config.get('svd_whiten', None))
+            X_svd = _robust_svd(X, svd_components, random_state=tracker_opt['seed'], whiten=whiten)
             project_config.logger.info(f"Finished truncation")
 
             tracker = WormClusterTracker(X_svd, **opt)
@@ -282,6 +308,9 @@ def cluster_embeddings_from_config(project_config: ModularProjectConfig,
     elif tracking_mode == 'streaming':
         df_combined = tracker.track_using_streaming_clusterer()
     elif tracking_mode == 'label_propagation':
+        clusterer_opt = dict(clusterer_opt or {})
+        clusterer_opt.setdefault('recipe', _tracking_recipe(project_config.get_tracking_config(), tracker))
+        project_config.logger.info(f"Label propagation recipe: {clusterer_opt['recipe']}")
         df_combined = tracker.track_using_label_propagation_clusterer(**clusterer_opt)
 
     # Add metadata stored in the project
@@ -404,21 +433,21 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
                     f"Resume needs {fname_t_and_seg} (or legacy {fname_legacy}); "
                     f"re-run embedding to regenerate resume artifacts.")
 
-            # Fresh path below always reduces to 50 components; embedding.zarr holds
+            # The fresh path below reduces to the recipe's components; embedding.zarr holds
             # raw features, so reduce here for resume/fresh consistency.
-            svd_components = 50
+            recipe, svd_components, whiten = _labelprop_svd_settings(project_config.get_tracking_config())
             if X.shape[1] > svd_components:
                 project_data.logger.info(
                     f"Reducing resumed embedding with SVD to {svd_components} components "
                     f"(raw shape: {X.shape}) to match fresh path")
-                X = _robust_svd(X, svd_components,
-                                whiten=project_config.get_tracking_config().config.get('svd_whiten', None))
+                X = _robust_svd(X, svd_components, whiten=whiten)
 
             opt = dict(time_index_to_linear_feature_indices=time_index_to_linear_feature_indices,
                        svd_components=svd_components,
                        cluster_directly_on_svd_space=True,
                        n_clusters_per_window=3,
-                       n_volumes_per_window=120)
+                       n_volumes_per_window=120,
+                       labelprop_recipe=recipe)
             opt.update(tracker_kwargs)
             tracker = WormClusterTracker(X, **opt)
         else:
@@ -453,13 +482,12 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
                         opt_db=tracker_cfg.config.get('opt_db', dict()),
                         seed=tracker_cfg.config.get('seed', None))
 
-        svd_components = 50
+        recipe, svd_components, whiten = _labelprop_svd_settings(tracker_cfg)
         X = np.vstack(X)
         # X = np.vstack([np.vstack(list(emb.values())) for emb in all_embeddings.values()])
         project_config.logger.info(f"Truncating feature space using {svd_components} PCA components "
-                                   f"(original matrix size: {X.shape})")
-        X_svd = _robust_svd(X, svd_components, random_state=tracker_opt['seed'],
-                            whiten=tracker_cfg.config.get('svd_whiten', None))
+                                   f"(original matrix size: {X.shape}; label propagation recipe {recipe})")
+        X_svd = _robust_svd(X, svd_components, random_state=tracker_opt['seed'], whiten=whiten)
         project_config.logger.info(f"Finished truncation")
 
         # Save embeddings and trackers
@@ -468,7 +496,8 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
                    cluster_directly_on_svd_space=True,
                    n_clusters_per_window=3,
                    n_volumes_per_window=120,
-                   linear_ind_to_t_and_seg_id=linear_ind_to_t_and_seg_id)
+                   linear_ind_to_t_and_seg_id=linear_ind_to_t_and_seg_id,
+                   labelprop_recipe=recipe)
         opt.update(tracker_opt)
 
         tracker = WormClusterTracker(X_svd, **opt)
@@ -488,6 +517,9 @@ def track_using_barlow_from_config(project_config: ModularProjectConfig,
     elif tracking_mode == 'streaming':
         df_combined = tracker.track_using_streaming_clusterer()
     elif tracking_mode == 'label_propagation':
+        clusterer_opt = dict(clusterer_opt or {})
+        clusterer_opt.setdefault('recipe', _tracking_recipe(project_config.get_tracking_config(), tracker))
+        project_config.logger.info(f"Label propagation recipe: {clusterer_opt['recipe']}")
         df_combined = tracker.track_using_label_propagation_clusterer(**clusterer_opt)
 
     # Add metadata stored in the project

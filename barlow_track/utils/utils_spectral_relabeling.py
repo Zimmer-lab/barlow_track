@@ -89,8 +89,45 @@ def greedy_top1_timewise(labels_topk, probs_topk, time_index_to_linear_feature_i
     return labels_out, probs_out
 
 
+def hungarian_top1_timewise(labels_topk, probs_topk, time_index_to_linear_feature_indices):
+    """Like greedy_top1_timewise, but an optimal assignment of each volume's objects to labels.
+
+    Within each time point, objects and their top-k candidate labels form a bipartite graph weighted by
+    the propagated probability; linear_sum_assignment picks one label per object and one object per label
+    maximising the total probability, where the greedy version takes the highest single entries first.
+    Same inputs and outputs as greedy_top1_timewise.
+    """
+    from scipy.optimize import linear_sum_assignment
+    N = labels_topk.shape[0]
+    labels_out = np.full((N, 1), -1, dtype=np.int64)
+    probs_out = np.zeros((N, 1), dtype=probs_topk.dtype)
+    for t, rows in time_index_to_linear_feature_indices.items():
+        rows = np.asarray(list(rows))
+        if len(rows) == 0:
+            continue
+        L_block, P_block = labels_topk[rows], probs_topk[rows]
+        labs = np.unique(L_block[L_block > 0])
+        if len(labs) == 0:
+            continue
+        col = {l: i for i, l in enumerate(labs)}
+        W = np.zeros((len(rows), len(labs)))
+        for m in range(len(rows)):
+            for kk in range(L_block.shape[1]):
+                if L_block[m, kk] > 0:
+                    # + 1e-9: a zero-probability candidate is still an edge, unlike no candidate
+                    W[m, col[L_block[m, kk]]] = max(W[m, col[L_block[m, kk]]], P_block[m, kk] + 1e-9)
+        r, c = linear_sum_assignment(-W)
+        ok = W[r, c] > 0
+        labels_out[rows[r[ok]], 0] = labs[c[ok]]
+        probs_out[rows[r[ok]], 0] = W[r[ok], c[ok]] - 1e-9
+    return labels_out, probs_out
+
+
+PER_RUN_UNIQUE = dict(greedy=greedy_top1_timewise, hungarian=hungarian_top1_timewise)
+
+
 def prepare_A_list_from_labelings_probs(labelings, probabilities, N, K, time_index_to_linear_feature_indices, 
-                                        normalize_rows=True, probability_threshold=0.0):
+                                        normalize_rows=True, probability_threshold=0.0, per_run_unique='greedy'):
     """
     Converts a list of N x topk label index arrays + probability arrays into
     a list of N x K_total sparse matrices for spectral sync.
@@ -98,7 +135,10 @@ def prepare_A_list_from_labelings_probs(labelings, probabilities, N, K, time_ind
     labelings: list of N x topk candidate label arrays, 1-indexed, -1 means invalid
     probabilities: same shape as labelings
     normalize_rows: whether to normalize probabilities per object
+    per_run_unique: how each run is made one-label-per-volume first ('greedy', historical, or 'hungarian')
     """
+    if per_run_unique not in PER_RUN_UNIQUE:
+        raise ValueError(f"per_run_unique {per_run_unique!r}; use one of {sorted(PER_RUN_UNIQUE)}")
     topk = labelings[0].shape[1]
     A_list = []
     for L, P in zip(labelings, probabilities):
@@ -107,9 +147,9 @@ def prepare_A_list_from_labelings_probs(labelings, probabilities, N, K, time_ind
         P = np.nan_to_num(P, nan=0)
         P[P < probability_threshold] = 0.0
 
-        # Do greedy matching to enforce temporal uniqueness
+        # Enforce temporal uniqueness within the run (greedy or Hungarian)
         if time_index_to_linear_feature_indices is not None:
-            L, P = greedy_top1_timewise(L, P, time_index_to_linear_feature_indices)
+            L, P = PER_RUN_UNIQUE[per_run_unique](L, P, time_index_to_linear_feature_indices)
             mask = L != -1
             rows = np.arange(N)[mask.ravel()]
             if any(L[mask]==0):
@@ -508,7 +548,7 @@ def spectral_sync_from_topk(labels_list, probs_list,
                             use_matrix_free=False, svd_params=None,
                             null_cost=None, normalize_input_rows=True, input_probability_threshold=0.0, 
                             verbose=True, DEBUG=False, rounding=DEFAULT_ROUNDING,
-                            refine_iters=DEFAULT_REFINE_ITERS):
+                            refine_iters=DEFAULT_REFINE_ITERS, per_run_unique='greedy'):
     """
     runs_topk: list of run dicts mapping obj->[(label,prob), ...]
     K: number of labels; safe to overestimate
@@ -522,6 +562,8 @@ def spectral_sync_from_topk(labels_list, probs_list,
       singular subspace; 'independent' (historical, before 2026-11-05) rounds them as the SVD returns them.
     refine_iters: > 0 (default 10) refines the rounded permutations by alternating Hungarian re-alignment
       of each run to the consensus of the others (refine_perms), at most this many sweeps; 0 = historical.
+    per_run_unique: 'greedy' (historical) or 'hungarian', how each run's top-k labels are reduced to one
+      label per object and volume before the sync (prepare_A_list_from_labelings_probs).
     """
     if svd_params is None:
         svd_params = dict(n_oversamples=20, n_iter=2)
@@ -539,7 +581,8 @@ def spectral_sync_from_topk(labels_list, probs_list,
         print(f"Found {len(labels_list)} labelings of shape {labels_list[0].shape}")
     A_list = prepare_A_list_from_labelings_probs(labels_list, probs_list, N, K, time_index_to_linear_feature_indices,
                                                  normalize_rows=normalize_input_rows,
-                                                 probability_threshold=input_probability_threshold)
+                                                 probability_threshold=input_probability_threshold,
+                                                 per_run_unique=per_run_unique)
     if DEBUG:
         print(f"Refactored into {len(A_list)} sparse matrices of shape {A_list[0].shape}")
         for i, A in enumerate(A_list):

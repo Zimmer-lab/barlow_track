@@ -16,16 +16,21 @@ from wbfm.utils.external.utils_neuron_names import int2name_neuron
 
 from barlow_track.utils.utils_label_propagation import align_all, multi_seed_propagation
 from barlow_track.utils.utils_seeding import python_rng
+from barlow_track.utils.labelprop_recipes import DEFAULT_LABELPROP_RECIPE, LABELPROP_RECIPES, labelprop_recipe
 from barlow_track.utils.utils_spectral_relabeling import spectral_sync_from_topk
 
 
-def select_seed_times(time_index_to_linear_feature_indices, num_seeds=None, seed=None):
+def select_seed_times(time_index_to_linear_feature_indices, num_seeds=None, seed=None, mode='random'):
     """Deterministically pick the time points label propagation starts from.
 
     Same seed -> same list (in the same order); different seeds -> different
     subsets. ``seed=None`` is deliberately unseeded (historical behaviour), so
     callers that want reproducibility must pass a seed rather than rely on a
     global ``random.seed``.
+
+    mode 'random' (historical): num_seeds time points drawn without replacement. 'stratified': the sorted
+    time points are split into num_seeds consecutive bins and one is drawn from each, so the seed volumes
+    cover the whole recording evenly (random draws leave long stretches without a seed).
     """
     timepoints = list(time_index_to_linear_feature_indices.keys())
     if not timepoints:
@@ -33,8 +38,15 @@ def select_seed_times(time_index_to_linear_feature_indices, num_seeds=None, seed
     if num_seeds is None:
         num_seeds = min(100, int(0.5 * (max(timepoints) + 1)))
     rng = python_rng(seed)
+    if mode == 'stratified':
+        bins = np.array_split(np.array(sorted(timepoints)), num_seeds)
+        return [int(rng.choice(list(b))) for b in bins if len(b)]
+    if mode != 'random':
+        raise ValueError(f"seed time mode {mode!r}; use 'random' or 'stratified'")
     rng.shuffle(timepoints)
     return timepoints[:num_seeds]
+
+
 
 
 @dataclass
@@ -58,6 +70,11 @@ class WormClusterTracker:
     # None (default) keeps the historical unseeded behaviour; set it (directly
     # or via a config file) and repeated runs give identical tracks.
     seed: int = None
+
+    # Label propagation recipe (labelprop_recipes.LABELPROP_RECIPES) this tracker's X_svd was reduced for;
+    # track_using_label_propagation_clusterer uses it when no recipe is passed. None = the default recipe
+    # (old pickled trackers lack the attribute; track_using_barlow treats those as 'legacy').
+    labelprop_recipe: str = None
 
     # Saving info after the tracking is done
     df_global: pd.DataFrame = None
@@ -524,9 +541,10 @@ class WormClusterTracker:
     
     def track_using_label_propagation_clusterer(self, num_seeds=None, num_neighbors=20, umap_projection=False, use_spectral_relabeling=True,
                                                 return_top_k=2, num_layers=100, softmax=False, tau=0.02, device=None,
-                                                seed=None):
+                                                seed=None, recipe=None, seed_select=None, edge_weight=None,
+                                                per_run_unique=None):
         """
-        Tracks objects by generating clusters via label propagation, starting with detected objects at random seed time points
+        Tracks objects by generating clusters via label propagation, starting with detected objects at seed time points
 
         These clusters are then aligned via two-step hungarian matching. For each labeling:
             Match labels to a reference labeling
@@ -535,7 +553,20 @@ class WormClusterTracker:
         The two random steps are the seed-time draw and the kNN graph. Both are
         driven by one seed: the `seed` argument wins over the tracker's `seed`
         attribute, and if neither is set the run stays unseeded (as before).
+
+        recipe: a name in LABELPROP_RECIPES (None = the tracker's labelprop_recipe, else
+        DEFAULT_LABELPROP_RECIPE, 'v2'); 'legacy' is the tracker
+        before 2026-11-07. num_seeds, seed_select ('random' | 'stratified'), edge_weight ('uniform' |
+        'gauss') and per_run_unique ('greedy' | 'hungarian'), when given, override the recipe's value. The
+        recipe's svd_dim is not applied here: X_svd is reduced by the caller.
         """
+        if recipe is None:
+            recipe = getattr(self, 'labelprop_recipe', None) or DEFAULT_LABELPROP_RECIPE
+        rec = labelprop_recipe(recipe)
+        num_seeds = rec['num_seeds'] if num_seeds is None else num_seeds
+        seed_select = rec['seed_select'] if seed_select is None else seed_select
+        edge_weight = rec['edge_weight'] if edge_weight is None else edge_weight
+        per_run_unique = rec['per_run_unique'] if per_run_unique is None else per_run_unique
         run_seed = self.seed if seed is None else seed
         # Per-seed labelings and their spectral-sync alignment, kept for GT-free consistency metrics
         # (utils_consistency.tracker_consistency); None unless spectral relabeling runs
@@ -545,7 +576,7 @@ class WormClusterTracker:
             # not of the number of keys in the time index.
             num_seeds = min(100, int(0.5 * self.num_frames))
         seed_times = select_seed_times(self.time_index_to_linear_feature_indices,
-                                       num_seeds=num_seeds, seed=run_seed)
+                                       num_seeds=num_seeds, seed=run_seed, mode=seed_select)
 
         if umap_projection:
             opt_umap = self.seeded_umap_options(self.opt_umap)
@@ -560,7 +591,7 @@ class WormClusterTracker:
 
         # All the labelings, starting from different seeds
         labelings, probabilities = multi_seed_propagation(X, seed_times, self.time_index_to_linear_feature_indices, k=num_neighbors,
-                                                          device=device, random_state=run_seed,
+                                                          device=device, random_state=run_seed, edge_weight=edge_weight,
                                                           return_top_k=return_top_k, num_layers=num_layers, softmax=softmax, tau=tau)
 
         # Align all of the different labelings
@@ -568,14 +599,17 @@ class WormClusterTracker:
             perms, final_labels, confidence, diag = spectral_sync_from_topk(
                 labelings, probabilities, 
                 time_index_to_linear_feature_indices=self.time_index_to_linear_feature_indices, 
-                input_probability_threshold=0.1, verbose=True
+                input_probability_threshold=0.1, verbose=True, per_run_unique=per_run_unique
             )
             final_labels = final_labels[:, 0]
             confidence = confidence[:, 0]
             from barlow_track.utils.utils_spectral_relabeling import DEFAULT_ROUNDING, DEFAULT_REFINE_ITERS
             self.labelprop_runs = dict(labelings=labelings, perms=perms, final_labels=final_labels,
                                        confidence=confidence,
-                                       sync=f'{DEFAULT_ROUNDING}_refine{DEFAULT_REFINE_ITERS}')
+                                       sync=f'{DEFAULT_ROUNDING}_refine{DEFAULT_REFINE_ITERS}',
+                                       settings=dict(recipe=recipe, num_seeds=num_seeds,
+                                                     seed_select=seed_select, edge_weight=edge_weight,
+                                                     per_run_unique=per_run_unique))
         else:
             # Rolling reference
             all_aligned, final_labels, confidence = align_all(labelings, self.time_index_to_linear_feature_indices)

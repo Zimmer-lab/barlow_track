@@ -320,14 +320,17 @@ def run_case(case, args, variants):
                 times['score_s'] = round(time.time() - tt, 1)
                 rec.update(scorer.fast(labels))
                 cons = labelprop_consistency(labs, syn['perms'], labels, conf, lin_t, n_frames)
-                if args.check_baseline and name == 'base':
+                # library recipe each harness variant must reproduce exactly (on the same SVD space)
+                lib_recipe = dict(base='legacy', c_all_gh_s150_plain='v2').get(name)
+                if args.check_baseline and lib_recipe is not None:
                     tr = WormClusterTracker(Xs, t2l, linear_ind_to_t_and_seg_id=l2t, seed=seed, verbose=0)
-                    tr.track_using_label_propagation_clusterer(num_seeds=v['num_seeds'], device=device)
+                    tr.track_using_label_propagation_clusterer(num_seeds=v['num_seeds'], device=device,
+                                                               recipe=lib_recipe)
                     ref = tr.labelprop_runs['final_labels']
                     rec['baseline_label_agreement'] = float(np.mean(ref == labels))
                     ref_rec = scorer.score(tr, ref, tr.labelprop_runs['confidence'])
                     rec['baseline_tracker_accuracy'] = ref_rec['accuracy']
-                    print(f"  baseline check: labels equal {rec['baseline_label_agreement']:.6f}, tracker accuracy "
+                    print(f"  library check ({lib_recipe}): labels equal {rec['baseline_label_agreement']:.6f}, tracker accuracy "
                           f"{ref_rec['accuracy']:.4f} vs harness {rec['accuracy']:.4f}", flush=True)
                 out = dict(case=tag, label=label, variant=name, seed=seed, params={k: v[k] for k in variants[name]},
                            **rec, consistency={k: cons[k] for k in ('agree_mean', 'agree_p10', 'conf_mean',

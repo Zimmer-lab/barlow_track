@@ -56,7 +56,7 @@ def track(X, t2l, l2t, num_seeds, seed):
     seed_all(seed)
     Xs = TruncatedSVD(n_components=min(50, X.shape[1] - 1), random_state=seed).fit_transform(X)
     tracker = WormClusterTracker(Xs, t2l, linear_ind_to_t_and_seg_id=l2t, seed=seed)
-    return tracker.track_using_label_propagation_clusterer(num_seeds=num_seeds, device='cpu')
+    return tracker.track_using_label_propagation_clusterer(num_seeds=num_seeds, device='cpu', recipe='legacy')
 
 
 def score(df_gt_src, gt_label, neurons, df_pred):

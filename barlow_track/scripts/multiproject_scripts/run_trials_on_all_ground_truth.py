@@ -130,7 +130,11 @@ def parse_args():
                         choices=["trained", "image", "position", "posonly", "attention", "both"],
                         help="trained: evaluate trial checkpoints (--trials/--trial_parent_dir); "
                              "otherwise run the reference untrained baselines once per dataset")
-    parser.add_argument("--num_seeds", type=int, default=25)
+    parser.add_argument("--num_seeds", type=int, default=None,
+                        help="eval_accuracy --num_seeds (default: 25 with --labelprop legacy, the recipe's own otherwise)")
+    parser.add_argument("--labelprop", choices=["legacy", "v2"], default="legacy",
+                        help="eval_accuracy --labelprop (default legacy, every recorded score); v2 cells are "
+                             "separate records, so a v2 run re-scores every cell")
     parser.add_argument("--descriptor_stage", default="auto",
                         choices=["auto", "backbone", "fused", "contextual", "projected"])
     parser.add_argument("--center_per_volume", action="store_true",
@@ -186,6 +190,11 @@ def recorded_tags(path, settings=None):
     return set(read_results_by_tag(path, settings=settings))
 
 
+def _num_seeds(args):
+    from barlow_track.utils.labelprop_recipes import eval_num_seeds
+    return eval_num_seeds(getattr(args, "labelprop", "legacy"), getattr(args, "num_seeds", None))
+
+
 def requested_settings(lab, args):
     """RECORD_SETTINGS of the cell this run would write for dataset lab.
 
@@ -197,7 +206,8 @@ def requested_settings(lab, args):
     return dict(source=spec["source"],
                 gt=spec["nwb"] if nwb else os.path.join(spec["gt"], "project_config.yaml"),
                 descriptor_stage=args.descriptor_stage if args.mode == "trained" else None,
-                cluster=args.cluster, num_seeds=args.num_seeds, seed=0,
+                cluster=args.cluster, num_seeds=_num_seeds(args), seed=0,
+                labelprop=getattr(args, "labelprop", "legacy"),
                 center_per_volume=bool(args.center_per_volume), l2_per_volume=bool(args.l2_per_volume),
                 nwb_objects="gt" if nwb else None, max_frames=args.max_frames,
                 svd=getattr(args, "svd", "scaled"), gt_matching=getattr(args, "gt_matching", "nandist"))
@@ -367,7 +377,8 @@ def build_eval_cmd(lab, tag, weights, args, results_jsonl, emb_dir):
     cmd = [sys.executable, "-u", EVAL_SCRIPT, "--lab", LAB_FOR_DATASET[lab],
            "--source", spec["source"], "--mode", args.mode,
            "--device", args.device,
-           "--cluster", args.cluster, "--num_seeds", str(args.num_seeds),
+           "--cluster", args.cluster, "--num_seeds", str(_num_seeds(args)),
+           "--labelprop", getattr(args, "labelprop", "legacy"),
            "--descriptor_stage", args.descriptor_stage,
            "--tag", tag, "--results_jsonl", results_jsonl, "--emb_dir", emb_dir]
     if weights is not None:

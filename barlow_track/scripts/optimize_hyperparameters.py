@@ -234,6 +234,12 @@ def create_sweep_experiment(ax_client, parameters, accuracy_objective):
     )
 
 
+def _eval_num_seeds(hyperparameter_args):
+    from barlow_track.utils.labelprop_recipes import eval_num_seeds
+    n = hyperparameter_args.get('objective_num_seeds')
+    return eval_num_seeds(hyperparameter_args.get('objective_labelprop', 'legacy'), None if n is None else int(n))
+
+
 def resolve_objective(hyperparameter_args):
     """Read the template's objective settings (see the template header).
 
@@ -262,7 +268,10 @@ def resolve_objective(hyperparameter_args):
         lab=dataset_label,
         source=hyperparameter_args.get('objective_source', 'project'),
         cluster=hyperparameter_args.get('objective_cluster', 'labelprop'),
-        num_seeds=int(hyperparameter_args.get('objective_num_seeds', 25)),
+        # label propagation recipe (utils/labelprop_recipes.py): 'legacy' (default, every round so far, so
+        # their records and GT-free references stay comparable) or 'v2'; seed volumes default to the recipe's
+        labelprop=hyperparameter_args.get('objective_labelprop', 'legacy'),
+        num_seeds=_eval_num_seeds(hyperparameter_args),
         seed=int(hyperparameter_args.get('objective_seed', 0)),
         descriptor_stage=hyperparameter_args.get('objective_descriptor_stage', 'auto'),
         max_frames=hyperparameter_args.get('objective_max_frames'),
@@ -315,7 +324,8 @@ def objective_record_settings(eval_kwargs, baseline_params):
                 nwb_objects=eval_kwargs.get('nwb_objects'),
                 nwb_gt_mapping=(eval_kwargs.get('nwb_gt_mapping', 'centroid')
                                 if eval_kwargs.get('nwb_objects') == 'all' else None),
-                svd=eval_kwargs.get('svd', 'scaled'), gt_matching=eval_kwargs.get('gt_matching', 'nandist'))
+                svd=eval_kwargs.get('svd', 'scaled'), gt_matching=eval_kwargs.get('gt_matching', 'nandist'),
+                labelprop=eval_kwargs.get('labelprop', 'legacy'))
 
 
 def measure_tracking_accuracy(args, test_losses, parent_folder, dataset_label, objective,

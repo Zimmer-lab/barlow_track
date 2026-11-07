@@ -3650,3 +3650,19 @@ run r261107-1126428 · pids 1126428, 1126721 · host charles-Precision-7820-Towe
 ## 2026-11-07 19:35
 
 r261107-1126428 and r261107-999202 ended: 100-seed check and consistency-proxy re-check recorded in their notes
+
+## 2026-11-07 21:36 — decision
+
+Decision (user asked to promote the recipe): library label propagation recipe v2 = c_all_gh_s150_plain is the tracker's default (8903472, utils/labelprop_recipes.py), production tracking via track_using_barlow follows it (150 components, U*S unless svd_whiten is set). eval_accuracy / sweep objective / benchmark driver default to labelprop legacy so recorded scores, the running round_shared_v1 and its GT-free references stay comparable; labelprop is a record setting, so v2 cells are separate records. tests/test_labelprop_recipes.py: library v2 and legacy reproduce the harness variants' labels exactly on synthetic data. Real-recording check queued (Leifer StarDist t57, S184 t32, seed 0)
+
+- [ ] Rescore the paper benchmark with eval_accuracy --labelprop v2 (new record set)
+
+## 2026-11-07 21:36 — run
+
+Library v2/legacy vs harness on real recordings (sweep_labelprop --check_baseline, GPU, seed 0)
+
+run r261107-1446529 · pids 1446529 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/run_libcheck.log
+
+## 2026-11-07 21:49
+
+r261107-1446529: library tracker reproduces the harness exactly on real recordings (seed 0, GPU, 8903472): Leifer StarDist t57 v2 labels equal 1.000000, accuracy 0.9402 = harness c_all_gh_s150_plain; legacy 0.9371 = harness base (= recorded 0.9371); Samuel 184 t32 v2 0.9538 = harness. Methods draft for the revised label propagation in docs/paper/methods_label_propagation.md (5023640), against the preprint's 4.3.2 / Algorithm 1 text (bioRxiv 10.1101/2025.11.10.687595, fetched; Zotero offline)

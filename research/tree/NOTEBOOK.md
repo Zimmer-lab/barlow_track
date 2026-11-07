@@ -3556,3 +3556,45 @@ run r261107-759603 · pids 759603 · host charles-Precision-7820-Tower · logs /
 ## 2026-11-07 02:24 — result
 
 diag_switch_jumps (9218f4a) on the base tracker, seed 0, local frame of 8 nearest GT neurons: Leifer StarDist 6663 label switches over 78 neurons, at 68% only the GT object jumps (median 3.4 um vs typical 0.9), at 10% only the track; with the NWB clicks, 51% of switches are the GT object jumping while the click stays. In error volumes the click is 1.41 um from its GT mask centre (0.52 in correct volumes), 2.8 um from the tracked object, which is 3.9 um away. Zimmer 1210: 1144 switches, only GT 23%, only track 30%, both 46%.
+
+## 2026-11-07 02:24 — ask
+
+On StarDist Leifer about 5 of the 6 pt the tracker loses are clicks off-centre between two touching masks, where the tracker holds one mask smoothly and the GT object flickers (diag_switch_jumps, 9218f4a). A tolerant score (e.g. count a volume correct when the click is within ~1.5 um of the tracked mask, or score against a mask-level GT variant) would show how much is GT ambiguity, but it changes the paper's metric definition.
+
+- [ ] ask a261107-1 · on [[CLM - Most of the label propagation error left on the StarDist Leifer recording is clicks on the boundary of touching masks]] · Should the paper's Leifer number get a boundary-tolerant companion score (or a manual check of a few flickering neurons), or stay strict-click only?
+
+## 2026-11-07 02:50 — run
+
+Batch 2 v4 lost F0324 s2 and Z1210 s2 to CUDA OOM (two sweep lanes + two Ax GPU workers on 12 GB); Ax trial 26's F0330 s0 job also OOM'd (result removed, job requeued before the driver saw it). b7a4d69: OOMs now wait and retry. Ax round 3 GPU workers restarted on it; v5 reruns every case/seed after v4 ends (resumable, fills the gaps). Round 3 so far: c_all_gh_svd150 0.9549 (best), c_all_gh_chain 0.9529, c_all_gh_ts_chain025 0.9527.
+
+run r261107-807027 · pids 807027 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_v5.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-07 02:50 — run
+
+c_all_gh_s150 (Ax round 3 best on dev, 0.9549) added to batch 2 (397c80f); S137 t63 and S184 t32 seeds 0-2 on the CPU now, the other cases through v5 (r261107-807027).
+
+run r261107-807396 · pids 807396 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_s150_cpu.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-07 04:37 — run
+
+batch 2: c_all_gh_notemp and c_all_gh_s150_notemp (0e0a566), because temporal edges cost held-out Flavell F0324 ~0.4 pt (temporal5 -0.42, c_all_gh -0.37, c_all_gh_s150 -0.60 at s0) while c_all_notemp is the only combination up on all 6 cases (worst +0.19). Samuel on CPU now, F0324/Z1210 s2 on GPU after v5
+
+run r261107-867761 · pids 867761 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_notemp.log
+
+## 2026-11-07 04:37 — surprise
+
+F0324 (held-out Flavell, 3 seeds): temporal edges add swaps, not fragments. err_swapped base 1.12, temporal5 1.38, c_all 1.39, c_all_gh 1.49 pt; c_all_notemp 1.03 (acc 0.9750 vs base 0.9731). On Zimmer 1210, c_all_notemp 0.9512 equals c_all 0.9502, so temporal edges buy nothing there once the other promotions are in. Likely cause: Flavell's large motion per volume makes nearest-position neighbours across time wrong
+
+## 2026-11-07 04:38 — run
+
+Switch-jump diagnostic on Leifer original segmentation (leifer_reexport, base s0, CPU): is its 0.88 also mostly clicks between touching masks, as on StarDist?
+
+run r261107-869918 · pids 869918 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/run_switch_leifer_nwb.log · for [[CLM - Most of the label propagation error left on the StarDist Leifer recording is clicks on the boundary of touching masks]]
+
+## 2026-11-07 04:38
+
+r261107-807396: c_all_gh_s150 on Samuel (CPU, seeds 0-2): S137 0.9458/0.9451/0.9512 (base 0.9346, +1.28 pt), S184 0.9567/0.9578/0.9583 (base 0.9306, +2.71 pt)
+
+## 2026-11-07 04:38
+
+r261106-633070 (Ax round 2) ended at 01:33 when round 3 took over; its records were imported into round 3 (best round 2 arm 0.9530, c_all_gh). Round 3 (r261107-759603) driver is running (launch.log goes quiet, driver.log is current): best so far trial 33 0.9553, trials 23/29 0.9549, all svd 150 with gauss + hungarian; the search plateaus about +0.25 pt above c_all_gh on the dev cases

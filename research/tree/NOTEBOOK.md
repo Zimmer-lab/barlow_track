@@ -3514,3 +3514,35 @@ dropped r261106-606174
 replaced by r261106-677223; its S137 reruns continue
 
 dropped r261106-673582
+
+## 2026-11-07 01:08 — decision
+
+Ax round 2 driver restarted (PID 742683) at 73022a2: GPEI re-suggested trial 12 (c_all_gh) as trial 17 on the same seeds; repeats of an arm now run on new seed blocks. Killed duplicate F0324 seed 2 stream 600696 (596195 runs the same). Dev-set objective so far: c_all_gh 0.9530, c_all 0.9500, base about 0.936.
+
+## 2026-11-07 01:09 — dropped
+
+superseded by v4: F0324 moved off the CPU (1.5 h per variant there, 20 s propagation on GPU)
+
+dropped r261106-677223
+
+## 2026-11-07 01:09 — dropped
+
+F0324 CPU streams stopped; remaining variants in v4 on the GPU
+
+dropped r261106-595573
+
+## 2026-11-07 01:09 — dropped
+
+F0324 CPU streams stopped; remaining variants in v4 on the GPU
+
+dropped r261106-598057
+
+## 2026-11-07 01:09 — run
+
+Batch 2 scheduler v4: two GPU lanes over one locked list (StarDist s2 first, then F0324 s0-2, Z1210 s1/s2/s0, Leifer re-export s0-2, S184, StarDist s1 fill-in); lane 1 after StarDist s1 (740207).
+
+run r261107-743860 · pids 743860 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_v4.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-07 01:10 — decision
+
+Ax round 2 workers: stopped the Zimmer and Flavell CPU workers (30-50 min per job against 1-3 min on the GPU; they held trials back) and requeued their 3 open jobs; added a Flavell GPU worker (745196) and second S184 / S137 CPU workers.

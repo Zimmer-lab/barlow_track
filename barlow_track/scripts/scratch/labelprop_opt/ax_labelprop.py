@@ -221,8 +221,12 @@ def driver(args):
     if os.path.exists(state):
         ax = AxClient.load_from_json_file(state)
         say(f"resumed: {len(ax.experiment.trials)} trials")
+        # trials from before per-trial seeds (round 2 up to trial 17) ran on the base seeds
+        for t in ax.experiment.trials.values():
+            if 'seeds' not in t.run_metadata:
+                t.update_run_metadata({'seeds': list(seeds)})
         # claimed jobs without results belonged to workers that died: requeue them
-        for c in glob.glob(os.path.join(d['claimed'], '*.json')):
+        for c in ([] if args.no_requeue else glob.glob(os.path.join(d['claimed'], '*.json'))):
             if not os.path.exists(os.path.join(d['results'], os.path.basename(c))):
                 os.replace(c, os.path.join(d['jobs'], os.path.basename(c)))
                 say(f"requeued {os.path.basename(c)}")
@@ -251,9 +255,22 @@ def driver(args):
             say(f"attached trial {idx} ({nm}): {p}")
         ax.save_to_json_file(state)
 
+    def trial_seeds(i):
+        """Seeds for trial i: the k-th repeat of an arm (same parameters as k earlier trials; GPEI re-suggests
+        its incumbent) runs on the next block of seeds, so a repeat is a new noisy sample of the same objective
+        (mean over RNG seeds) instead of a deterministic re-run. Stored in run metadata (resume)."""
+        t = ax.experiment.trials[i]
+        if 'seeds' in t.run_metadata:
+            return list(t.run_metadata['seeds'])
+        p = t.arm.parameters
+        k = sum(1 for j, u in ax.experiment.trials.items() if j < i and u.arm.parameters == p)
+        out = [s + k * (max(seeds) + 1) for s in seeds]
+        t.update_run_metadata({'seeds': out})
+        return out
+
     def write_jobs(idx, params):
         for lab in labels:
-            for s in seeds:
+            for s in trial_seeds(idx):
                 nm = job_name(idx, lab, s)
                 if not any(os.path.exists(os.path.join(d[k], nm)) for k in ('jobs', 'claimed', 'results')):
                     _write_json(os.path.join(d['jobs'], nm), dict(trial=idx, seed=s, params=params))
@@ -266,22 +283,23 @@ def driver(args):
         for i in running:
             write_jobs(i, trials[i].arm.parameters)  # idempotent (resume)
             res = {}
+            tseeds = trial_seeds(i)
             for lab in labels:
-                for s in seeds:
+                for s in tseeds:
                     p = os.path.join(d['results'], job_name(i, lab, s))
                     if os.path.exists(p):
                         res[(lab, s)] = json.load(open(p))
-            if len(res) < len(labels) * len(seeds):
+            if len(res) < len(labels) * len(tseeds):
                 continue
             bad = [k for k, r in res.items() if not r.get('ok')]
             if bad:
                 ax.log_trial_failure(trial_index=i)
                 say(f"trial {i} FAILED on {bad}: {[res[k].get('error') for k in bad][:2]}")
             else:
-                per_case = {lab: float(np.mean([res[(lab, s)]['accuracy'] for s in seeds])) for lab in labels}
+                per_case = {lab: float(np.mean([res[(lab, s)]['accuracy'] for s in tseeds])) for lab in labels}
                 y = float(np.mean(list(per_case.values())))
                 ax.complete_trial(trial_index=i, raw_data={'accuracy': (y, None)})
-                say(f"trial {i} accuracy {y:.4f} | " + ' '.join(f"{k} {v:.4f}" for k, v in per_case.items())
+                say(f"trial {i} accuracy {y:.4f} (seeds {tseeds}) | " + ' '.join(f"{k} {v:.4f}" for k, v in per_case.items())
                     + f" | {trials[i].arm.parameters}")
             ax.save_to_json_file(state)
         trials = ax.experiment.trials
@@ -326,6 +344,7 @@ def main():
     dr.add_argument('--parallel', type=int, default=3)
     dr.add_argument('--n_sobol', type=int, default=6)
     dr.add_argument('--ax_seed', type=int, default=0)
+    dr.add_argument('--no_requeue', action='store_true', help='restart the driver alone: workers still hold their claims')
     dr.add_argument('--poll', type=int, default=30)
     dr.add_argument('--import_records', nargs='*', default=None,
                     help="earlier rounds' records.jsonl: their complete trials are attached and completed first")

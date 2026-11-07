@@ -12,6 +12,11 @@ With --local K (default 8) positions are taken in a local frame: minus the mean 
 neurons nearest to this one (median distance), over those clicked in both volumes. That removes whole-worm
 motion, which on Leifer is about one neighbour distance per volume.
 
+With --click_nwb (an NWB whose final_tracks x/y/z are the manual clicks, as gt_tracks_from_clicks.py) the
+click point itself is followed too: click_jump, its local-frame step at the switch. A GT object that jumps
+while its click does not means the click stayed put and fell into the other of two touching masks
+(segmentation / assignment); a click that jumps means the annotation moved to another nucleus.
+
 gt_jump >> typical while track_jump ~ typical: the click moved to another (usually touching) mask and the
 track stayed on its object -- the error is in the click or the segmentation, not the tracker.
 track_jump >> typical while gt_jump ~ typical: the tracker moved the label to another object.
@@ -22,6 +27,7 @@ track_jump >> typical while gt_jump ~ typical: the tracker moved the label to an
 Output: $WORK/diag_switch_jumps_<tag>_<variant>_s<seed>_local<K>.json
 """
 import argparse
+import collections
 import json
 import os
 import sys
@@ -40,6 +46,7 @@ def main():
     ap.add_argument('--work', required=True)
     ap.add_argument('--um_zxy', nargs=3, type=float, required=True, help='voxel size z x y in um')
     ap.add_argument('--ratio', type=float, default=2.0, help='a jump is a step above ratio x the typical step')
+    ap.add_argument('--click_nwb', default=None, help='NWB with the manual clicks (final_tracks x/y/z)')
     ap.add_argument('--local', type=int, default=8, help='reference GT neurons for the local frame (0: global)')
     args = ap.parse_args()
     rnd, trial, label = args.case.split(':')[:3]
@@ -65,6 +72,20 @@ def main():
         return cent[t].get(int(seg_of[i]))
 
     by_lab_t = {(int(labels[i]), int(t_of[i])): i for i in np.flatnonzero(labels >= 1)}
+    clicks = None
+    if args.click_nwb:
+        import pandas as pd
+        from wbfm.utils.projects.finished_project_data import ProjectData
+        from barlow_track.scripts.eval_accuracy import _load_nwb_arrays
+        a = _load_nwb_arrays(ProjectData.load_final_project_data(args.click_nwb, allow_hybrid_loading=True, verbose=0))
+        dummy = pd.DataFrame(index=pd.RangeIndex(n_frames))
+        from barlow_track.utils.utils_ground_truth import align_gt_pred_time_index
+        gal, _ = align_gt_pred_time_index(scorer.df_gt, dummy)
+        names = list(gal.loc[:, (slice(None), scorer.match_col)].droplevel(1, axis=1).columns)
+        col = [a['neurons'].index(nm) for nm in names]
+        # (T, N_gt, 3) z x y in um, in the scorer's GT neuron order
+        clicks = np.stack([a['gz'][:, col], a['gx'][:, col], a['gy'][:, col]], -1) * um
+        print(f"[{tag}] clicks from {args.click_nwb}: {clicks.shape}", flush=True)
     n_gt = g.max() + 1
     gt_obj_at = {}  # (neuron, t) -> object
     for i in np.flatnonzero(g >= 0):
@@ -107,6 +128,7 @@ def main():
             return None
         return np.mean(r0, 0), np.mean(r1, 0)
     rows, all_sw = [], []
+    click_d = collections.defaultdict(list)
     for k in range(g.max() + 1):
         objs = np.flatnonzero((g == k) & (labels >= 1))
         if len(objs) < 20:
@@ -115,7 +137,7 @@ def main():
         main = int(labs[cnt.argmax()])
         gt_at = {int(t_of[i]): i for i in np.flatnonzero(g == k)}
         ts = sorted(gt_at)
-        steps, sws = [], []
+        steps, csteps, sws = [], [], []
         for t0, t1 in zip(ts[:-1], ts[1:]):
             if t1 != t0 + 1:
                 continue
@@ -126,9 +148,13 @@ def main():
                 continue
             o0, o1 = fr
             gj = float(np.linalg.norm((b - o1) - (a - o0)))
+            cj = float('nan')
+            if clicks is not None and t1 < len(clicks):
+                cj = float(np.linalg.norm((clicks[t1, k] - o1) - (clicks[t0, k] - o0)))
             in0, in1 = labels[i0] == main, labels[i1] == main
             if in0 == in1:
                 steps.append(gj)
+                csteps.append(cj)
                 continue
             m0, m1 = by_lab_t.get((main, t0)), by_lab_t.get((main, t1))
             if m0 is None or m1 is None:
@@ -136,12 +162,34 @@ def main():
             ma, mb = c_of(m0), c_of(m1)
             if ma is None or mb is None:
                 continue
-            sws.append(dict(t=t1, into_main=bool(in1), gt_jump=gj,
+            sws.append(dict(t=t1, into_main=bool(in1), gt_jump=gj, click_jump=cj,
                             track_jump=float(np.linalg.norm((mb - o1) - (ma - o0)))))
+        if clicks is not None:
+            # click to object distances: in error volumes (GT object off the main label, main label present)
+            # to the GT object and to the main label's object; in correct volumes to the GT object
+            for t, i in gt_at.items():
+                if t >= len(clicks) or not np.all(np.isfinite(clicks[t, k])):
+                    continue
+                ci = c_of(i)
+                if ci is None:
+                    continue
+                if labels[i] == main:
+                    click_d['correct_to_gt'].append(float(np.linalg.norm(clicks[t, k] - ci)))
+                    continue
+                m = by_lab_t.get((main, t))
+                cm = c_of(m) if m is not None else None
+                if cm is None:
+                    continue
+                click_d['error_to_gt'].append(float(np.linalg.norm(clicks[t, k] - ci)))
+                click_d['error_to_track'].append(float(np.linalg.norm(clicks[t, k] - cm)))
+                click_d['error_gt_to_track'].append(float(np.linalg.norm(ci - cm)))
         if not sws or len(steps) < 10:
             continue
         typ = float(np.median(steps))
+        ctyp = float(np.nanmedian(csteps)) if clicks is not None else float('nan')
         for s in sws:
+            s['click_typical'] = ctyp
+            s['click_jumped'] = bool(s['click_jump'] > args.ratio * max(ctyp, 0.3)) if clicks is not None else None
             s['neuron'] = int(k)
             s['typical'] = typ
             s['gt_jumped'] = s['gt_jump'] > args.ratio * max(typ, 0.3)
@@ -149,7 +197,10 @@ def main():
         all_sw.extend(sws)
         rows.append(dict(neuron=int(k), main=main, n_switch=len(sws), typical_step=typ,
                          gt_jumped_frac=float(np.mean([s['gt_jumped'] for s in sws])),
-                         track_jumped_frac=float(np.mean([s['track_jumped'] for s in sws]))))
+                         track_jumped_frac=float(np.mean([s['track_jumped'] for s in sws])),
+                         click_typical_step=ctyp,
+                         click_jumped_frac=float(np.mean([bool(s['click_jumped']) for s in sws])) if clicks is not None
+                         else None))
     gj = np.array([s['gt_jumped'] for s in all_sw])
     tj = np.array([s['track_jumped'] for s in all_sw])
     summ = dict(n_switches=len(all_sw), n_neurons=len(rows),
@@ -158,6 +209,17 @@ def main():
                 typical_step_med=float(np.median([r['typical_step'] for r in rows])),
                 gt_jump_med=float(np.median([s['gt_jump'] for s in all_sw])),
                 track_jump_med=float(np.median([s['track_jump'] for s in all_sw])))
+    if clicks is not None:
+        cjb = np.array([bool(s['click_jumped']) for s in all_sw])
+        summ.update(click_jumped=float(np.mean(cjb)), gt_jumped_click_still=float(np.mean(gj & ~cjb)),
+                    gt_jumped_click_jumped=float(np.mean(gj & cjb)),
+                    click_jump_med=float(np.nanmedian([s['click_jump'] for s in all_sw])),
+                    click_typical_med=float(np.nanmedian([r['click_typical_step'] for r in rows])))
+        e_gt, e_tr = np.array(click_d['error_to_gt']), np.array(click_d['error_to_track'])
+        summ['click_dist'] = {k: [float(x) for x in np.quantile(v, [0.25, 0.5, 0.75])] for k, v in click_d.items() if v}
+        # error volumes where the click is nearer the track's object than the GT object it was assigned to
+        summ['error_click_nearer_track'] = float(np.mean(e_tr < e_gt)) if len(e_gt) else None
+        summ['n_error_volumes'] = int(len(e_gt))
     print(f"[{tag}] {summ}", flush=True)
     for r in sorted(rows, key=lambda r: -r['n_switch'])[:20]:
         print(f"  neuron {r['neuron']:3d}: {r['n_switch']:3d} switches, typical step {r['typical_step']:.2f} um, "

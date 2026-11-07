@@ -88,6 +88,10 @@ BATCH2 = {
     'c_all_gh_chain': dict(_C, temporal_smooth=0.0, chain_w=0.5, edge_weight='gauss', per_run_unique='hungarian'),
     # added 2026-11-07 03:00: Ax round 3 best on the dev cases (trial 23, 0.9549 vs c_all_gh 0.9520-0.9530)
     'c_all_gh_s150': dict(_C, svd_dim=150, edge_weight='gauss', per_run_unique='hungarian'),
+    # added 2026-11-07 04:50: temporal edges cost the held-out Flavell F0324 0.4 pt (temporal5 -0.42,
+    # c_all_gh -0.37, c_all_gh_s150 -0.60) while c_all_notemp is the only combination up on every case
+    'c_all_gh_notemp': dict(_C, temporal_w=0.0, edge_weight='gauss', per_run_unique='hungarian'),
+    'c_all_gh_s150_notemp': dict(_C, temporal_w=0.0, svd_dim=150, edge_weight='gauss', per_run_unique='hungarian'),
 }
 
 BATCHES = dict(batch1=BATCH1, speed=SPEED, batch2=BATCH2)

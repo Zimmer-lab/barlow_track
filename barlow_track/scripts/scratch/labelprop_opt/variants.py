@@ -92,6 +92,9 @@ BATCH2 = {
     # c_all_gh -0.37, c_all_gh_s150 -0.60) while c_all_notemp is the only combination up on every case
     'c_all_gh_notemp': dict(_C, temporal_w=0.0, edge_weight='gauss', per_run_unique='hungarian'),
     'c_all_gh_s150_notemp': dict(_C, temporal_w=0.0, svd_dim=150, edge_weight='gauss', per_run_unique='hungarian'),
+    # added 2026-11-07: the same without the temporal smoothing post-step (no temporal information at all)
+    'c_all_gh_s150_plain': dict(_C, temporal_w=0.0, temporal_smooth=0.0, svd_dim=150, edge_weight='gauss',
+                                per_run_unique='hungarian'),
 }
 
 BATCHES = dict(batch1=BATCH1, speed=SPEED, batch2=BATCH2)

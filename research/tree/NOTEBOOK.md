@@ -3598,3 +3598,29 @@ r261107-807396: c_all_gh_s150 on Samuel (CPU, seeds 0-2): S137 0.9458/0.9451/0.9
 ## 2026-11-07 04:38
 
 r261106-633070 (Ax round 2) ended at 01:33 when round 3 took over; its records were imported into round 3 (best round 2 arm 0.9530, c_all_gh). Round 3 (r261107-759603) driver is running (launch.log goes quiet, driver.log is current): best so far trial 33 0.9553, trials 23/29 0.9549, all svd 150 with gauss + hungarian; the search plateaus about +0.25 pt above c_all_gh on the dev cases
+
+## 2026-11-07 07:14 — decision
+
+Decision (user): keep the graph simple, no temporal edges and no post-processing steps unless they clearly help. Final batch 2 pass: c_all_gh_notemp, c_all_gh_s150_notemp and c_all_gh_s150_plain (also no temporal smoothing, aab0f33) on all 6 cases x 3 seeds. Ax round 3 finished (45 trials, best observed trial 44 0.9556); workers stopped
+
+run r261107-950766 · pids 950766 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_batch2_final.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-07 07:37
+
+r261107-867761 ended: notemp variants on Samuel (CPU) and F0324/Z1210 s2; results folded into the final batch 2 pass r261107-950766
+
+## 2026-11-07 07:37 — dead-end
+
+r261107-869918 failed: diag_switch_jumps asserts project-source cases only, and leifer_reexport is an NWB-source case (no segmentation metadata). Needs NWB centroid support before the boundary-click check can run on the original Leifer segmentation
+
+- [ ] diag_switch_jumps: support NWB-source cases (leifer_reexport)
+
+## 2026-11-07 07:47 — decision
+
+Decision: adopt c_all_gh_s150_plain (svd 150, 50 stratified seeds, gauss edges, Hungarian per run; no temporal edges, no temporal smoothing). Batch 2 complete (432 records, 6 cases x 3 seeds): +0.88 pt, 16/18 wins, worst case +0.11, p 0.001. Temporal smoothing on top (c_all_gh_s150_notemp) adds +0.16 pt (17/18, p<0.001) but is under the +0.3 pt bar and the user wants no post-processing steps unless they clearly help; on the paper's Leifer StarDist it adds 0.08. Reversible if the user prefers the 0.16.
+
+## 2026-11-07 07:47 — run
+
+100-seed check of c_all_gh_s150_plain vs base, seeds 3-99, Leifer StarDist t57 and Zimmer 1210 t52, three GPU lanes
+
+run r261107-969986 · pids 969986 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_seeds100.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]

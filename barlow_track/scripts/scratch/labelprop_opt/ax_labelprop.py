@@ -52,12 +52,22 @@ PARAMETERS = [
     dict(name='temporal_smooth', type='choice', values=[0.0, 0.5, 1.0], value_type='float', is_ordered=True),
     # round 2: adjacent-volume mutual-NN edges (batch 1: temporal5 +1.4 pt on Z1210, +0.46 mean)
     dict(name='temporal_w', type='choice', values=[0.0, 1.0, 2.0, 5.0, 10.0], value_type='float', is_ordered=True),
+    # round 3: voting along adjacent-volume mutual-NN chains before the final assignment (diag_chain, batch 2)
+    dict(name='chain_w', type='choice', values=[0.0, 0.25, 0.5, 1.0], value_type='float', is_ordered=True),
 ]
 BASE = dict(svd_dim=50, svd_mode='scaled', graph='knn', k=20, edge_weight='uniform', num_layers=100,
-            per_run_unique='greedy', num_seeds=25, seed_select='random', temporal_smooth=0.0, temporal_w=0.0)
+            per_run_unique='greedy', num_seeds=25, seed_select='random', temporal_smooth=0.0, temporal_w=0.0, chain_w=0.0)
 # Attached first (round 2; round 1 at 5e40a5b attached base, svd100, whiten, mutual, seeds100, layers30,
 # hungrun_gauss and a combo, which --import_records brings in): the batch-1 promotions not yet tried and
 # their combination (batch 1 final, 12 pairs: svd100, seeds100, temporal5, seeds50, seed_strat, tsmooth05).
+_CGH = dict(svd_dim=100, num_seeds=50, seed_select='stratified', temporal_w=5.0, temporal_smooth=0.5,
+            edge_weight='gauss', per_run_unique='hungarian')
+# round 3 (imports rounds 1 and 2): chain voting and svd150 around the round-2 incumbent c_all_gh
+START3 = [
+    ('c_all_gh_chain', dict(_CGH, temporal_smooth=0.0, chain_w=0.5)),
+    ('c_all_gh_ts_chain025', dict(_CGH, chain_w=0.25)),
+    ('c_all_gh_svd150', dict(_CGH, svd_dim=150)),
+]
 START = [
     ('base', {}),
     ('temporal5', dict(temporal_w=5.0)),
@@ -185,22 +195,43 @@ def worker(args):
 def _import_records(path, labels, seeds):
     """Completed trials of an earlier round from its records.jsonl: (name, params, objective, per_case).
 
-    A trial counts only if it has a record for every (label, seed); parameters missing from the earlier
-    space take their BASE value (round 1 had no temporal_w, i.e. 0)."""
+    A trial counts only if every label has records for at least len(seeds) RNG seeds (repeats of an arm run
+    on other seed blocks); the objective averages the seeds it has. Parameters missing from the earlier
+    space take their BASE value (round 1 had no temporal_w, rounds 1-2 no chain_w, i.e. 0)."""
     by = {}
     for line in open(path):
         r = json.loads(line)
-        if r['label'] in labels and r['seed'] in seeds:
+        if r['label'] in labels:
             by.setdefault(r['variant'], {})[(r['label'], r['seed'])] = r
     out = []
     names = [p['name'] for p in PARAMETERS]
     for v, recs in sorted(by.items(), key=lambda kv: int(kv[0][2:]) if kv[0][2:].isdigit() else 0):
-        if len(recs) < len(labels) * len(seeds):
+        if any(sum(1 for (lab, _) in recs if lab == lb) < len(seeds) for lb in labels):
             continue
         p = dict(BASE, **{k: x for k, x in next(iter(recs.values()))['params'].items() if k in names})
-        per_case = {lab: float(np.mean([recs[(lab, s)]['accuracy'] for s in seeds])) for lab in labels}
+        per_case = {lb: float(np.mean([r['accuracy'] for (lab, _), r in recs.items() if lab == lb])) for lb in labels}
         out.append((v, p, float(np.mean(list(per_case.values()))), per_case))
     return out
+
+
+def _neighbour(params, rng):
+    """params with one parameter moved: the adjacent value of an ordered choice, any other value of an
+    unordered one, +-1..4 of an int range."""
+    p = dict(params)
+    spec = PARAMETERS[rng.integers(len(PARAMETERS))]
+    nm, cur = spec['name'], p[spec['name']]
+    if spec['type'] == 'range':
+        lo, hi = spec['bounds']
+        p[nm] = int(np.clip(cur + rng.choice([-4, -3, -2, -1, 1, 2, 3, 4]), lo, hi))
+    else:
+        vals = spec['values']
+        i = vals.index(cur)
+        if spec.get('is_ordered'):
+            opts = [j for j in (i - 1, i + 1) if 0 <= j < len(vals)]
+        else:
+            opts = [j for j in range(len(vals)) if j != i]
+        p[nm] = vals[int(rng.choice(opts))]
+    return p
 
 
 def driver(args):
@@ -245,7 +276,7 @@ def driver(args):
                 seen.append(p)
                 say(f"imported trial {idx} ({nm}) accuracy {y:.4f} | "
                     + ' '.join(f"{k} {v:.4f}" for k, v in per_case.items()) + f" | {p}")
-        for nm, ov in START:
+        for nm, ov in (START3 if args.start == 'round3' else START):
             p = dict(BASE, **ov)
             if p in seen:
                 say(f"skip start {nm}: already imported")
@@ -311,6 +342,18 @@ def driver(args):
             except Exception as e:  # e.g. not enough data for the model yet
                 say(f"get_next_trial deferred: {repr(e)[:200]}")
                 break
+            n_same = sum(1 for j, u in ax.experiment.trials.items() if j != idx and u.arm.parameters == params)
+            if args.max_repeats and n_same >= args.max_repeats:
+                ax.abandon_trial(trial_index=idx, reason='repeat cap')
+                rng = np.random.default_rng(1000 + idx)
+                seen = [u.arm.parameters for u in ax.experiment.trials.values()]
+                for _ in range(100):
+                    nb = _neighbour(params, rng)
+                    if nb not in seen:
+                        break
+                say(f"trial {idx} abandoned (arm already run {n_same}x); one-parameter neighbour instead")
+                params, idx = ax.attach_trial(parameters=nb)
+                ax.experiment.trials[idx].update_run_metadata({'start_name': 'neighbour'})
             write_jobs(idx, params)
             running.append(idx)
             n_total += 1
@@ -344,6 +387,9 @@ def main():
     dr.add_argument('--parallel', type=int, default=3)
     dr.add_argument('--n_sobol', type=int, default=6)
     dr.add_argument('--ax_seed', type=int, default=0)
+    dr.add_argument('--max_repeats', type=int, default=0,
+                    help='an arm suggested again after this many trials of it is replaced by a neighbour (0: off)')
+    dr.add_argument('--start', default='round2', choices=['round2', 'round3'], help='which START list to attach')
     dr.add_argument('--no_requeue', action='store_true', help='restart the driver alone: workers still hold their claims')
     dr.add_argument('--poll', type=int, default=30)
     dr.add_argument('--import_records', nargs='*', default=None,

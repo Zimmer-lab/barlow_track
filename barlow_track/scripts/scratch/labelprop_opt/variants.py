@@ -86,6 +86,8 @@ BATCH2 = {
     'chain1': dict(chain_w=1.0),
     'c_all_chain': dict(_C, temporal_smooth=0.0, chain_w=0.5),
     'c_all_gh_chain': dict(_C, temporal_smooth=0.0, chain_w=0.5, edge_weight='gauss', per_run_unique='hungarian'),
+    # added 2026-11-07 03:00: Ax round 3 best on the dev cases (trial 23, 0.9549 vs c_all_gh 0.9520-0.9530)
+    'c_all_gh_s150': dict(_C, svd_dim=150, edge_weight='gauss', per_run_unique='hungarian'),
 }
 
 BATCHES = dict(batch1=BATCH1, speed=SPEED, batch2=BATCH2)

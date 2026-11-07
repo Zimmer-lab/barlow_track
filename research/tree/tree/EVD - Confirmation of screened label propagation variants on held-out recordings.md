@@ -4,7 +4,7 @@ nodeInstanceId: 01a1b113-4cff-7dde-892d-b7ad89e9cfe4
 status: done
 priority: high
 dateCreated: 2026-11-06T14:36:34+01:00
-dateModified: 2026-11-07T19:35:21+01:00
+dateModified: 2026-11-07T19:35:32+01:00
 confidence: high
 projects:
   - "[[barlowtrack]]"
@@ -40,7 +40,7 @@ Complete, 2026-11-07 07:46: 6 cases × 3 seeds for every variant. Base: Leifer N
 
 Temporal edges (temporal_w: mutual nearest neighbours in embedding space between adjacent volumes, weight 5) are what cost the held-out Flavell: alone -0.42 pt there (p 0.14 overall, not promoted), and every combination with them is below base on F0324, by label swaps rather than fragments (err_swapped base 1.12, temporal5 1.38, c_all_gh 1.49, c_all_notemp 1.03 pt). Without them nothing is lost elsewhere (Z1210 c_all_notemp vs c_all +0.10). Temporal smoothing (post step) on top of the no-temporal-edge recipe: +0.16 pt (c_all_gh_s150_notemp vs _plain, 17/18 pairs, p < 0.001; per case F0324 +0.02, Leifer NWB +0.22, StarDist +0.08, S137 +0.19, S184 +0.42, Z1210 +0.05). On the Leifer cases nearly all of the gain is fewer split fragments (StarDist err_frag_split 0.98 to 0.19-0.31 pt); the distractor fragments (about 5 pt on StarDist) stay.
 
-100-seed check of c_all_gh_s150_plain against base (paired by RNG seed): Leifer StarDist (n 99; seed 47 hit CUDA OOM) base 0.9368 (sd 0.09 pt, 0.9342-0.9401), recipe 0.9398 (sd 0.11, 0.9353-0.9430), gain +0.31 pt (median +0.32, 5th-95th percentile -0.00 to +0.54), 93/99 seeds, Wilcoxon p 1e-17. Zimmer 1210 (n 100) base 0.9394 (sd 1.30 pt, 0.8780-0.9504), recipe 0.9480 (sd 0.17, 0.9428-0.9507), gain +0.86 pt (median +0.47, 5th-95th -0.13 to +2.69), 88/100, p 7e-16. On Zimmer the recipe mostly removes the bad seeds of base: its spread over seeds falls from 1.30 to 0.17 pt and its worst seed (0.9428) is above base's mean.
+100-seed check of c_all_gh_s150_plain against base (paired by RNG seed): Leifer StarDist (n 99; seed 17 died of CUDA OOM) base 0.9368 (sd 0.09 pt, 0.9342-0.9401), recipe 0.9398 (sd 0.11, 0.9353-0.9430), gain +0.31 pt (median +0.32, 5th-95th percentile -0.00 to +0.54), 93/99 seeds, Wilcoxon p 1e-17. Zimmer 1210 (n 100) base 0.9394 (sd 1.30 pt, 0.8780-0.9504), recipe 0.9480 (sd 0.17, 0.9428-0.9507), gain +0.86 pt (median +0.47, 5th-95th -0.13 to +2.69), 88/100, p 7e-16. On Zimmer the recipe mostly removes the bad seeds of base: its spread over seeds falls from 1.30 to 0.17 pt and its worst seed (0.9428) is above base's mean.
 
 ## Conclusion
 

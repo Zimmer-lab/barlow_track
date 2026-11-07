@@ -3624,3 +3624,29 @@ Decision: adopt c_all_gh_s150_plain (svd 150, 50 stratified seeds, gauss edges, 
 100-seed check of c_all_gh_s150_plain vs base, seeds 3-99, Leifer StarDist t57 and Zimmer 1210 t52, three GPU lanes
 
 run r261107-969986 · pids 969986 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_seeds100.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-07 08:37 — run
+
+User: check that the GT-free consistency proxy (agree_mean, objective of the shared-config cluster sweep) still correlates with accuracy under the new label propagation recipe. Harness runs base and c_all_gh_s150_plain, seed 0, on 122 trials (16 per round at evenly spaced accuracy ranks over S137, S184, Z1210, Z1123, F0324, F0330 and Leifer re-export; 10 Leifer StarDist), so accuracy and agreement come from the same code. Leifer was untested in the original proxy check
+
+run r261107-999197 · pids 999197 · host charles-Precision-7820-Tower · logs /launch_proxy.log · for [[EVD - Agreement of label propagation runs with their consensus ranks Samuel networks by accuracy without ground truth]]
+
+## 2026-11-07 08:38 — run
+
+r261107-999197: its log path was recorded wrongly; the launcher log is /home/charles/.cache/barlow_scratch/labelprop_opt/launch_proxy.log (per-round logs proxy_<label>.log, output batch2_proxy.jsonl)
+
+run r261107-999202 · pids 999202 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_proxy.log · for [[EVD - Agreement of label propagation runs with their consensus ranks Samuel networks by accuracy without ground truth]]
+
+## 2026-11-07 11:58 — surprise
+
+/home filled up (0 bytes free) at about 11:50: the proxy check's local embedding copies (51 trials, 0.2-0.6 GB each, ~21 GB) took the last free space. Lock mkdir then failed, so the 100-seed lanes skipped seeds 44-99 and ended; result files parse cleanly. Deleted those 51 copies of /lisc emb_cache files (18 GB free again, /home at 98%; the rest of /home is mostly ~/.cache/huggingface 196 GB and ~/.cache/uv 22 GB, not mine to touch). Both launchers now wait while under 5 GB is free; the proxy one deletes each embedding copy after its case
+
+## 2026-11-07 11:58 — run
+
+Restarted the 100-seed check (seeds 44-99, 2 GPU lanes) and the proxy check (70 trials left, 6 CPU + 2 GPU lanes)
+
+run r261107-1126428 · pids 1126428, 1126721 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/launch_seeds100_b.log, /home/charles/.cache/barlow_scratch/labelprop_opt/launch_proxy_b.log · for [[EVD - Confirmation of screened label propagation variants on held-out recordings]]
+
+## 2026-11-07 19:35
+
+r261107-1126428 and r261107-999202 ended: 100-seed check and consistency-proxy re-check recorded in their notes

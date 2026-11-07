@@ -4,7 +4,7 @@ nodeInstanceId: 01a1ab7b-a236-7aee-8124-bd3d9258726a
 status: in-progress
 priority: normal
 dateCreated: 2026-11-05T12:32:48+01:00
-dateModified: 2026-11-05T22:35:01+01:00
+dateModified: 2026-11-07T19:35:04+01:00
 confidence: medium
 projects:
   - "[[barlowtrack]]"
@@ -27,11 +27,29 @@ For trials of a GT-tuned per-recording round, re-run label propagation from the 
 
 The settings explain 0.32-0.36 (Samuel), 0.45-0.66 (Zimmer, Flavell) of the accuracy rank variance. The trial with the highest agree_mean is the true best on samuel_137 (trial 63, 0.9311), samuel_184 (trial 27, 0.957), flavell_2022033002 (trial 61, 0.9695) and flavell_2022032402 (trial 47, 0.9798); on zimmer_1123 it is rank 8 of 26 (0.9833 vs best 0.9868), on zimmer_1210 rank 8 of 57 (0.9394 vs best 0.9435). Zimmer 1210's better half spans 0.7 pt (0.936-0.943), within which agreement is flat (~0.83-0.85).
 
+### Re-check under the adopted label propagation recipe (2026-11-07)
+
+Asked by the user: does agreement still rank networks once the tracker changes to c_all_gh_s150_plain (svd 150, 50 stratified seeds, Gaussian edges, Hungarian per run, no temporal terms; [[EVD - Confirmation of screened label propagation variants on held-out recordings]])? 16 trials per round at evenly spaced recorded-accuracy ranks (pick_proxy_trials.py, 02c49b5), 10 Leifer StarDist; each run with base (the tracker above) and the new recipe, seed 0, in the labelprop_opt harness, so accuracy and agreement come from one code path (runs r261107-999202, r261107-1126428; output ~/.cache/barlow_scratch/labelprop_opt/batch2_proxy.jsonl, proxy_recipe_corr.py 02c49b5+). Spearman rho of agree_mean with accuracy, all trials / better half (8 trials) / pick loss in pt:
+
+| Round | n | base recipe | new recipe | old agreement vs new accuracy | accuracy rank base vs new |
+|---|---|---|---|---|---|
+| samuel_137 | 16 | 0.93 / 0.90 / 0 | 0.94 / 0.93 / 0 | 0.88 / 0.81 / 0 | 0.97 |
+| samuel_184 | 16 | 0.90 / 0.71 / 0 | 0.87 / 0.81 / 0 | 0.86 / 0.86 / 0 | 0.95 |
+| flavell_2022033002 | 16 | 0.99 / 0.90 / 0 | 0.99 / 0.90 / 0.12 | 0.98 / 0.86 / 0 | 0.99 |
+| flavell_2022032402 | 16 | 0.80 / 0.43 / 0.39 | 0.73 / 0.33 / 0.17 | 0.76 / 0.10 / 0.22 | 0.81 |
+| zimmer_1123 | 16 | 0.82 / 0.31 / 0.10 | 0.77 / 0.86 / 1.08 | 0.62 / 0.07 / 0.66 | 0.81 |
+| zimmer_1210 | 16 | 0.65 / -0.50 / 0.31 | 0.70 / 0.21 / 0.03 | 0.57 / -0.21 / 0.46 | 0.88 |
+| leifer_reexport | 16 | 0.85 / 0.48 / 0.10 | 0.82 / 0.26 / 0 | 0.81 / 0.12 / 0 | 0.81 |
+| leifer_stardist_strict | 10 | 0.89 / 0.30 / 0.13 | 0.95 / 0.90 / 0 | 0.95 / 0.70 / 0 | 0.95 |
+
+conf_mean gives the same picture (new recipe rho all 0.68-0.99) and on Zimmer 1123 a smaller pick loss (0.13 vs 1.08 pt). The new recipe raises every trial (the worst trial of each round most), so the accuracy ranges narrow.
+
 ## Conclusion
 
-How well the 25 label-propagation runs agree with their consensus ranks networks by tracking accuracy without ground truth on every recording tested (rho 0.82-0.98 over 26-109 GT-tuned trials of Samuel 137 and 184, Flavell 2022033002 and 2022032402, Zimmer 1123 and 1210) and, unlike val loss (partial at most ~0.5, [[EVD - Validation and training loss rank sweep trials mostly through the training budget]]), keeps most of that ranking among configs of equal training budget (partial 0.77-0.97, except 0.52 on Zimmer 1210). Selecting on it alone finds the best network on 4 of 6 recordings and loses 0.35-0.41 pt on the two Zimmer ones. Where it fails to rank is the saturated top of Zimmer 1210 (better half within 0.7 pt), while on the equally high Zimmer 1123 it still ranks the better half (0.82), so the plateau is saturation, not a Zimmer-specific blind spot. It is the objective of the staged shared-config sweep round_shared_v1.
+How well the 25 label-propagation runs agree with their consensus ranks networks by tracking accuracy without ground truth on every recording tested (rho 0.82-0.98 over 26-109 GT-tuned trials of Samuel 137 and 184, Flavell 2022033002 and 2022032402, Zimmer 1123 and 1210) and, unlike val loss (partial at most ~0.5, [[EVD - Validation and training loss rank sweep trials mostly through the training budget]]), keeps most of that ranking among configs of equal training budget (partial 0.77-0.97, except 0.52 on Zimmer 1210). Selecting on it alone finds the best network on 4 of 6 recordings and loses 0.35-0.41 pt on the two Zimmer ones. Where it fails to rank is the saturated top of Zimmer 1210 (better half within 0.7 pt), while on the equally high Zimmer 1123 it still ranks the better half (0.82), so the plateau is saturation, not a Zimmer-specific blind spot. It is the objective of the staged shared-config sweep round_shared_v1. Under the adopted label propagation recipe it still ranks networks as well as under the old one (rho over all trials 0.70-0.99 on 8 recordings, 16 trials each, including the two Leifer segmentations, which were untested before; 0.65-0.99 with the old tracker), and agreement scored with the old tracker still ranks the networks by their new-recipe accuracy (rho 0.57-0.98); the weak spot is unchanged, the better half of the Zimmer and Flavell 0324 rounds, where selecting on it costs up to 0.2-0.7 pt.
 
 ## Caveats
 
+The recipe re-check uses 16 trials per round (8 in the better half), so its better-half rho values are noise-level (one swapped pair moves them by ~0.2); it confirms the whole-range ranking, not fine selection at the top. 
 Leifer untested. Ranking within the better half is weaker on Flavell 2022032402 (0.37) as well. Agreement shares the labelprop machinery with the tracker that is scored, so it cannot see errors every run makes alike (e.g. a consistent swap), and it may favour embeddings that are confidently wrong in the same way. Within-recording only: levels differ between recordings (Samuel ~0.6-0.7, Flavell ~0.79, Zimmer ~0.85), hence the per-recording references in the shared sweep. Depends on the sync: Hungarian refinement of the per-run permutations (opt-in, 711ba82) raises agreement by 0.015-0.035 on the same embedding, so references and trials must use the same sync. Among each round's top 5 the new sync spreads agreement as much or more and ranks them no worse (n=5 per round, noise-level either way); its correlation over whole rounds is not measured. All rounds were trained with frozen view pairs (i261027-1).
 Uses 25 seed volumes, as the eval and sweep do; the tracker's default and the paper use 100. With 100 seeds (r261105-3881276, same trials, new sync) the ranking is no better: samuel_137 rho .97 -> .98 (better half .82 -> .88, same pick), flavell_2022032402's better half .47 -> .29 (25 and 100 seeds agree only rho .57 there, so within its 0.7 pt range the ranking is mostly propagation noise), at 2.7-3.2x the time.

@@ -284,61 +284,74 @@ def run_case(case, args, variants):
         v = lp_core.full_variant(variants[n])
         return (s, repr(lp_core.stage_key(v, 'graph', s)), repr(lp_core.stage_key(v, 'prop', s)), n)
     for seed, name in sorted(todo, key=order):
-        v = lp_core.full_variant(variants[name])
-        times = {}
-        tt = time.time()
-        Xs, _ = emb_memo.get_or(lp_core.stage_key(v, 'embed', seed), lambda: lp_core.embed(X, v, seed))
-        times['embed_s'] = round(time.time() - tt, 1)
-        tt = time.time()
-        graph, _ = graph_memo.get_or(lp_core.stage_key(v, 'graph', seed),
-                                     lambda: lp_core.build_graph(Xs, t2l, v, seed, device=device,
-                                                                          gt_obj=scorer.gt_obj))
-        times['graph_s'] = round(time.time() - tt, 1)
-        tt = time.time()
-        tracker = WormClusterTracker(Xs, t2l, linear_ind_to_t_and_seg_id=l2t, seed=seed, verbose=0)
-        seed_times = lp_core.select_seeds(t2l, v, seed, tracker.num_frames)
+        for attempt in range(10):
+            try:
+                v = lp_core.full_variant(variants[name])
+                times = {}
+                tt = time.time()
+                Xs, _ = emb_memo.get_or(lp_core.stage_key(v, 'embed', seed), lambda: lp_core.embed(X, v, seed))
+                times['embed_s'] = round(time.time() - tt, 1)
+                tt = time.time()
+                graph, _ = graph_memo.get_or(lp_core.stage_key(v, 'graph', seed),
+                                             lambda: lp_core.build_graph(Xs, t2l, v, seed, device=device,
+                                                                                  gt_obj=scorer.gt_obj))
+                times['graph_s'] = round(time.time() - tt, 1)
+                tt = time.time()
+                tracker = WormClusterTracker(Xs, t2l, linear_ind_to_t_and_seg_id=l2t, seed=seed, verbose=0)
+                seed_times = lp_core.select_seeds(t2l, v, seed, tracker.num_frames)
 
-        def do_prop():
-            with torch.no_grad():
-                out = lp_core.propagate(graph, t2l, Xs.shape[0], seed_times, v, device=device)
-            if device is not None and device.type == 'cuda':
-                torch.cuda.synchronize()
-            return out
-        (labs, probs), hit = prop_memo.get_or(lp_core.stage_key(v, 'prop', seed), do_prop)
-        times['prop_s'] = round(time.time() - tt, 1)
-        tt = time.time()
-        syn, _ = sync_memo.get_or(lp_core.stage_key(v, 'sync', seed),
-                                  lambda: lp_core.sync(labs, probs, t2l, v))
-        times['sync_s'] = round(time.time() - tt, 1)
-        tt = time.time()
-        labels, conf = lp_core.finalize(syn, t2l, v, Xs=Xs, graph=graph)
-        times['post_s'] = round(time.time() - tt, 1)
-        tt = time.time()
-        rec = scorer.score(tracker, labels, conf)
-        times['score_s'] = round(time.time() - tt, 1)
-        rec.update(scorer.fast(labels))
-        cons = labelprop_consistency(labs, syn['perms'], labels, conf, lin_t, n_frames)
-        if args.check_baseline and name == 'base':
-            tr = WormClusterTracker(Xs, t2l, linear_ind_to_t_and_seg_id=l2t, seed=seed, verbose=0)
-            tr.track_using_label_propagation_clusterer(num_seeds=v['num_seeds'], device=device)
-            ref = tr.labelprop_runs['final_labels']
-            rec['baseline_label_agreement'] = float(np.mean(ref == labels))
-            ref_rec = scorer.score(tr, ref, tr.labelprop_runs['confidence'])
-            rec['baseline_tracker_accuracy'] = ref_rec['accuracy']
-            print(f"  baseline check: labels equal {rec['baseline_label_agreement']:.6f}, tracker accuracy "
-                  f"{ref_rec['accuracy']:.4f} vs harness {rec['accuracy']:.4f}", flush=True)
-        out = dict(case=tag, label=label, variant=name, seed=seed, params={k: v[k] for k in variants[name]},
-                   **rec, consistency={k: cons[k] for k in ('agree_mean', 'agree_p10', 'conf_mean',
-                                                            'assigned_frac', 'dup_frac')},
-                   graph_info=graph['info'], seed_times=[int(t) for t in seed_times][:5],
-                   n_objects=int(X.shape[0]), n_frames=n_frames, prop_cached=bool(hit), device=str(args.device),
-                   **times)
-        with open(args.out, 'a') as f:
-            f.write(json.dumps(out) + '\n')
-        print(f"RESULT {tag} {name} seed{seed}: acc {rec['accuracy']:.4f} fast {rec['acc_fast']:.4f} "
-              f"agree {cons['agree_mean']:.3f} | {times}", flush=True)
-        if device is not None and device.type == 'cuda':
-            torch.cuda.empty_cache()
+                def do_prop():
+                    with torch.no_grad():
+                        out = lp_core.propagate(graph, t2l, Xs.shape[0], seed_times, v, device=device)
+                    if device is not None and device.type == 'cuda':
+                        torch.cuda.synchronize()
+                    return out
+                (labs, probs), hit = prop_memo.get_or(lp_core.stage_key(v, 'prop', seed), do_prop)
+                times['prop_s'] = round(time.time() - tt, 1)
+                tt = time.time()
+                syn, _ = sync_memo.get_or(lp_core.stage_key(v, 'sync', seed),
+                                          lambda: lp_core.sync(labs, probs, t2l, v))
+                times['sync_s'] = round(time.time() - tt, 1)
+                tt = time.time()
+                labels, conf = lp_core.finalize(syn, t2l, v, Xs=Xs, graph=graph)
+                times['post_s'] = round(time.time() - tt, 1)
+                tt = time.time()
+                rec = scorer.score(tracker, labels, conf)
+                times['score_s'] = round(time.time() - tt, 1)
+                rec.update(scorer.fast(labels))
+                cons = labelprop_consistency(labs, syn['perms'], labels, conf, lin_t, n_frames)
+                if args.check_baseline and name == 'base':
+                    tr = WormClusterTracker(Xs, t2l, linear_ind_to_t_and_seg_id=l2t, seed=seed, verbose=0)
+                    tr.track_using_label_propagation_clusterer(num_seeds=v['num_seeds'], device=device)
+                    ref = tr.labelprop_runs['final_labels']
+                    rec['baseline_label_agreement'] = float(np.mean(ref == labels))
+                    ref_rec = scorer.score(tr, ref, tr.labelprop_runs['confidence'])
+                    rec['baseline_tracker_accuracy'] = ref_rec['accuracy']
+                    print(f"  baseline check: labels equal {rec['baseline_label_agreement']:.6f}, tracker accuracy "
+                          f"{ref_rec['accuracy']:.4f} vs harness {rec['accuracy']:.4f}", flush=True)
+                out = dict(case=tag, label=label, variant=name, seed=seed, params={k: v[k] for k in variants[name]},
+                           **rec, consistency={k: cons[k] for k in ('agree_mean', 'agree_p10', 'conf_mean',
+                                                                    'assigned_frac', 'dup_frac')},
+                           graph_info=graph['info'], seed_times=[int(t) for t in seed_times][:5],
+                           n_objects=int(X.shape[0]), n_frames=n_frames, prop_cached=bool(hit), device=str(args.device),
+                           **times)
+                with open(args.out, 'a') as f:
+                    f.write(json.dumps(out) + '\n')
+                print(f"RESULT {tag} {name} seed{seed}: acc {rec['accuracy']:.4f} fast {rec['acc_fast']:.4f} "
+                      f"agree {cons['agree_mean']:.3f} | {times}", flush=True)
+                if device is not None and device.type == 'cuda':
+                    torch.cuda.empty_cache()
+                break
+            except (RuntimeError, MemoryError) as e:
+                # GPU shared with other runs: wait out a transient OOM, freeing the memoised GPU stages
+                if 'out of memory' not in repr(e).lower() or attempt == 9:
+                    raise
+                print(f"CUDA OOM on {name} seed{seed} (attempt {attempt + 1}), retrying in 120 s", flush=True)
+                graph_memo.clear() if hasattr(graph_memo, 'clear') else None
+                prop_memo.clear() if hasattr(prop_memo, 'clear') else None
+                if device is not None and device.type == 'cuda':
+                    torch.cuda.empty_cache()
+                time.sleep(120)
 
 
 def main():

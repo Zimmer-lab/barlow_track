@@ -182,6 +182,14 @@ def worker(args):
             del graph, labs, probs, syn
         except Exception as e:
             traceback.print_exc()
+            if 'out of memory' in repr(e).lower():
+                # GPU shared with other runs: a transient OOM is not the trial's fault; requeue after a wait
+                print(f"[worker {label}] {name}: CUDA OOM, requeued", flush=True)
+                os.replace(claimed, os.path.join(d['jobs'], name))
+                if device is not None and device.type == 'cuda':
+                    torch.cuda.empty_cache()
+                time.sleep(120)
+                continue
             _write_json(os.path.join(d['results'], name), dict(ok=False, error=repr(e)[:500]))
         finally:
             if os.path.exists(claimed):

@@ -3546,3 +3546,13 @@ run r261107-743860 · pids 743860 · host charles-Precision-7820-Tower · logs /
 ## 2026-11-07 01:10 — decision
 
 Ax round 2 workers: stopped the Zimmer and Flavell CPU workers (30-50 min per job against 1-3 min on the GPU; they held trials back) and requeued their 3 open jobs; added a Flavell GPU worker (745196) and second S184 / S137 CPU workers.
+
+## 2026-11-07 01:33 — run
+
+Ax round 2 stopping at 21 trials: GPEI re-suggested c_all_gh (dev 0.9530, deterministic: trial 17 = trial 12) for trials 17-20; 18-20 run it on seeds 2-7 as a seed-spread estimate. Round 3 (2111174) starts when round 2's driver (759602) exits: imports rounds 1-2, adds chain_w {0, 0.25, 0.5, 1}, starts c_all_gh_chain / c_all_gh_ts_chain025 / c_all_gh_svd150, replaces a third suggestion of one arm by a one-parameter neighbour; 45 trials.
+
+run r261107-759603 · pids 759603 · host charles-Precision-7820-Tower · logs /home/charles/.cache/barlow_scratch/labelprop_opt/ax/round3/launch.log · for [[EVD - Bayesian search over label propagation settings on four development recordings]]
+
+## 2026-11-07 02:24 — result
+
+diag_switch_jumps (9218f4a) on the base tracker, seed 0, local frame of 8 nearest GT neurons: Leifer StarDist 6663 label switches over 78 neurons, at 68% only the GT object jumps (median 3.4 um vs typical 0.9), at 10% only the track; with the NWB clicks, 51% of switches are the GT object jumping while the click stays. In error volumes the click is 1.41 um from its GT mask centre (0.52 in correct volumes), 2.8 um from the tracked object, which is 3.9 um away. Zimmer 1210: 1144 switches, only GT 23%, only track 30%, both 46%.

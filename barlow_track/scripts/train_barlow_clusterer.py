@@ -315,6 +315,7 @@ def train_barlow_network(args):
     if timer.enabled and use_position:
         # Splits 'data' into volume reading, augmentation and crop phases (num_workers 0 only)
         data_module.alldata.timings = {}
+    epoch = args.epochs - 1  # what the loop leaves behind; epochs=0 (an untrained network) skips the loop
     try:
         for epoch in range(0, args.epochs):
             if reaugment:

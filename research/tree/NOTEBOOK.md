@@ -3655,7 +3655,7 @@ r261107-1126428 and r261107-999202 ended: 100-seed check and consistency-proxy r
 
 Decision (user asked to promote the recipe): library label propagation recipe v2 = c_all_gh_s150_plain is the tracker's default (8903472, utils/labelprop_recipes.py), production tracking via track_using_barlow follows it (150 components, U*S unless svd_whiten is set). eval_accuracy / sweep objective / benchmark driver default to labelprop legacy so recorded scores, the running round_shared_v1 and its GT-free references stay comparable; labelprop is a record setting, so v2 cells are separate records. tests/test_labelprop_recipes.py: library v2 and legacy reproduce the harness variants' labels exactly on synthetic data. Real-recording check queued (Leifer StarDist t57, S184 t32, seed 0)
 
-- [ ] Rescore the paper benchmark with eval_accuracy --labelprop v2 (new record set)
+- [x] Rescore the paper benchmark with eval_accuracy --labelprop v2 (new record set)
 
 ## 2026-11-07 21:36 — run
 
@@ -3666,3 +3666,13 @@ run r261107-1446529 · pids 1446529 · host charles-Precision-7820-Tower · logs
 ## 2026-11-07 21:49
 
 r261107-1446529: library tracker reproduces the harness exactly on real recordings (seed 0, GPU, 8903472): Leifer StarDist t57 v2 labels equal 1.000000, accuracy 0.9402 = harness c_all_gh_s150_plain; legacy 0.9371 = harness base (= recorded 0.9371); Samuel 184 t32 v2 0.9538 = harness. Methods draft for the revised label propagation in docs/paper/methods_label_propagation.md (5023640), against the preprint's 4.3.2 / Algorithm 1 text (bioRxiv 10.1101/2025.11.10.687595, fetched; Zotero offline)
+
+## 2026-11-09 13:43 — run
+
+r261106-j7910480 finished: round_shared_v1 60/60 trials, none failed. Best trial 59 within 0.4 pt mean of per-recording bests on the 6 tuning recordings (samuel_137 -2.2 pt worst). Recorded as [[EVD - One shared training recipe matches per-recording tuned accuracy on six tuning recordings]]; held-out scoring planned as [[EVD - Shared recipe scored on the six held-out recordings]].
+
+## 2026-11-09 13:43 — done
+
+user 2026-11-09: rescoring judged basically done/nice; focus moved to future sweeps
+
+Done: Rescore the paper benchmark with eval_accuracy --labelprop v2 (new record set)

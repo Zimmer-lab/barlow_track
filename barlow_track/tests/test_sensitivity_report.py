@@ -13,6 +13,7 @@ def test_variant_name_ignores_per_recording_keys():
     cfg = dict(BASE, target_sz_z=16, seed=99, project_path='/p', global_augment=dict(p_flip=0.25, elastic_scale=0.0))
     assert sr.variant_name(cfg, BASE) == 'global_augment.elastic_scale=0'
     assert sr.variant_name(dict(BASE, lambd_obj=0.35 + 1e-12), BASE) == ''
+    assert sr.variant_name(dict(BASE, weight_decay='1e-06'), dict(BASE, weight_decay=1e-06)) == ''
 
 
 def test_pairs_by_seed_and_label(tmp_path):

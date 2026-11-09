@@ -34,6 +34,14 @@ def flatten(d, prefix=''):
     return out
 
 
+def _close(x, y):
+    """Equal as numbers; '1e-06' (a string in YAML 1.1) equals 1e-06."""
+    try:
+        return bool(np.isclose(float(x), float(y), rtol=1e-9)) and not isinstance(x, bool)
+    except (TypeError, ValueError):
+        return False
+
+
 def variant_name(cfg, base):
     """'k=v, k=v' over the keys where cfg differs from base (per-recording keys excluded); '' for the control."""
     a, b = flatten(cfg), flatten(base)
@@ -42,7 +50,7 @@ def variant_name(cfg, base):
         if k.split('.')[0] in PER_RUN_KEYS or k in PER_RUN_KEYS:
             continue
         x, y = a.get(k), b.get(k)
-        same = (x == y) or (isinstance(x, float) and isinstance(y, float) and np.isclose(x, y, rtol=1e-9))
+        same = (x == y) or _close(x, y)
         if not same:
             diffs.append(f'{k}={x:.4g}' if isinstance(x, float) else f'{k}={x}')
     return ', '.join(diffs)

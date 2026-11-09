@@ -3676,3 +3676,24 @@ r261106-j7910480 finished: round_shared_v1 60/60 trials, none failed. Best trial
 user 2026-11-09: rescoring judged basically done/nice; focus moved to future sweeps
 
 Done: Rescore the paper benchmark with eval_accuracy --labelprop v2 (new record set)
+
+## 2026-11-09 14:02 — run
+
+Local smoke test of sensitivity_sweep.py (new, uncommitted): untrained + img_lobj1_n16 on zimmer_1123, 12 frames, 1 epoch; plumbing only
+
+run r261109-1754692 · pids 1754692 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/42d5333b-f460-4e5f-86bd-c9bba0a07d86/scratchpad/smoke.log
+
+## 2026-11-09 14:13 — run
+
+r261109-1754692 (smoke, fused/visual_only cell) ran end to end; the untrained cell failed: train_barlow_network crashed with epochs=0 (epoch unbound). Fixed with epoch = args.epochs - 1 before the loop; rerunning the untrained cell
+
+run r261109-2053309 · pids 2053309 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/42d5333b-f460-4e5f-86bd-c9bba0a07d86/scratchpad/smoke2.log
+
+## 2026-11-09 14:19 — decision
+
+r261109-2053309: untrained cell (epochs 0) runs end to end after the one-line trainer fix; fused visual_only cell r261109-1754692 also OK (12-frame smoke, accuracies meaningless). sensitivity_sweep.py committed as 1d0fbe6: 43 variants, 522 cells (tier 1: 390 = control x5 + 20 variants x3 on the 6 tuning recordings; tier 2: 132 = 22 variants x1). Covers preprint Fig 3i (training volumes), S1e/f (augmentations, untrained, loss terms), Methods 4.3.1 (lr, embedding dim, projector, crop). Decision: image-only = fusion visual_only in the position pipeline (use_position false would switch to the legacy per-crop pipeline). Not covered: HDBSCAN vs label propagation on cached embeddings (Fig S1d), cross-dataset transfer (Fig 3h), Leifer.
+
+## 2026-11-09 14:19 — todo
+
+- [ ] Held-out scoring of round_shared_v1 trials 59 50 56 54 (optimize_shared_config.py --score_heldout --trials 59 50 56 54 --replicates 2), then launch round_sensitivity_v1 tier 1 then tier 2 (sensitivity_sweep.py --init, README for the sbatch line)
+- [ ] Script the Fig S1d clustering comparison (HDBSCAN vs label propagation) on the emb_cache of the sensitivity control cells

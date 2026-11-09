@@ -1,0 +1,10 @@
+# Sensitivity tests around the frozen round_shared_v1 trial 59 recipe (base_train_config.yaml), one network per recording,
+# scored by full-video tracking accuracy in the training GPU job (objective: accuracy, set per recording by
+# make_per_recording_rounds.py). Every config shares the recipe seed, replicates get replicate_seed.
+objective_minutes: 1440
+train_hours: 72
+
+# 64 volumes for the recipe's number of optimizer steps (371 frames x 30 epochs)
+hyperparameters:
+  - {name: num_frames, type: choice, values: [64]}
+  - {name: epochs, type: choice, values: [174]}

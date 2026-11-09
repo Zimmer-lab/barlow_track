@@ -1563,7 +1563,7 @@ train_cpu_job (template key, off by default; 22c6f0c): training jobs ask for no 
 
 Per-recording training for the weekend round: 9 GT recordings have a trainable wbfm project with segmentation metadata (zimmer 1128/1123/1210, flavell 2025_07_01 + the four forCharlie_2, samuel 153). Leifer (leifer_project_barlow/_gt), samuel 137 and samuel 184 have no 1-segmentation/metadata.pickle, and loading their NWBs as projects fails (no segmentation metadata), so they cannot be trained on without rebuilding metadata (a write to /lisc, or a local copy) or training on the NWB's GT objects only (which leaks which objects are tracked).
 
-- [ ] ask a261029-1 · on [[QUE - Do the preprint accuracies hold under the corrected evaluation and tracking code]] · For Leifer, Samuel 137 and Samuel 184: rebuild segmentation metadata into a new project copy (where?), train on the NWB objects, or leave them out of the per-recording round?
+- [x] ask a261029-1 · on [[QUE - Do the preprint accuracies hold under the corrected evaluation and tracking code]] · For Leifer, Samuel 137 and Samuel 184: rebuild segmentation metadata into a new project copy (where?), train on the NWB objects, or leave them out of the per-recording round?
 
 ## 2026-10-29 15:09 — run
 
@@ -3697,3 +3697,43 @@ r261109-2053309: untrained cell (epochs 0) runs end to end after the one-line tr
 
 - [ ] Held-out scoring of round_shared_v1 trials 59 50 56 54 (optimize_shared_config.py --score_heldout --trials 59 50 56 54 --replicates 2), then launch round_sensitivity_v1 tier 1 then tier 2 (sensitivity_sweep.py --init, README for the sbatch line)
 - [ ] Script the Fig S1d clustering comparison (HDBSCAN vs label propagation) on the emb_cache of the sensitivity control cells
+
+## 2026-11-09 14:30 — run
+
+Smoke of the per-recording sensitivity round matched_steps (zimmer_1123) through optimize_hyperparameters.py --direct_parameter_sweep --DEBUG --run_locally; plumbing only
+
+run r261109-2101787 · pids 2101787 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/42d5333b-f460-4e5f-86bd-c9bba0a07d86/scratchpad/smoke3.log
+
+## 2026-11-09 14:31 — answer
+
+Samuel 137 and 184 are not resegmented (user, 2026-11-09): they stay on the wbfm projects built from their NWBs, as trained in round_shared_v1. Leifer is decided after the held-out headline numbers: if they are not good enough, work on the Leifer segmentation (user, 2026-11-09).
+
+answered a261029-1
+
+## 2026-11-09 14:32 — dropped
+
+DEBUG overrides num_frames and clashes with FixedParameter; rerun with tiny values in the template instead
+
+dropped r261109-2101787
+
+## 2026-11-09 14:33 — run
+
+Smoke of a one-job direct sweep (num_frames 12, epochs 0, 12 scored frames) through optimize_hyperparameters.py on zimmer_1123
+
+run r261109-2103692 · pids 2103692 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/42d5333b-f460-4e5f-86bd-c9bba0a07d86/scratchpad/smoke4.log
+
+## 2026-11-09 14:34 — dropped
+
+base config lacked wandb_name (local-run path needs it); restored in base_train_config.yaml
+
+dropped r261109-2103692
+
+## 2026-11-09 14:34 — run
+
+Rerun of the one-job direct sweep smoke after restoring wandb_name in round_sens_src/base_train_config.yaml
+
+run r261109-2105392 · pids 2105392 · host charles-Precision-7820-Tower · logs /tmp/claude-1000/-home-charles-Current-work-repos-barlow-track/42d5333b-f460-4e5f-86bd-c9bba0a07d86/scratchpad/smoke5.log
+
+## 2026-11-09 14:42 — decision
+
+r261109-2105392: one-job direct sweep via optimize_hyperparameters.py ran end to end (epochs 0, 12 frames, accuracy recorded in exp_results.jsonl); sensitivity_report.py reads it. The earlier custom dispatcher sensitivity_sweep.py (1d0fbe6) was a reinvention of optimize_hyperparameters --direct_parameter_sweep/--one_at_a_time_sweep/--repetitions and make_per_recording_rounds.py (the round_wk1 pattern); removed, replaced by scratch/round_sens_src (grids, launch_sensitivity.sh) and sensitivity_report.py.

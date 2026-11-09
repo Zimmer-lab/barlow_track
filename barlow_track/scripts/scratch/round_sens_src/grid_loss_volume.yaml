@@ -1,0 +1,12 @@
+# Sensitivity tests around the frozen round_shared_v1 trial 59 recipe (base_train_config.yaml), one network per recording,
+# scored by full-video tracking accuracy in the training GPU job (objective: accuracy, set per recording by
+# make_per_recording_rounds.py). Every config shares the recipe seed, replicates get replicate_seed.
+objective_minutes: 1440
+train_hours: 72
+
+# direct grid (all combinations): 2 encoders x 3 lambd_obj x 3 training-set sizes; the cell (add, 0.347, 371) is the control
+# fusion visual_only = image-only network in the position pipeline (use_position false would switch to the legacy per-crop pipeline)
+hyperparameters:
+  - {name: fusion, type: choice, values: [visual_only, add]}
+  - {name: lambd_obj, type: choice, values: [0.0, 0.3470413003182426, 1.0]}
+  - {name: num_frames, type: choice, values: [16, 64, 371]}

@@ -1,0 +1,20 @@
+# Sensitivity tests around the frozen round_shared_v1 trial 59 recipe (base_train_config.yaml), one network per recording,
+# scored by full-video tracking accuracy in the training GPU job (objective: accuracy, set per recording by
+# make_per_recording_rounds.py). Every config shares the recipe seed, replicates get replicate_seed.
+objective_minutes: 1440
+train_hours: 72
+
+# one at a time (each value alone, the rest = recipe): training volumes, each augmentation off, lr, embedding, projector, crop xy, untrained
+hyperparameters:
+  - {name: num_frames, type: choice, values: [128, 256, 1000]}
+  - {name: global_augment.p_global_affine, type: choice, values: [0.0]}      # no rotation, scale, translation or flip
+  - {name: global_augment.elastic_scale, type: choice, values: [0.0]}
+  - {name: crop_photometric.p_noise, type: choice, values: [0.0]}
+  - {name: crop_photometric.crop_degrees_z, type: choice, values: [0.0]}
+  - {name: position_augment.dropout_p, type: choice, values: [0.0]}
+  - {name: position_augment.spurious_p, type: choice, values: [0.0]}
+  - {name: lr, type: choice, values: [7.22e-6, 7.22e-5]}                    # recipe 2.41e-5 x 0.3 and x 3
+  - {name: embedding_dim, type: choice, values: [64, 128, 1024]}
+  - {name: projector_final, type: choice, values: [128, 2048]}
+  - {name: target_sz_xy, type: choice, values: [32, 48]}
+  - {name: epochs, type: choice, values: [0]}                               # untrained network

@@ -1090,7 +1090,8 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
                                 center_per_volume=False, l2_per_volume=False,
                                 track_device='cpu', skip_embed=True, extra_record=None,
                                 crop_window='pad', round_crop_centers=False, nwb_objects='gt',
-                                svd='scaled', gt_matching='nandist', nwb_gt_mapping='centroid'):
+                                svd='scaled', gt_matching='nandist', nwb_gt_mapping='centroid',
+                                save_tracks=None):
     """Track one trained checkpoint on `project` and return its accuracy record.
 
     Programmatic entry point used by the hyperparameter sweep's in-job
@@ -1115,7 +1116,8 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
         l2_per_volume=l2_per_volume, device=device, track_device=track_device,
         results_jsonl=results_jsonl, emb_dir=emb_dir, tag=tag, extra_record=extra_record,
         crop_window=crop_window, round_crop_centers=round_crop_centers, nwb_objects=nwb_objects,
-        svd=svd, gt_matching=gt_matching, nwb_gt_mapping=nwb_gt_mapping, labelprop=labelprop)
+        svd=svd, gt_matching=gt_matching, nwb_gt_mapping=nwb_gt_mapping, labelprop=labelprop,
+        save_tracks=save_tracks)
     _resolve_labelprop(args)
     _check_args(args)
     return run_eval(args)[-1]

@@ -8,6 +8,7 @@ train_hours: 72
 hyperparameters:
   - {name: num_frames, type: choice, values: [128, 256, 1000]}
   - {name: global_augment.p_global_affine, type: choice, values: [0.0]}      # no rotation, scale, translation or flip
+  - {name: global_augment.max_degrees_z, type: choice, values: [0.0]}        # recipe 41 deg; the other top shared trials use 0
   - {name: global_augment.elastic_scale, type: choice, values: [0.0]}
   - {name: crop_photometric.p_noise, type: choice, values: [0.0]}
   - {name: crop_photometric.crop_degrees_z, type: choice, values: [0.0]}

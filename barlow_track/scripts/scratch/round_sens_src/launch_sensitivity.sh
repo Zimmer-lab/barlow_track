@@ -12,9 +12,9 @@
 #   SKIP=1 bash $S/launch_sensitivity.sh launch core  # resume after a dispatcher died (--skip_completed_grid_jobs)
 #   bash $S/launch_sensitivity.sh launch loss_volume oat   # or name rounds
 #
-# Rounds (jobs per recording): loss_volume 18 combinations x 3 repetitions = 54, oat 19, only_affine / only_elastic /
+# Rounds (jobs per recording): loss_volume 18 combinations x 3 repetitions = 54, oat 20, only_affine / only_elastic /
 # only_noise / aug_none / matched_steps 1 each. core = loss_volume + oat + matched_steps; ablations = the four
-# augmentation combinations. On the 6 tuning recordings: 54x6 + 19x6 + 6 = 444 core jobs, 24 ablation jobs.
+# augmentation combinations. On the 6 tuning recordings: 54x6 + 20x6 + 6 = 450 core jobs, 24 ablation jobs.
 # LABELS="..." overrides the recordings (e.g. add held-out ones); NUM_PARALLEL caps simultaneous GPU jobs per dispatcher.
 set -euo pipefail
 B=${B:-/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files}

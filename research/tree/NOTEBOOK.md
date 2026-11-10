@@ -3745,3 +3745,30 @@ Handoff after round_shared_v1: user decisions 2026-11-09. (1) Sensitivity tests 
 - [ ] Read heldout_results.jsonl and report headline accuracy for all datasets vs reference
 - [ ] Stage trial 59 checkpoints and run HDBSCAN vs labelprop plus cross-dataset transfer base numbers
 - [ ] If held-out (esp. Leifer) is weak, plan Leifer segmentation work
+
+## 2026-11-10 — result
+
+Held-out scoring of round_shared_v1 trials 59 50 56 54 x 2 replicates finished: 48/48 cells in exp_results.jsonl (heldout_results.jsonl has only 41; the 7 trial-54 / 56r1 cells finished after the dispatcher stopped appending). labelprop legacy, mean of 2 replicates vs best per-recording network (legacy): zimmer_1128 ref .9804: t59 .9860 t50 .9831 t56 .9862 t54 .9830; flavell ref .9815: .9694 .9775 .9797 .9738; flavell_2022031603 ref .9886: .9814 .9890 .9900 .9878; flavell_2022033001 ref .9846: .9772 .9815 .9831 .9813; samuel ref .9853: .9876 .9858 .9879 .9845; leifer_stardist_strict ref .9371 (wk2 t57 scored on StarDist; wk4 never launched): .9390 .9398 .9417 .9409. Mean delta vs ref: t56 +0.18 pt (worst -0.18), t50 -0.01 (worst -0.40), t54 -0.11, t59 -0.28 (worst -1.21, all three Flavell). Trial 59 (best tuning objective, the base of the staged sensitivity rounds) is the weakest held-out; it is the only top trial with global max_degrees_z 41 (others 0). GT-free held-out agree_mean ranks 56 .8725 > 50 .8700 > 59 .8666 > 54 .8663, i.e. the proxy would also have demoted 59. Leifer (~0.94) is the only held-out recording below 0.977.
+
+- [ ] Decide the frozen recipe (59 vs 50/56) before launching round_sens_* (staged around trial 59)
+- [ ] Rescore all round_shared_v1 cells with --labelprop v2 from emb_cache
+
+## 2026-11-10 — decision
+
+Generalization audit of the held-out result, user decisions (2026-11-10). (a) Held-out recordings were GT-tuned in wk1-wk3 and shaped the shared search space; accepted for now. (b) No reference column in the paper. (c) Trials are never picked on final accuracy: the paper shows the accuracy of the highest proxy scorers (top by GT-free objective: 59, 56, 42, 54, 50, 57, 52, 45) and their spread; trial 59 stays the recipe and the base of round_sens_*. (d) To report in the paper: Flavell's hand-set crop depth 16 and z_scale 1.0, Samuel 184's voxel size from the literature; Samuel is scored on oracle detections (its segmentation holds only GT neurons); Flavell GT is algorithmic; segmentation is outside the claim; no lab is held out except Leifer. (e) Correction: the recordings are not one datatype, Samuel is the male tail. Datatypes without GT get the proxy only. (f) Seeds are a key sensitivity run once the architecture is fixed.
+
+Leifer StarDist strict click fates (sd_strict_status.npz): 119,019 clicks = 112,996 assigned + 2,305 no mask + 206 volume without objects + 2,708 merge (mask holding two neurons' clicks) + 804 coincident (another click within 1 um). Shared recipe, legacy labelprop, mean of 2 replicates (t59 / range over t59 t50 t56 t54): assigned .9390 / .939-.942; all kept (misses count, coincident and merges discarded; x0.97826) .9186 / .919-.921; merges also counted as errors (x0.95585) .8975, half of them right .909. Proposed for the paper: .939 as the Leifer row (every other recording is scored on segmented objects only), .919 beside it as the end-to-end number, the 2.3% merge clicks disclosed.
+
+Absolute proxy, from recorded cells (408 cells of round_shared_v1, 12 recordings): no existing GT-free metric is absolute. Pooled Spearman with accuracy agree_mean .80, conf_mean .81, complete_tracks_90 .59; a line fitted on 11 recordings mispredicts the 12th by +3.3 pt (Leifer) and +4.2 pt (zimmer_1210), i.e. exactly the recordings whose errors every run makes alike, and -2 to +2 pt elsewhere. New: cross_network_proxy.py, agreement between independently trained networks after one-to-one label matching, rank-one fit a_ij = p_i p_j gives each network's accuracy without GT (upper bound: shared errors stay invisible). Synthetic test recovers accuracies within 3 pt (tests/test_cross_network_proxy.py). Smoke on Samuel 153 trial 59 rep 0/1 (v2 tracks from emb_cache, local GPU, 93 s a cell, output in the session scratchpad only): agreement .9855, so p about .993 vs accuracy .9887 / .9886 (legacy .9903 / .9850).
+
+Seeds so far: 24 held-out replicate pairs (legacy labelprop, 25 seeds) differ by mean 0.29 pt, median 0.19, max 0.74, implied s.d. 0.26 pt, training seed and labelprop seed confounded.
+
+## 2026-11-10 — run
+
+Cluster runs for the week, set up, NOT launched (user launches; code needs git pull). barlow_track/scripts/scratch/round_week46/launch_week.sh: rescore (rescore_round.py: v2 on all 408 round_shared_v1 cells from emb_cache into exp_results_v2.jsonl + tracks_v2/, 8 GPU array tasks; then cross_network_proxy.py), heldout (trials 42 57 52 45 x 2 replicates, trial 59 replicates 2-4: 66 GPU jobs), sens (round_sens_* staged on the cluster 2026-11-10, 42 round directories; oat gained global max_degrees_z 0: 450 core + 24 ablation jobs), hdbscan (global clustering on trial 59, CPU). Not set up: cross-dataset transfer (which z_scale and crop a transferred network uses is undecided), Leifer per-recording round wk4 (staged earlier, not re-checked).
+
+- [x] Read heldout_results.jsonl and report headline accuracy for all datasets vs reference
+- [ ] Read exp_results_v2.jsonl: headline table under labelprop v2, top-8 proxy trials with spread
+- [ ] Read cross_network_proxy_v2.jsonl: est_long vs accuracy per recording (is it within ~1 pt on all 12, Leifer and zimmer_1210 included?)
+- [ ] sensitivity_report.py on round_sens_*; seed spread from loss_volume control x3 and trial 59 held-out x5
+- [ ] Cross-dataset transfer base numbers: decide z_scale / crop of the transferred network first

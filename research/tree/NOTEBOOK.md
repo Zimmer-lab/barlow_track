@@ -3772,3 +3772,11 @@ Cluster runs for the week, set up, NOT launched (user launches; code needs git p
 - [ ] Read cross_network_proxy_v2.jsonl: est_long vs accuracy per recording (is it within ~1 pt on all 12, Leifer and zimmer_1210 included?)
 - [ ] sensitivity_report.py on round_sens_*; seed spread from loss_volume control x3 and trial 59 held-out x5
 - [ ] Cross-dataset transfer base numbers: decide z_scale / crop of the transferred network first
+
+## 2026-11-10 — decision
+
+Decision (user): the Leifer accuracy counts segmentation misses as errors and leaves merges out (a mask holding two neurons' clicks cannot serve as GT), coincident clicks out as before. That is the existing "all kept" score: accuracy on assigned clicks x 112,996 / 115,507 (0.97826) on the StarDist strict GT. Shared recipe trial 59, legacy labelprop, 2 replicates: 0.9186 (trials 59 50 56 54: 0.919-0.921). eval_accuracy on the _strictgt project still records the assigned-clicks accuracy; apply the factor when reporting.
+
+Decision (user): Slurm interaction reuses the sweeps' machinery. rescore_round.py is now a dispatcher (--slurm N, run by sbatch_dispatcher.sbatch, submitit with optimize_hyperparameters' train_job_params / cpu_eval_job_params; --then_proxy runs cross_network_proxy.py after the shards); the two sbatch wrappers of round_week46 are removed. The submitit path itself has not run on the cluster.
+
+- [ ] Report Leifer as all-kept (x0.97826) in the headline table; consider recording it in eval_accuracy

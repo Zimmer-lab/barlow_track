@@ -3,7 +3,7 @@
 #
 #   cd /lisc/data/scratch/neurobiology/zimmer/wbfm/code/barlow_track && git pull
 #   W=barlow_track/scripts/scratch/round_week46/launch_week.sh
-#   bash $W rescore     # 1. label propagation v2 on every round_shared_v1 cell from emb_cache (8 GPU array tasks,
+#   bash $W rescore     # 1. label propagation v2 on every round_shared_v1 cell from emb_cache (8 GPU jobs,
 #                       #    ~3 h each), tracks saved; then the cross-network absolute proxy (CPU, runs after)
 #   bash $W heldout     # 2. held-out scoring of the remaining top-8 proxy trials (42 57 52 45, 2 replicates) and
 #                       #    replicates 2-4 of trial 59: 48 + 18 GPU jobs (train ~4-6 h + score)
@@ -19,27 +19,25 @@ set -euo pipefail
 B=${B:-/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files}
 export CODE=${CODE:-/lisc/data/scratch/neurobiology/zimmer/wbfm/code/barlow_track}
 R=$B/round_shared_v1
-W=barlow_track/scripts/scratch/round_week46
 P=barlow_track/scripts/scratch/gt_free_proxy
 cd "$CODE"
 mkdir -p $R/week46_logs
 
+# Slurm interaction is the sweeps' own: every stage is a dispatcher run by sbatch_dispatcher.sbatch that submits its
+# GPU / CPU jobs with submitit and optimize_hyperparameters' job parameters.
+dispatch() {  # dispatcher script, job name, then its arguments
+  local script=$1 name=$2; shift 2
+  BARLOW_DISPATCHER=$script sbatch --job-name=$name --output=$R/week46_logs/${name}_%j.log \
+      barlow_track/scripts/sbatch_dispatcher.sbatch "$@"
+}
+
 rescore() {
-  jid=$(sbatch --parsable --array=0-7 --job-name=rescore_v2 --output=$R/week46_logs/rescore_v2_%A_%a.log \
-        $W/sbatch_rescore.sbatch --round_dir $R --labelprop v2)
-  echo "rescore v2: array job $jid"
-  sbatch --dependency=afterany:$jid --job-name=xnet_proxy --output=$R/week46_logs/cross_network_proxy_%j.log \
-      $W/sbatch_cpu.sbatch $P/cross_network_proxy.py --tracks_dir $R/tracks_v2 \
-      --results $R/exp_results_v2.jsonl --out $R/cross_network_proxy_v2.jsonl
+  dispatch $P/rescore_round.py rescore_v2 --round_dir $R --labelprop v2 --slurm 8 --then_proxy
 }
 
 heldout() {
-  for spec in "42 57 52 45|2" "59|5"; do
-    trials=${spec%|*}; reps=${spec#*|}
-    BARLOW_DISPATCHER=barlow_track/scripts/optimize_shared_config.py sbatch --job-name=heldout_${trials// /_} \
-        --output=$R/week46_logs/heldout_%j.log barlow_track/scripts/sbatch_dispatcher.sbatch \
-        -p $R --score_heldout --trials $trials --replicates $reps
-  done
+  dispatch barlow_track/scripts/optimize_shared_config.py heldout_top8 -p $R --score_heldout --trials 42 57 52 45 --replicates 2
+  dispatch barlow_track/scripts/optimize_shared_config.py heldout_t59_seeds -p $R --score_heldout --trials 59 --replicates 5
 }
 
 sens() {
@@ -48,8 +46,7 @@ sens() {
 }
 
 hdbscan() {
-  sbatch --job-name=hdbscan_t59 --output=$R/week46_logs/hdbscan_%j.log $W/sbatch_cpu.sbatch \
-      $P/rescore_round.py --round_dir $R --cluster global --trials 59 --track_device cpu
+  dispatch $P/rescore_round.py hdbscan_t59 --round_dir $R --cluster global --trials 59 --track_device cpu --slurm 1 --minutes 2880
 }
 
 status() {

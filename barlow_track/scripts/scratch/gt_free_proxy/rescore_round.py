@@ -7,10 +7,19 @@ jsonl (default <round_dir>/exp_results_<name>.jsonl, name = v2 | legacy | global
 records and its resume logic are untouched; the predicted tracks go to <round_dir>/tracks_<name>/<tag>.h5
 (keys gt, pred_matched, pred_all: eval_accuracy --save_tracks), the input of cross_network_proxy.py.
 
-    python barlow_track/scripts/scratch/gt_free_proxy/rescore_round.py --round_dir <round> --labelprop v2 \
-        --shard 0 --num_shards 8          # one Slurm array task; finished cells are skipped on a rerun
-    ... --cluster global --trials 59      # HDBSCAN (global clustering) on trial 59's networks only
-    ... --list                            # print the cells and exit
+Slurm goes through the sweeps' own machinery: --slurm N makes this script a dispatcher (run it with
+sbatch_dispatcher.sbatch and BARLOW_DISPATCHER, as optimize_hyperparameters.py / optimize_shared_config.py are)
+that submits N shard jobs with submitit, using optimize_hyperparameters' job parameters (train_job_params:
+one GPU; cpu_eval_job_params with --track_device cpu), waits for them and, with --then_proxy, runs
+cross_network_proxy.py on the saved tracks.
+
+    BARLOW_DISPATCHER=barlow_track/scripts/scratch/gt_free_proxy/rescore_round.py sbatch --output=<log> \
+        barlow_track/scripts/sbatch_dispatcher.sbatch --round_dir <round> --labelprop v2 --slurm 8 --then_proxy
+    ... --cluster global --trials 59 --track_device cpu --slurm 1   # HDBSCAN on trial 59's networks only
+    python .../rescore_round.py --round_dir <round> --list          # print the cells and exit
+    python .../rescore_round.py --round_dir <round> --shard 0 --num_shards 8   # one shard, in this process
+
+Finished cells are skipped on a rerun.
 """
 import argparse
 import json
@@ -65,36 +74,20 @@ def select_cells(records, trials=None, labs=None):
     return cells
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--round_dir', required=True)
-    ap.add_argument('--labelprop', choices=['legacy', 'v2'], default='v2')
-    ap.add_argument('--cluster', choices=['labelprop', 'global'], default='labelprop')
-    ap.add_argument('--trials', nargs='+', type=int, default=None, help='only these trial numbers')
-    ap.add_argument('--labs', nargs='+', default=None, help='only these recordings')
-    ap.add_argument('--shard', type=int, default=0)
-    ap.add_argument('--num_shards', type=int, default=1)
-    ap.add_argument('--track_device', default='cuda')
-    ap.add_argument('--out_jsonl', default=None)
-    ap.add_argument('--tracks_dir', default=None)
-    ap.add_argument('--emb_dir', default=None)
-    ap.add_argument('--list', action='store_true')
-    args = ap.parse_args()
+def paths(a):
+    rd = os.path.abspath(a.round_dir)
+    name = 'global' if a.cluster == 'global' else a.labelprop
+    return (rd, name, a.out_jsonl or os.path.join(rd, f'exp_results_{name}.jsonl'),
+            a.tracks_dir or os.path.join(rd, f'tracks_{name}'), a.emb_dir or os.path.join(rd, 'emb_cache'))
 
-    rd = os.path.abspath(args.round_dir)
-    name = 'global' if args.cluster == 'global' else args.labelprop
-    out_jsonl = args.out_jsonl or os.path.join(rd, f'exp_results_{name}.jsonl')
-    tracks_dir = args.tracks_dir or os.path.join(rd, f'tracks_{name}')
-    emb_dir = args.emb_dir or os.path.join(rd, 'emb_cache')
-    cells = select_cells(latest_records(os.path.join(rd, 'exp_results.jsonl')), args.trials, args.labs)
-    mine = [c for i, c in enumerate(cells) if i % args.num_shards == args.shard]
-    print(f"{len(cells)} cells in {rd}; shard {args.shard}/{args.num_shards}: {len(mine)}; -> {out_jsonl}", flush=True)
-    if args.list:
-        for c in mine:
-            print(c['tag'], c['lab'], f"{c['accuracy']:.4f}")
-        return
+
+def run_shard(a, shard):
+    """Score the cells of one shard in this process; returns the number of failed cells."""
+    rd, name, out_jsonl, tracks_dir, emb_dir = paths(a)
+    cells = select_cells(latest_records(os.path.join(rd, 'exp_results.jsonl')), a.trials, a.labs)
+    mine = [c for i, c in enumerate(cells) if i % a.num_shards == shard]
+    print(f"{len(cells)} cells in {rd}; shard {shard}/{a.num_shards}: {len(mine)}; -> {out_jsonl}", flush=True)
     os.makedirs(tracks_dir, exist_ok=True)
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), *['..'] * 4)))  # repo root
     from barlow_track.scripts.eval_accuracy import evaluate_trained_checkpoint
     n_fail = 0
     for c in mine:
@@ -110,8 +103,8 @@ def main():
         try:
             rec = evaluate_trained_checkpoint(
                 weights=c['weights'], project=c.get('project'), gt=c.get('gt'), tag=tag,
-                results_jsonl=out_jsonl, emb_dir=emb_dir, cluster=args.cluster, labelprop=args.labelprop,
-                track_device=args.track_device, save_tracks=tracks,
+                results_jsonl=out_jsonl, emb_dir=emb_dir, cluster=a.cluster, labelprop=a.labelprop,
+                track_device=a.track_device, save_tracks=tracks,
                 extra_record=dict(rescore_of=os.path.join(rd, 'exp_results.jsonl'),
                                   recorded_accuracy=c['accuracy'], recorded_labelprop=c.get('labelprop') or 'legacy'),
                 **cell_kwargs(c))
@@ -120,8 +113,78 @@ def main():
         except Exception:
             n_fail += 1
             print(f"{tag}: FAILED\n{traceback.format_exc()}", flush=True)
-    print(f"shard {args.shard} finished, {n_fail} failed of {len(mine)}", flush=True)
-    sys.exit(1 if n_fail else 0)
+    print(f"shard {shard} finished, {n_fail} failed of {len(mine)}", flush=True)
+    return n_fail
+
+
+def dispatch(a):
+    """Submit the shards as Slurm jobs through submitit with the sweeps' job parameters, and wait."""
+    from submitit import AutoExecutor
+    from barlow_track.scripts import optimize_hyperparameters as oh
+    rd, name, out_jsonl, tracks_dir, _ = paths(a)
+    a.num_shards = a.slurm
+    executor = AutoExecutor(folder=os.path.join(rd, 'slurm'), cluster='slurm')
+    job_name = f'rescore_{name}_{os.path.basename(rd)}'
+    if a.track_device == 'cpu':
+        executor.update_parameters(**oh.cpu_eval_job_params({}, a.minutes, job_name))
+    else:
+        executor.update_parameters(timeout_min=a.minutes + 60, **oh.train_job_params({}, job_name))
+    for v in oh._DISPATCH_THREAD_VARS:
+        os.environ.pop(v, None)
+    jobs = {s: executor.submit(run_shard, a, s) for s in range(a.slurm)}
+    for v in oh._DISPATCH_THREAD_VARS:
+        os.environ[v] = '1'
+    print(f"Submitted {len(jobs)} shard jobs ({oh.slurm_duration(a.minutes + 60)} each): "
+          f"{[j.job_id for j in jobs.values()]}", flush=True)
+    n_fail, t0 = 0, time.time()
+    while jobs:
+        for s, job in list(jobs.items()):
+            if not job.done():
+                continue
+            try:
+                n_fail += int(job.result())
+            except Exception as e:
+                n_fail += 1
+                print(f"shard {s} (job {job.job_id}): job error {e}", flush=True)
+            del jobs[s]
+        if jobs:
+            print(f"t={time.time() - t0:.0f}s: {len(jobs)} shards running, "
+                  f"{len(latest_records(out_jsonl))} cells recorded", flush=True)
+            time.sleep(600)
+    print(f"all shards finished; {n_fail} failed cells or jobs; {len(latest_records(out_jsonl))} cells recorded",
+          flush=True)
+    if a.then_proxy:
+        import subprocess
+        proxy = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cross_network_proxy.py')
+        subprocess.run([sys.executable, '-u', proxy, '--tracks_dir', tracks_dir, '--results', out_jsonl,
+                        '--out', os.path.join(rd, f'cross_network_proxy_{name}.jsonl')], check=False)
+    return n_fail
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--round_dir', required=True)
+    ap.add_argument('--labelprop', choices=['legacy', 'v2'], default='v2')
+    ap.add_argument('--cluster', choices=['labelprop', 'global'], default='labelprop')
+    ap.add_argument('--trials', nargs='+', type=int, default=None, help='only these trial numbers')
+    ap.add_argument('--labs', nargs='+', default=None, help='only these recordings')
+    ap.add_argument('--shard', type=int, default=0)
+    ap.add_argument('--num_shards', type=int, default=1)
+    ap.add_argument('--slurm', type=int, default=0, help='dispatcher mode: submit this many shard jobs and wait')
+    ap.add_argument('--minutes', type=int, default=1440, help='--slurm: walltime budget of a shard job')
+    ap.add_argument('--then_proxy', action='store_true', help='--slurm: run cross_network_proxy.py afterwards')
+    ap.add_argument('--track_device', default='cuda')
+    ap.add_argument('--out_jsonl', default=None)
+    ap.add_argument('--tracks_dir', default=None)
+    ap.add_argument('--emb_dir', default=None)
+    ap.add_argument('--list', action='store_true')
+    a = ap.parse_args()
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), *['..'] * 4)))  # repo root
+    if a.list:
+        for c in select_cells(latest_records(os.path.join(paths(a)[0], 'exp_results.jsonl')), a.trials, a.labs):
+            print(c['tag'], c['lab'], f"{c['accuracy']:.4f}")
+        return
+    sys.exit(1 if (dispatch(a) if a.slurm else run_shard(a, a.shard)) else 0)
 
 
 if __name__ == '__main__':

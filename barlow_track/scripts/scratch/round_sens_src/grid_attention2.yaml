@@ -1,0 +1,10 @@
+# Sensitivity tests around the frozen round_shared_v1 trial 59 recipe (base_train_config.yaml), one network per recording,
+# scored by full-video tracking accuracy in the training GPU job (objective: accuracy, set per recording by
+# make_per_recording_rounds.py). Every config shares the recipe seed, replicates get replicate_seed.
+objective_minutes: 1440
+train_hours: 72
+
+# intra-volume self-attention with 2 layers (1 layer is in the one-at-a-time round)
+hyperparameters:
+  - {name: use_attention, type: choice, values: [true]}
+  - {name: self_layers, type: choice, values: [2]}

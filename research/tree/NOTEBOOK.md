@@ -3780,3 +3780,13 @@ Decision (user): the Leifer accuracy counts segmentation misses as errors and le
 Decision (user): Slurm interaction reuses the sweeps' machinery. rescore_round.py is now a dispatcher (--slurm N, run by sbatch_dispatcher.sbatch, submitit with optimize_hyperparameters' train_job_params / cpu_eval_job_params; --then_proxy runs cross_network_proxy.py after the shards); the two sbatch wrappers of round_week46 are removed. The submitit path itself has not run on the cluster.
 
 - [ ] Report Leifer as all-kept (x0.97826) in the headline table; consider recording it in eval_accuracy
+
+## 2026-11-10 — surprise
+
+self_layers was inert in round_shared_v1 (and attn_gate_init with it): every trial has use_attention false, so training builds BarlowWithPosition (train_barlow_clusterer.py: BarlowVolumeAttention only with use_attention), which has no self-attention layers. One of the sweep's search dimensions did nothing; "top trials agree on self_layers 0 or 1" removed from the shared-recipe evidence note. The frozen recipe (trial 59) is: ResidualEncoder3D (2 levels, 4 feature maps) on 8 x 64 x 64 crops (z 16 Flavell) + ViSNet position encoder (hidden 512, 32 neighbours, cutoff 0.35), each layer-normalised and added, 512-d embedding, projector 2048-2048-512, Barlow loss + 0.347 object-space term, 371 volumes x 30 epochs, lr 2.4e-5.
+
+## 2026-11-10 — run
+
+Sensitivity rounds extended before launch (user: add anything else) and re-staged on the cluster, 54 round directories, 534 core + 24 ablation jobs. oat now 31 values: + epochs 10 and 60 (30 was the search's upper bound), fusion position_only and concat, position_encoder keypoint_mlp, use_attention true (1 layer), backbone f_maps 2 and 8, visnet_hidden 128, visnet_neighbors 8, reaugment_each_epoch false. New rounds attention2 (use_attention, self_layers 2) and crop_depth (target_sz_z 8 and 16 on every recording: Flavell's hand-set 16 against the default; the recording's own value repeats the control with the same seed). Every new variant builds and runs a forward pass on CPU with the recipe config (random tensors, no training). launch_week.sh gained sens_rescore (after sens: v2 + tracks for each sensitivity round, then cross_network_proxy.py pooled over rounds, so image-only, position-only and fused networks of a recording enter one estimate). Still not set up: cross-dataset transfer, Leifer per-recording round wk4.
+
+- [ ] After sens: bash launch_week.sh sens_rescore (twice: submit, then pooled proxy); compare est_long across modalities with accuracy

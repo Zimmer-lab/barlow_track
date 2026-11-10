@@ -8,9 +8,12 @@
 #   bash $W heldout     # 2. held-out scoring of the remaining top-8 proxy trials (42 57 52 45, 2 replicates) and
 #                       #    replicates 2-4 of trial 59: 48 + 18 GPU jobs (train ~4-6 h + score)
 #   bash $W sens        # 3. sensitivity rounds around trial 59 on the 6 tuning recordings (staged 2026-11-10):
-#                       #    450 core + 24 ablation GPU jobs, NUM_PARALLEL (default 2) per dispatcher, 42 dispatchers
+#                       #    534 core + 24 ablation GPU jobs, NUM_PARALLEL (default 2) per dispatcher, 54 dispatchers
 #   bash $W hdbscan     # 4. HDBSCAN (global clustering) on trial 59's networks, all 12 recordings (CPU)
 #   bash $W all         # 1-4 in that order
+#   bash $W sens_rescore  # LATER, once `sens` has finished: v2 + saved tracks for every sensitivity cell, then the
+#                         # cross-network proxy over all of a recording's networks (image-only, position-only, fused, ...):
+#                         # rerun it when the per-round jobs are done to get cross_network_proxy_sens_v2.jsonl
 #   bash $W status      # what has been recorded so far
 #
 # Everything resumes: rerun the same command (sens: SKIP=1 bash $W sens). Nothing here touches exp_results.jsonl
@@ -49,16 +52,29 @@ hdbscan() {
   dispatch $P/rescore_round.py hdbscan_t59 --round_dir $R --cluster global --trials 59 --track_device cpu --slurm 1 --minutes 2880
 }
 
+sens_rescore() {
+  for D in $B/round_sens_*/; do
+    D=${D%/}; [ -f $D/exp_results.jsonl ] || continue
+    n=$(wc -l < $D/exp_results.jsonl); m=0; [ -f $D/exp_results_v2.jsonl ] && m=$(wc -l < $D/exp_results_v2.jsonl)
+    [ "$m" -ge "$n" ] && continue
+    BARLOW_DISPATCHER=$P/rescore_round.py sbatch --job-name=rescore_$(basename $D) --output=$D/rescore_v2_%j.log \
+        barlow_track/scripts/sbatch_dispatcher.sbatch --round_dir $D --labelprop v2 --slurm 1
+  done
+  python $P/cross_network_proxy.py --tracks_dir "$B/round_sens_*/tracks_v2" "$R/tracks_v2" \
+      --results "$B/round_sens_*/exp_results_v2.jsonl" "$R/exp_results_v2.jsonl" \
+      --out $B/cross_network_proxy_sens_v2.jsonl | tail -40 || true
+}
+
 status() {
   for f in exp_results_v2.jsonl exp_results_global.jsonl heldout_results.jsonl cross_network_proxy_v2.jsonl; do
     [ -f $R/$f ] && echo "$f: $(wc -l < $R/$f) lines" || echo "$f: not yet"
   done
-  echo "sensitivity records: $(cat $B/round_sens_*/exp_results.jsonl 2>/dev/null | wc -l) of 474"
+  echo "sensitivity records: $(cat $B/round_sens_*/exp_results.jsonl 2>/dev/null | wc -l) of 558"
   squeue -u "$USER" -h -o '%j %T' | awk '{print $2}' | sort | uniq -c
 }
 
-case ${1:?rescore | heldout | sens | hdbscan | all | status} in
-  rescore|heldout|sens|hdbscan|status) $1 ;;
+case ${1:?rescore | heldout | sens | hdbscan | all | sens_rescore | status} in
+  rescore|heldout|sens|hdbscan|sens_rescore|status) $1 ;;
   all) rescore; heldout; sens; hdbscan ;;
   *) echo "unknown stage $1"; exit 1 ;;
 esac

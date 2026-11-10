@@ -4,7 +4,7 @@
 objective_minutes: 1440
 train_hours: 72
 
-# one at a time (each value alone, the rest = recipe): training volumes, each augmentation off, lr, embedding, projector, crop xy, untrained
+# one at a time (each value alone, the rest = recipe): training volumes, each augmentation off, lr, embedding, projector, crop xy, epochs, architecture, frozen view pairs
 hyperparameters:
   - {name: num_frames, type: choice, values: [128, 256, 1000]}
   - {name: global_augment.p_global_affine, type: choice, values: [0.0]}      # no rotation, scale, translation or flip
@@ -18,4 +18,12 @@ hyperparameters:
   - {name: embedding_dim, type: choice, values: [64, 128, 1024]}
   - {name: projector_final, type: choice, values: [128, 2048]}
   - {name: target_sz_xy, type: choice, values: [32, 48]}
-  - {name: epochs, type: choice, values: [0]}                               # untrained network
+  - {name: epochs, type: choice, values: [0, 10, 60]}                       # untrained network; recipe 30 is the search's upper bound
+  # architecture (added 2026-11-10): the shared sweep varied none of these (its self_layers was inert: no attention model)
+  - {name: fusion, type: choice, values: [position_only, concat]}           # recipe add; visual_only is in loss_volume
+  - {name: position_encoder, type: choice, values: [keypoint_mlp]}          # recipe visnet
+  - {name: use_attention, type: choice, values: [true]}                     # intra-volume self-attention, self_layers 1 (2: round attention2)
+  - {name: backbone_kwargs.f_maps, type: choice, values: [2, 8]}            # image encoder width, recipe 4
+  - {name: visnet_hidden, type: choice, values: [128]}                      # recipe 512
+  - {name: visnet_neighbors, type: choice, values: [8]}                     # recipe 32
+  - {name: reaugment_each_epoch, type: choice, values: [false]}             # one fixed view pair per volume (the pre-2026-11-05 behaviour)

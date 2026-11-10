@@ -20,6 +20,9 @@ columns = predicted tracks, values = the object's id in that volume (NaN = none)
     python barlow_track/scripts/scratch/gt_free_proxy/cross_network_proxy.py \
         --tracks_dir <round>/tracks_v2 --results <round>/exp_results_v2.jsonl --out <round>/cross_network_proxy_v2.jsonl
 
+Several --tracks_dir / --results (globs, quoted) pool networks of several rounds, e.g. the sensitivity rounds'
+image-only, position-only and fused networks of one recording: --tracks_dir '<B>/round_sens_*/tracks_v2'.
+
 Networks are grouped by recording (the record's lab, else the tag suffix after _trial<N>[r<k>]_). Two
 populations: 'all' objects, and 'long' = objects that either network puts on a track covering at least
 --min_cover of the volumes (the GT-free stand-in for "a real neuron": the accuracy is scored on GT neurons only).
@@ -101,8 +104,8 @@ def recording_of(tag, rec=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--tracks_dir', required=True)
-    ap.add_argument('--results', default=None, help='jsonl with the accuracy of each tag (optional)')
+    ap.add_argument('--tracks_dir', required=True, nargs='+', help='one or more directories (globs allowed)')
+    ap.add_argument('--results', default=None, nargs='+', help='jsonl(s) with the accuracy of each tag (optional)')
     ap.add_argument('--out', default=None)
     ap.add_argument('--min_cover', type=float, default=0.5)
     ap.add_argument('--labs', nargs='+', default=None)
@@ -110,16 +113,17 @@ def main():
     import pandas as pd
 
     recs = {}
-    if args.results and os.path.exists(args.results):
-        for line in open(args.results):
-            try:
-                r = json.loads(line)
-            except ValueError:
-                continue
-            if r.get('tag'):
-                recs[r['tag']] = r
+    for pattern in args.results or []:
+        for path in sorted(glob.glob(pattern)):
+            for line in open(path):
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get('tag'):
+                    recs[r['tag']] = r
     groups = defaultdict(list)
-    for f in sorted(glob.glob(os.path.join(args.tracks_dir, '*.h5'))):
+    for f in sorted(f for pattern in args.tracks_dir for f in glob.glob(os.path.join(pattern, '*.h5'))):
         tag = os.path.splitext(os.path.basename(f))[0]
         groups[recording_of(tag, recs.get(tag))].append((tag, f))
     rows = []

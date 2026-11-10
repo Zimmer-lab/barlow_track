@@ -3737,3 +3737,11 @@ run r261109-2105392 · pids 2105392 · host charles-Precision-7820-Tower · logs
 ## 2026-11-09 14:42 — decision
 
 r261109-2105392: one-job direct sweep via optimize_hyperparameters.py ran end to end (epochs 0, 12 frames, accuracy recorded in exp_results.jsonl); sensitivity_report.py reads it. The earlier custom dispatcher sensitivity_sweep.py (1d0fbe6) was a reinvention of optimize_hyperparameters --direct_parameter_sweep/--one_at_a_time_sweep/--repetitions and make_per_recording_rounds.py (the round_wk1 pattern); removed, replaced by scratch/round_sens_src (grids, launch_sensitivity.sh) and sensitivity_report.py.
+
+## 2026-11-10 14:42 — decision
+
+Handoff after round_shared_v1: user decisions 2026-11-09. (1) Sensitivity tests must reuse optimize_hyperparameters.py + make_per_recording_rounds.py (done: barlow_track/scripts/scratch/round_sens_src/, launch_sensitivity.sh stage|launch core|ablations, sensitivity_report.py; untested on cluster). (2) HDBSCAN-vs-labelprop and cross-dataset transfer: only base numbers on good (trial 59) networks, no sweeps; not yet run, needs trial_N/ staging of trial_59/<label>/resnet50.pth for run_trials_on_all_ground_truth.py (--cluster global, --labs). (3) Held-out headline numbers for all datasets first; if not good enough (likely Leifer) work on Leifer segmentation. (4) Samuel not resegmented (a261029-1 answered). Held-out command (needs full round path for -p, a bare round name fails): python barlow_track/scripts/optimize_shared_config.py -p /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files/round_shared_v1 --score_heldout --trials 59 50 56 54 --replicates 2 (user is running it on the cluster; results land in heldout_results.jsonl in the round dir). Order: held-out, then launch_sensitivity.sh launch core, then ablations.
+
+- [ ] Read heldout_results.jsonl and report headline accuracy for all datasets vs reference
+- [ ] Stage trial 59 checkpoints and run HDBSCAN vs labelprop plus cross-dataset transfer base numbers
+- [ ] If held-out (esp. Leifer) is weak, plan Leifer segmentation work

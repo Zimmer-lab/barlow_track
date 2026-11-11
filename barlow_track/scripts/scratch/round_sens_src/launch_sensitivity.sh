@@ -54,7 +54,10 @@ for R in "${expanded[@]}"; do
     for L in $LABELS; do
       D=$B/round_sens_${R}_$L
       [ -f $D/hyperparameter_search_template.yaml ] || { echo "$D is not staged (run stage first)"; exit 1; }
-      BARLOW_DISPATCHER=barlow_track/scripts/optimize_hyperparameters.py sbatch --job-name=sens_${R}_$L \
+      # Zimmer: the dispatcher's objective preflight opens the NWB project, and the cluster's wbfm reads the whole
+      # segmentation (no lazy flag), which needs more than the dispatcher's default 32G (OOM 2026-11-02 and -11-10)
+      case $L in zimmer_*) MEM=96G ;; *) MEM=32G ;; esac
+      BARLOW_DISPATCHER=barlow_track/scripts/optimize_hyperparameters.py sbatch --job-name=sens_${R}_$L --mem=$MEM \
           --output=$D/dispatcher_%j.log barlow_track/scripts/sbatch_dispatcher.sbatch \
           -p $D/hyperparameter_search_template.yaml ${FLAG[$R]} --repetitions ${REP[$R]} \
           --num_parallel_jobs $NUM_PARALLEL ${SKIP:+--skip_completed_grid_jobs}

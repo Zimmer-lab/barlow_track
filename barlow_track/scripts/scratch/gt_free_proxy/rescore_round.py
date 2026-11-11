@@ -28,6 +28,7 @@ import re
 import sys
 import time
 import traceback
+import zlib
 
 # settings of the recorded evaluation that are passed on unchanged
 _KEEP = ('lab', 'source', 'seed', 'descriptor_stage', 'center_per_volume', 'l2_per_volume', 'crop_window',
@@ -85,7 +86,9 @@ def run_shard(a, shard):
     """Score the cells of one shard in this process; returns the number of failed cells."""
     rd, name, out_jsonl, tracks_dir, emb_dir = paths(a)
     cells = select_cells(latest_records(os.path.join(rd, 'exp_results.jsonl')), a.trials, a.labs)
-    mine = [c for i, c in enumerate(cells) if i % a.num_shards == shard]
+    # by a hash of the tag, not the position in the list: shards start at different times and the round's
+    # jsonl can grow meanwhile (held-out cells), which shifts positions and left cells in no shard
+    mine = [c for c in cells if zlib.crc32(c['tag'].encode()) % a.num_shards == shard]
     print(f"{len(cells)} cells in {rd}; shard {shard}/{a.num_shards}: {len(mine)}; -> {out_jsonl}", flush=True)
     os.makedirs(tracks_dir, exist_ok=True)
     from barlow_track.scripts.eval_accuracy import evaluate_trained_checkpoint

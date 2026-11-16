@@ -16,6 +16,29 @@ def test_variant_name_ignores_per_recording_keys():
     assert sr.variant_name(dict(BASE, weight_decay='1e-06'), dict(BASE, weight_decay=1e-06)) == ''
 
 
+def test_crop_depth_is_a_variant_against_the_recordings_own_default():
+    # crop_depth round: z 16 on a z-8 recording is a variant, on Flavell (default 16) it is the control
+    assert sr.variant_name(dict(BASE, target_sz_z=16), BASE, 'samuel_137') == 'target_sz_z=16'
+    assert sr.variant_name(dict(BASE, target_sz_z=8), BASE, 'samuel_137') == ''
+    assert sr.variant_name(dict(BASE, target_sz_z=16), BASE, 'flavell_2022033002') == ''
+    assert sr.variant_name(dict(BASE, target_sz_z=8), BASE, 'flavell_2022033002') == 'target_sz_z=8'
+
+
+def test_repeated_control_trials_of_one_seed_are_all_kept(tmp_path):
+    d = tmp_path / 'round_sens_x_a'
+    d.mkdir()
+    recs = []
+    for n, (extra, acc) in enumerate([({}, 0.90), ({}, 0.94), ({'num_frames': 16}, 0.80)]):
+        (d / f'trial_{n}').mkdir()
+        (d / f'trial_{n}' / 'train_config.yaml').write_text(yaml.safe_dump(dict(BASE, **extra)))
+        recs.append(dict(tag=f'round_sens_x_a_trial{n}_a', accuracy=acc))
+    (d / 'exp_results.jsonl').write_text('\n'.join(json.dumps(r) for r in recs))
+    labels, rows = sr.summarize(sr.collect(str(tmp_path), 'round_sens_*', BASE))
+    by = {r['variant']: r for r in rows}
+    assert by['control']['n'] == 2 and by['control']['accuracy']['a'] == pytest.approx(0.92)
+    assert by['num_frames=16']['paired_diff'] == pytest.approx(-0.12)
+
+
 def test_pairs_by_seed_and_label(tmp_path):
     d = tmp_path / 'round_sens_x_a'
     d.mkdir()

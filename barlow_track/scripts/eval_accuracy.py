@@ -587,6 +587,10 @@ def _parse_args(argv=None):
     ap.add_argument('--save_tracks', default=None,
                     help='h5 to write the scored tracks to (keys gt, pred_matched, pred_all: one column per neuron '
                          'or predicted track, values in the matched ID space), for error analysis; one mode only')
+    ap.add_argument('--visnet_z_scale', type=float, default=None,
+                    help="mode=trained: replace the checkpoint's ViSNet z_scale (z / xy voxel size of its "
+                         "training recording) by this recording's, for a network scored on another "
+                         "recording; the embedding cache file gets a _zs<value> suffix")
     args = ap.parse_args(argv)
     _resolve_labelprop(args)
     _check_args(args)
@@ -668,6 +672,11 @@ def run_eval(args):
         _, tmodel, targs = load_barlow_model(args.weights)
         tmodel = tmodel.to(device).eval()
         t_target_sz = np.array(getattr(targs, 'target_sz', [targs.target_sz_z, targs.target_sz_xy, targs.target_sz_xy]))
+        if getattr(args, 'visnet_z_scale', None) is not None:
+            from barlow_track.utils.barlow_superglue import set_visnet_z_scale
+            n_enc = set_visnet_z_scale(tmodel, args.visnet_z_scale)
+            print(f"[{args.lab}] visnet_z_scale {getattr(targs, 'visnet_z_scale', None)} -> {args.visnet_z_scale} "
+                  f"({n_enc} encoder{'s' if n_enc != 1 else ''})", flush=True)
     if args.mode == 'trained':
         # The checkpoint carries its own architecture; the lab reference
         # weights are unused here, so don't load them (also avoids stale-arch
@@ -756,6 +765,9 @@ def run_eval(args):
             suffix += "_round"
         if nwb_all:
             suffix += "_allobj"
+        if mode == 'trained' and getattr(args, 'visnet_z_scale', None) is not None:
+            # another z stretch is another embedding of the same checkpoint and data
+            suffix += f"_zs{float(args.visnet_z_scale):g}"
         emb_dir = args.emb_dir or '/tmp/claude'
         os.makedirs(emb_dir, exist_ok=True)
         emb_tag = getattr(args, 'emb_tag', None) or args.tag
@@ -920,6 +932,11 @@ def run_eval(args):
                    gt_matching=getattr(args, 'gt_matching', 'nandist'),
                    crop_window=(getattr(args, 'crop_window', 'pad') if device.type == 'cuda' else 'cpu'),
                    crop_center='trunc' if args.source != 'nwb' and not _round_centers else 'round',
+                   visnet_z_scale=((args.visnet_z_scale if getattr(args, 'visnet_z_scale', None) is not None
+                                    else getattr(targs, 'visnet_z_scale', None)) if mode == 'trained' and targs
+                                   else None),
+                   visnet_z_scale_override=(getattr(args, 'visnet_z_scale', None) is not None
+                                            if mode == 'trained' else None),
                    nwb_objects=(getattr(args, 'nwb_objects', 'gt') if args.source == 'nwb' else None),
                    nwb_gt_mapping=(getattr(args, 'nwb_gt_mapping', 'centroid') if nwb_all else None),
                    nwb_arrays=('by_name' if args.source == 'nwb' else None),
@@ -1091,7 +1108,7 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
                                 track_device='cpu', skip_embed=True, extra_record=None,
                                 crop_window='pad', round_crop_centers=False, nwb_objects='gt',
                                 svd='scaled', gt_matching='nandist', nwb_gt_mapping='centroid',
-                                save_tracks=None):
+                                save_tracks=None, visnet_z_scale=None):
     """Track one trained checkpoint on `project` and return its accuracy record.
 
     Programmatic entry point used by the hyperparameter sweep's in-job
@@ -1117,7 +1134,7 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
         results_jsonl=results_jsonl, emb_dir=emb_dir, tag=tag, extra_record=extra_record,
         crop_window=crop_window, round_crop_centers=round_crop_centers, nwb_objects=nwb_objects,
         svd=svd, gt_matching=gt_matching, nwb_gt_mapping=nwb_gt_mapping, labelprop=labelprop,
-        save_tracks=save_tracks)
+        save_tracks=save_tracks, visnet_z_scale=visnet_z_scale)
     _resolve_labelprop(args)
     _check_args(args)
     return run_eval(args)[-1]

@@ -42,8 +42,18 @@ def _close(x, y):
         return False
 
 
-def variant_name(cfg, base):
-    """'k=v, k=v' over the keys where cfg differs from base (per-recording keys excluded); '' for the control."""
+def recording_target_sz_z(label, base):
+    """The crop depth a recording's rounds use by default (make_per_recording_rounds: Flavell 16, else the base's)."""
+    from barlow_track.scripts.scratch.make_per_recording_rounds import TARGET_SZ_Z
+    return TARGET_SZ_Z.get(str(label).split('_')[0], base.get('target_sz_z', 8))
+
+
+def variant_name(cfg, base, label=None):
+    """'k=v, k=v' over the keys where cfg differs from base (per-recording keys excluded); '' for the control.
+
+    target_sz_z is per recording (Flavell 16), so with label it is compared against that recording's
+    default instead of being ignored: the crop_depth round's other depth is a variant, not the control.
+    """
     a, b = flatten(cfg), flatten(base)
     diffs = []
     for k in sorted(set(a) | set(b)):
@@ -53,7 +63,9 @@ def variant_name(cfg, base):
         same = (x == y) or _close(x, y)
         if not same:
             diffs.append(f'{k}={x:.4g}' if isinstance(x, float) else f'{k}={x}')
-    return ', '.join(diffs)
+    if label is not None and 'target_sz_z' in cfg and int(cfg['target_sz_z']) != int(recording_target_sz_z(label, base)):
+        diffs.append(f"target_sz_z={int(cfg['target_sz_z'])}")
+    return ', '.join(sorted(diffs))
 
 
 def collect(rounds_dir, pattern, base):
@@ -77,22 +89,26 @@ def collect(rounds_dir, pattern, base):
             if not m or r.get('accuracy') is None or not os.path.exists(cfg_path):
                 continue
             cfg = yaml.safe_load(open(cfg_path))
-            rows.append((m.group(2), variant_name(cfg, base), int(cfg['seed']), float(r['accuracy'])))
+            rows.append((m.group(2), variant_name(cfg, base, m.group(2)), int(cfg['seed']), float(r['accuracy'])))
     return rows
 
 
 def summarize(rows):
-    """Per variant: mean accuracy per label, mean paired difference to the control (same label and seed)."""
-    acc = defaultdict(dict)  # variant -> (label, seed) -> accuracy
+    """Per variant: mean accuracy per label, mean paired difference to the control (same label and seed).
+
+    Several trials of one variant can share (label, seed) (the control runs in loss_volume and again in
+    crop_depth); each is kept, and a variant is paired with the mean of the control's trials of that seed.
+    """
+    acc = defaultdict(lambda: defaultdict(list))  # variant -> (label, seed) -> [accuracy, ...]
     for label, var, seed, a in rows:
-        acc[var][(label, seed)] = a
-    ctrl = acc.get('', {})
+        acc[var][(label, seed)].append(a)
+    ctrl = {k: float(np.mean(v)) for k, v in acc.get('', {}).items()}
     labels = sorted({l for l, *_ in rows})
     out = []
     for var, cells in acc.items():
-        per_label = {l: [a for (ll, s), a in cells.items() if ll == l] for l in labels}
-        diffs = [a - ctrl[k] for k, a in cells.items() if k in ctrl and var != '']
-        out.append(dict(variant=var or 'control', n=len(cells),
+        per_label = {l: [a for (ll, s), v in cells.items() if ll == l for a in v] for l in labels}
+        diffs = [a - ctrl[k] for k, v in cells.items() if k in ctrl and var != '' for a in v]
+        out.append(dict(variant=var or 'control', n=sum(len(v) for v in cells.values()),
                         accuracy={l: float(np.mean(v)) if v else None for l, v in per_label.items()},
                         paired_diff=float(np.mean(diffs)) if diffs else None,
                         paired_sd=float(np.std(diffs, ddof=1)) if len(diffs) > 1 else None, n_pairs=len(diffs)))

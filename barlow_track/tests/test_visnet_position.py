@@ -163,3 +163,17 @@ def test_radius_graph_keeps_the_nearest_neighbours_like_the_cluster():
         within = int((others <= 0.35).sum())
         assert set(nbrs.tolist()) == set(others.topk(min(8, within), largest=False).indices.tolist())
     assert (torch.bincount(got[1], minlength=len(x)) == 8).sum() > 60  # mostly capped
+
+
+def test_set_visnet_z_scale_overrides_a_loaded_models_encoder():
+    # scoring a network on another recording: the target's z / xy voxel size replaces the checkpoint's
+    from barlow_track.utils.barlow_superglue import set_visnet_z_scale
+    from barlow_track.utils.siamese import ResidualEncoder3D
+    base = dict(embedding_dim=16, projector='32', projector_final=16, lambd=0.0051,
+                position_encoder='visnet', fusion='position_only', visnet_hidden=16, visnet_layers=2,
+                visnet_z_scale=4.6)
+    kw = dict(backbone=ResidualEncoder3D, in_channels=1, num_levels=2, f_maps=4, crop_sz=(8, 16, 16))
+    model = BarlowWithPosition(SimpleNamespace(**base), **kw)
+    assert set_visnet_z_scale(model, 3.9) == 1 and model.visnet_enc.z_scale == 3.9
+    assert set_visnet_z_scale(model, 1.0) == 1 and model.visnet_enc.z_scale == 1.0
+    assert set_visnet_z_scale(torch.nn.Linear(2, 2), 3.9) == 0

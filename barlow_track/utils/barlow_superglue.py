@@ -470,6 +470,21 @@ class ViSNetPositionEncoder(nn.Module):
         return self.head(x)
 
 
+def set_visnet_z_scale(model, z_scale):
+    """Set z_scale on every ViSNetPositionEncoder inside model (None or 1 = voxel units).
+
+    For scoring a network on another recording than it was trained on: the z stretch is a property
+    of the data (z over xy voxel size), not a learned weight, so the target recording's value applies.
+    Returns how many encoders were changed (0: the model has no ViSNet, the call does nothing).
+    """
+    n = 0
+    for m in model.modules():
+        if isinstance(m, ViSNetPositionEncoder):
+            m.z_scale = float(z_scale) if z_scale else None
+            n += 1
+    return n
+
+
 class BarlowWithPosition(BarlowTwins3d):
     """BarlowTwins3d + KeypointEncoder position fusion (Step 2)."""
 

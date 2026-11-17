@@ -6,6 +6,7 @@
 #   bash $W status         # per sensitivity round: recorded / expected, dispatcher alive, trial jobs in the queue
 #   bash $W resume         # relaunch the dispatcher of every unfinished round whose dispatcher is gone
 #   bash $W sens_rescore   # v2 + saved tracks for every sensitivity round with unrescored cells (one GPU job each)
+#   bash $W sens_rescore_here  # the same on this machine's GPUs (login node; NGPU=2), no Slurm jobs
 #   bash $W sens_proxy     # cross-network proxy pooled over round_sens_* and round_shared_v1 (CPU job)
 #   bash $W transfer       # trial 59's network of each recording scored on the 11 others (132 cells, 8 GPU jobs)
 #   bash $W transfer_report
@@ -87,6 +88,32 @@ sens_rescore() {
   done
 }
 
+# The same rescore without Slurm, on this machine's GPUs (the login node's two): NGPU background processes, each
+# taking shard g of NGPU of every round with unrescored cells, round after round. nohup, so logging out does not
+# stop them; logs in $R/week47_logs/rescore_here_gpu<g>.log. Rounds with a Slurm rescore queued are left out.
+sens_rescore_here() {
+  local q; q=$(queue) ; local ngpu=${NGPU:-2}
+  if pgrep -u "$USER" -f 'rescore_round.py.*--shard' > /dev/null; then
+    echo "rescore_round.py shards already running here:"; pgrep -u "$USER" -af 'rescore_round.py.*--shard'; return 1
+  fi
+  local todo=()
+  for D in $B/round_sens_*/; do
+    D=${D%/}; local name; name=$(basename $D)
+    [ "$(recorded $D)" -gt "$(rescored $D)" ] || continue
+    in_queue "rescore_$name" "$q" && { echo "$name: Slurm rescore queued or running, left out"; continue; }
+    todo+=("$D")
+  done
+  echo "${#todo[@]} rounds with unrescored cells, $ngpu GPU process(es)"
+  [ ${#todo[@]} -gt 0 ] || return 0
+  for ((g = 0; g < ngpu; g++)); do
+    local cmd="for D in ${todo[*]}; do python -u $P/rescore_round.py --round_dir \$D --labelprop v2 --shard $g --num_shards $ngpu; done"
+    if [ -n "${DRY:-}" ]; then echo "DRY: CUDA_VISIBLE_DEVICES=$g OMP_NUM_THREADS=8 nohup bash -c '$cmd'"; continue; fi
+    CUDA_VISIBLE_DEVICES=$g OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 nohup bash -c "$cmd" \
+        > $R/week47_logs/rescore_here_gpu$g.log 2>&1 < /dev/null &
+    echo "GPU $g: pid $!, log $R/week47_logs/rescore_here_gpu$g.log"
+  done
+}
+
 sens_proxy() {
   run env BARLOW_DISPATCHER=$P/cross_network_proxy.py sbatch --job-name=proxy_sens_v2 --mem=64G \
       --output=$R/week47_logs/proxy_sens_v2_%j.log barlow_track/scripts/sbatch_dispatcher.sbatch \
@@ -104,7 +131,7 @@ transfer_report() {
   python $T --round_dir $R --trial 59 --labelprop v2 --report
 }
 
-case ${1:?status | resume | sens_rescore | sens_proxy | transfer | transfer_report} in
-  status|resume|sens_rescore|sens_proxy|transfer|transfer_report) $1 ;;
+case ${1:?status | resume | sens_rescore | sens_rescore_here | sens_proxy | transfer | transfer_report} in
+  status|resume|sens_rescore|sens_rescore_here|sens_proxy|transfer|transfer_report) $1 ;;
   *) echo "unknown stage $1"; exit 1 ;;
 esac

@@ -9,6 +9,8 @@
 #   bash $W sens_rescore_here  # the same on this machine's GPUs (login node; NGPU=2), no Slurm jobs
 #   bash $W sens_proxy     # cross-network proxy pooled over round_sens_* and round_shared_v1 (CPU job)
 #   bash $W transfer       # trial 59's network of each recording scored on the 11 others (132 cells, 8 GPU jobs)
+#   bash $W transfer_here  # the same on this machine's GPUs; rerun after a reboot (finished cells skip)
+#   (login-node stages: NGPU=2 processes, THREADS=8 CPU threads each, one stage at a time)
 #   bash $W transfer_report
 #   DRY=1 bash $W <stage>  # print the sbatch commands instead of submitting
 #
@@ -91,11 +93,31 @@ sens_rescore() {
 # The same rescore without Slurm, on this machine's GPUs (the login node's two): NGPU background processes, each
 # taking shard g of NGPU of every round with unrescored cells, round after round. nohup, so logging out does not
 # stop them; logs in $R/week47_logs/rescore_here_gpu<g>.log. Rounds with a Slurm rescore queued are left out.
+# Login-node runs: one nohup background process per GPU, $1 = log name, $2 = command with @G@ for the GPU index.
+# The CPU limit is per user, so only one login-node stage at a time: refused while another one's processes run.
+# numba (pynndescent's kNN graph) ignores OMP_NUM_THREADS, hence NUMBA_NUM_THREADS.
+HERE_PATTERN='(rescore_round|transfer_matrix)\.py.*--shard'
+here_busy() {
+  if pgrep -u "$USER" -f "$HERE_PATTERN" > /dev/null; then
+    echo "login-node runs already going (one stage at a time, the CPU limit is per user):"
+    pgrep -u "$USER" -af "$HERE_PATTERN"; return 0
+  fi
+  return 1
+}
+here_launch() {
+  local ngpu=${NGPU:-2} th=${THREADS:-8}
+  for ((g = 0; g < ngpu; g++)); do
+    local cmd=${2//@G@/$g}
+    if [ -n "${DRY:-}" ]; then echo "DRY: CUDA_VISIBLE_DEVICES=$g (${th} threads) nohup bash -c '$cmd'"; continue; fi
+    CUDA_VISIBLE_DEVICES=$g OMP_NUM_THREADS=$th MKL_NUM_THREADS=$th NUMBA_NUM_THREADS=$th nohup bash -c "$cmd" \
+        > $R/week47_logs/${1}_gpu$g.log 2>&1 < /dev/null &
+    echo "GPU $g: pid $!, log $R/week47_logs/${1}_gpu$g.log"
+  done
+}
+
 sens_rescore_here() {
   local q; q=$(queue) ; local ngpu=${NGPU:-2}
-  if pgrep -u "$USER" -f 'rescore_round.py.*--shard' > /dev/null; then
-    echo "rescore_round.py shards already running here:"; pgrep -u "$USER" -af 'rescore_round.py.*--shard'; return 1
-  fi
+  here_busy && return 1
   local todo=()
   for D in $B/round_sens_*/; do
     D=${D%/}; local name; name=$(basename $D)
@@ -105,13 +127,18 @@ sens_rescore_here() {
   done
   echo "${#todo[@]} rounds with unrescored cells, $ngpu GPU process(es)"
   [ ${#todo[@]} -gt 0 ] || return 0
-  for ((g = 0; g < ngpu; g++)); do
-    local cmd="for D in ${todo[*]}; do python -u $P/rescore_round.py --round_dir \$D --labelprop v2 --shard $g --num_shards $ngpu; done"
-    if [ -n "${DRY:-}" ]; then echo "DRY: CUDA_VISIBLE_DEVICES=$g OMP_NUM_THREADS=8 nohup bash -c '$cmd'"; continue; fi
-    CUDA_VISIBLE_DEVICES=$g OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 nohup bash -c "$cmd" \
-        > $R/week47_logs/rescore_here_gpu$g.log 2>&1 < /dev/null &
-    echo "GPU $g: pid $!, log $R/week47_logs/rescore_here_gpu$g.log"
-  done
+  here_launch rescore_here \
+      "for D in ${todo[*]}; do python -u $P/rescore_round.py --round_dir \$D --labelprop v2 --shard @G@ --num_shards $ngpu; done"
+}
+
+# transfer on the login node's GPUs. Per cell ~2-6 min embedding (GPU) + ~1-2 min tracking (kNN graph on CPU);
+# each cell is recorded as it finishes, so after a reboot rerun this and only the cells in progress are redone.
+transfer_here() {
+  local q; q=$(queue) ; local ngpu=${NGPU:-2}
+  here_busy && return 1
+  in_queue transfer_t59 "$q" && { echo "Slurm transfer_t59 dispatcher queued or running: not starting here"; return 1; }
+  here_launch transfer_here \
+      "python -u $T --round_dir $R --trial 59 --labelprop v2 --shard @G@ --num_shards $ngpu"
 }
 
 sens_proxy() {
@@ -131,7 +158,7 @@ transfer_report() {
   python $T --round_dir $R --trial 59 --labelprop v2 --report
 }
 
-case ${1:?status | resume | sens_rescore | sens_rescore_here | sens_proxy | transfer | transfer_report} in
-  status|resume|sens_rescore|sens_rescore_here|sens_proxy|transfer|transfer_report) $1 ;;
+case ${1:?status | resume | sens_rescore | sens_rescore_here | sens_proxy | transfer | transfer_here | transfer_report} in
+  status|resume|sens_rescore|sens_rescore_here|sens_proxy|transfer|transfer_here|transfer_report) $1 ;;
   *) echo "unknown stage $1"; exit 1 ;;
 esac

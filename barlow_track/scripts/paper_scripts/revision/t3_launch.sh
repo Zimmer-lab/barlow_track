@@ -4,12 +4,11 @@
 #
 #   cd /lisc/data/scratch/neurobiology/zimmer/wbfm/code/barlow_track && git pull
 #   X=barlow_track/scripts/paper_scripts/revision/t3_launch.sh
-#   bash $X smoke         # one cell (samuel 153, trial 59 rep 0) of each new variant, in this process; ~10-20 min
+#   bash $X smoke         # one cell (samuel 153, trial 59 rep 0) of each new variant, in this process; ~20-30 min
 #   bash $X labelprop     # v2_noE2, v2_noE3, v2_noexcl on all 36 trial-59 cells (12 recordings + 24 replicates)
-#   bash $X hdbscan       # HDBSCAN at the defaults on all 36 (as global_mcs0.5_ms0.02: new records with duplicate
-#                         # statistics; the older exp_results_global.jsonl has none), global_excl on all 36, and the
-#                         # other 8 grid settings on the 12 rep-0 cells
-#   bash $X excl_tuned    # after hdbscan + report: global_excl at each recording's GT-free tuned setting
+#   bash $X hdbscan       # the HDBSCAN 2 x 2 at the defaults on all 36 (global, global_soft, global_excl_hard,
+#                         # global_excl), and the other 8 grid settings of plain global on the 12 rep-0 cells
+#   bash $X excl_tuned    # after hdbscan: the other three cells of the 2 x 2 at each recording's GT-free tuned setting
 #   bash $X status        # cells recorded per variant
 #   bash $X report        # t3_report.py -> $R/t3_table.tsv
 #   DRY=1 bash $X <stage> # print the commands instead of submitting
@@ -41,7 +40,9 @@ case ${1:-} in
     for v in v2_noE2 v2_noE3 v2_noexcl; do
       run python $P --round_dir $R --trials 59 --labs samuel --no_replicates --labelprop $v 2>&1 | tail -3
     done
-    run python $P --round_dir $R --trials 59 --labs samuel --no_replicates --cluster global_excl 2>&1 | tail -3
+    for c in global global_soft global_excl_hard global_excl; do
+      run python $P --round_dir $R --trials 59 --labs samuel --no_replicates --cluster $c 2>&1 | tail -3
+    done
     ;;
   labelprop)
     for v in v2_noE2 v2_noE3 v2_noexcl; do
@@ -49,7 +50,10 @@ case ${1:-} in
     done
     ;;
   hdbscan)
-    dispatch global_excl --cluster global_excl --slurm $SHARDS
+    # outputs are named <cluster>_mcs<a>_ms<b> (rescore_round.variant_name), defaults spelled out
+    for c in global_soft global_excl_hard global_excl; do
+      dispatch $c --cluster $c --slurm $SHARDS
+    done
     for a in "${MCS[@]}"; do for b in "${MS[@]}"; do
       if [ "$a" = 0.5 ] && [ "$b" = 0.02 ]; then reps=(--slurm $SHARDS); else reps=(--no_replicates --slurm 2); fi
       dispatch global_mcs${a}_ms${b} --cluster global "${reps[@]}" \
@@ -57,22 +61,25 @@ case ${1:-} in
     done; done
     ;;
   excl_tuned)
-    # one dispatcher per distinct tuned setting, restricted to the recordings that chose it
+    # the rest of the 2 x 2 at each recording's tuned setting; one dispatcher per (cell, setting) for the recordings
+    # that chose it (the default setting already ran in the hdbscan stage)
     python barlow_track/scripts/paper_scripts/revision/t3_report.py --out $R/t3_table.tsv > /dev/null
     python - "$R/t3_table.tsv" <<'EOF' | while read -r a b labs; do
 import sys, re, collections
 import pandas as pd
 t = pd.read_csv(sys.argv[1], sep='\t', index_col=0)
 by = collections.defaultdict(list)
-for lab, s in t['hdbscan_tuned_setting'].dropna().items():
-    m = re.match(r'global_mcs([\d.]+)_ms([\d.]+)$', s)
-    if m and m.groups() != ('0.5', '0.02'):  # the default setting's global_excl runs in the hdbscan stage
+for lab, s in t.get('hdbscan_tuned', pd.Series(dtype=str)).dropna().items():
+    m = re.match(r'_mcs([\d.]+)_ms([\d.]+)$', s)
+    if m and m.groups() != ('0.5', '0.02'):
         by[m.groups()].append(lab)
 for (a, b), labs in by.items():
     print(a, b, ' '.join(labs))
 EOF
-      dispatch excl_mcs${a}_ms${b} --cluster global_excl --no_replicates --slurm 1 \
-          --hdbscan_min_cluster_size $a --hdbscan_min_samples $b --labs $labs
+      for c in global_soft global_excl_hard global_excl; do
+        dispatch ${c}_mcs${a}_ms${b} --cluster $c --no_replicates --slurm 1 \
+            --hdbscan_min_cluster_size $a --hdbscan_min_samples $b --labs $labs
+      done
     done
     ;;
   status)

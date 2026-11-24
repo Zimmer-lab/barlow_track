@@ -41,6 +41,10 @@ import torch
 
 from barlow_track.utils.labelprop_recipes import LABELPROP_RECIPES
 
+# global (HDBSCAN) clustering variants: name -> (labels_from, exclusivity) of track_using_global_clusterer
+GLOBAL_CLUSTER = {'global': ('hard', None), 'global_soft': ('soft', None),
+                  'global_excl_hard': ('hard', 'hungarian'), 'global_excl': ('soft', 'hungarian')}
+
 RESULTS = '/tmp/claude/exp_results.jsonl'
 
 # CUDA torch.quantile rejects inputs above its internal size cap
@@ -513,9 +517,16 @@ def _parse_args(argv=None):
     ap.add_argument('--max_frames', type=int, default=None)
     ap.add_argument('--mode', choices=['image', 'position', 'posonly', 'attention', 'trained', 'both'], default='both')
     ap.add_argument('--weights', default=None, help='trained checkpoint for mode=trained (load_barlow_model)')
-    ap.add_argument('--cluster', choices=['global', 'global_excl', 'labelprop'], default='labelprop',
-                    help="'labelprop' (default); 'global' = HDBSCAN on a UMAP of the SVD; 'global_excl' = the same "
-                         "HDBSCAN with label propagation's per-time Hungarian exclusivity on its soft membership")
+    ap.add_argument('--cluster', choices=['labelprop'] + sorted(GLOBAL_CLUSTER), default='labelprop',
+                    help="'labelprop' (default); 'global' = HDBSCAN on a UMAP of the SVD, hard labels. Exclusivity "
+                         "ablation (R2.3), crossing which objects get a label with per-time exclusivity: "
+                         "'global_soft' labels every object by HDBSCAN soft membership (noise included), "
+                         "'global_excl_hard' adds label propagation's per-time Hungarian step on the objects "
+                         "HDBSCAN labelled, 'global_excl' adds it on every object's soft membership")
+    ap.add_argument('--duplicate_rule', choices=['first', 'confidence'], default='first',
+                    help="global clustering without exclusivity: which object of a cluster repeated within a volume "
+                         "the track keeps: 'first' (default, historical) or 'confidence' (the most confident, as "
+                         "label propagation does with its final step off)")
     ap.add_argument('--hdbscan_min_cluster_size', type=float, default=None,
                     help='global clustering: HDBSCAN min_cluster_size, a fraction of the frames if < 1 '
                          '(default: the tracker default, 0.5)')
@@ -846,8 +857,10 @@ def run_eval(args):
                 num_seeds=args.num_seeds, device=resolve_track_device(args, device),
                 recipe=getattr(args, 'labelprop', 'legacy'))
         else:
+            labels_from, exclusivity = GLOBAL_CLUSTER[args.cluster]
             df_pred = tracker.track_using_global_clusterer(
-                exclusivity='hungarian' if args.cluster == 'global_excl' else None)
+                labels_from=labels_from, exclusivity=exclusivity,
+                duplicate_rule=getattr(args, 'duplicate_rule', 'first'))
         print(f"[{args.lab}/{mode}] tracked in {time.time()-t2:.0f}s; df {df_pred.shape}", flush=True)
         # GT-free self-consistency of the label-propagation run (agreement of the per-seed runs with
         # their consensus), recorded beside the accuracy; the shared sweep can optimize it
@@ -936,6 +949,7 @@ def run_eval(args):
                    cluster=args.cluster, num_seeds=args.num_seeds,
                    label_duplicates=getattr(tracker, 'label_duplicates', None),
                    hdbscan=(dict(tracker.opt_db, prediction_data=None) if args.cluster != 'labelprop' else None),
+                   duplicate_rule=(getattr(args, 'duplicate_rule', 'first') if args.cluster != 'labelprop' else None),
                    labelprop=getattr(args, 'labelprop', 'legacy'),
                    fuse_norm=bool(args.fuse_norm and mode == 'position'),
                    fusion=_fusion,
@@ -1125,7 +1139,7 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
                                 crop_window='pad', round_crop_centers=False, nwb_objects='gt',
                                 svd='scaled', gt_matching='nandist', nwb_gt_mapping='centroid',
                                 save_tracks=None, visnet_z_scale=None, hdbscan_min_cluster_size=None,
-                                hdbscan_min_samples=None):
+                                hdbscan_min_samples=None, duplicate_rule='first'):
     """Track one trained checkpoint on `project` and return its accuracy record.
 
     Programmatic entry point used by the hyperparameter sweep's in-job
@@ -1152,7 +1166,8 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
         crop_window=crop_window, round_crop_centers=round_crop_centers, nwb_objects=nwb_objects,
         svd=svd, gt_matching=gt_matching, nwb_gt_mapping=nwb_gt_mapping, labelprop=labelprop,
         save_tracks=save_tracks, visnet_z_scale=visnet_z_scale,
-        hdbscan_min_cluster_size=hdbscan_min_cluster_size, hdbscan_min_samples=hdbscan_min_samples)
+        hdbscan_min_cluster_size=hdbscan_min_cluster_size, hdbscan_min_samples=hdbscan_min_samples,
+        duplicate_rule=duplicate_rule)
     _resolve_labelprop(args)
     _check_args(args)
     return run_eval(args)[-1]

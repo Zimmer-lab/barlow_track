@@ -77,14 +77,23 @@ def select_cells(records, trials=None, labs=None, no_replicates=False):
     return cells
 
 
+HDBSCAN_DEFAULTS = (0.5, 0.02)  # WormClusterTracker's min_cluster_size / min_samples (fractions of the frames)
+
+
+def hdbscan_settings(a):
+    return (a.hdbscan_min_cluster_size if a.hdbscan_min_cluster_size is not None else HDBSCAN_DEFAULTS[0],
+            a.hdbscan_min_samples if a.hdbscan_min_samples is not None else HDBSCAN_DEFAULTS[1])
+
+
 def variant_name(a):
-    """Output name of a rescore setting: the recipe for labelprop; global / global_excl plus any HDBSCAN override."""
+    """Output name of a rescore setting: the recipe for labelprop; for global clustering the variant and its HDBSCAN
+    setting, always spelled out (global_mcs0.5_ms0.02 at the defaults). These rescores keep the most confident object
+    of a repeated (volume, cluster), so their records never join the older exp_results_global.jsonl (first object
+    kept, no setting in the name)."""
     if a.cluster == 'labelprop':
         return a.labelprop
-    name = a.cluster
-    if a.hdbscan_min_cluster_size is not None or a.hdbscan_min_samples is not None:
-        name += f'_mcs{a.hdbscan_min_cluster_size}_ms{a.hdbscan_min_samples}'
-    return name
+    mcs, ms = hdbscan_settings(a)
+    return f'{a.cluster}_mcs{mcs}_ms{ms}'
 
 
 def paths(a):
@@ -120,7 +129,8 @@ def run_shard(a, shard):
                 weights=c['weights'], project=c.get('project'), gt=c.get('gt'), tag=tag,
                 results_jsonl=out_jsonl, emb_dir=emb_dir, cluster=a.cluster, labelprop=a.labelprop,
                 track_device=a.track_device, save_tracks=tracks,
-                hdbscan_min_cluster_size=a.hdbscan_min_cluster_size, hdbscan_min_samples=a.hdbscan_min_samples,
+                **(dict(zip(('hdbscan_min_cluster_size', 'hdbscan_min_samples'), hdbscan_settings(a)),
+                        duplicate_rule='confidence') if a.cluster != 'labelprop' else {}),
                 extra_record=dict(rescore_of=os.path.join(rd, 'exp_results.jsonl'),
                                   recorded_accuracy=c['accuracy'], recorded_labelprop=c.get('labelprop') or 'legacy'),
                 **cell_kwargs(c))
@@ -184,7 +194,10 @@ def main():
     from barlow_track.utils.labelprop_recipes import LABELPROP_RECIPES
     ap.add_argument('--labelprop', choices=sorted(LABELPROP_RECIPES), default='v2',
                     help='label propagation recipe; v2_noE2 / v2_noE3 / v2_noexcl are the exclusivity ablations')
-    ap.add_argument('--cluster', choices=['labelprop', 'global', 'global_excl'], default='labelprop')
+    from barlow_track.scripts.eval_accuracy import GLOBAL_CLUSTER
+    ap.add_argument('--cluster', choices=['labelprop'] + sorted(GLOBAL_CLUSTER), default='labelprop',
+                    help='global*: HDBSCAN variants of the exclusivity ablation (eval_accuracy --help); they keep '
+                         'the most confident object of a repeated (volume, cluster)')
     ap.add_argument('--hdbscan_min_cluster_size', type=float, default=None,
                     help='global clustering: HDBSCAN min_cluster_size (fraction of frames if < 1); default 0.5')
     ap.add_argument('--hdbscan_min_samples', type=float, default=None,

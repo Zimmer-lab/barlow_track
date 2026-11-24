@@ -501,18 +501,25 @@ class WormClusterTracker:
         self.df_final = df_combined
         return df_combined
 
-    def track_using_global_clusterer(self, umap_projection=True, opt_umap=None, exclusivity=None):
+    def track_using_global_clusterer(self, umap_projection=True, opt_umap=None, exclusivity=None, labels_from='hard',
+                                     duplicate_rule='first'):
         """
         Track using a single clustering pass over the entire dataset
 
         See also track_using_overlapping_windows
 
-        exclusivity: None (default, historical) uses HDBSCAN's hard labels; a label repeated within a volume keeps
-        the object first in feature order (cluster_obj2dataframe). 'hungarian' instead assigns each volume's
-        objects to clusters one-to-one by HDBSCAN soft membership (all_points_membership_vectors), with the same
-        Hungarian step and 2% floor as label propagation's consensus (enforce_temporal_uniqueness_hungarian):
-        HDBSCAN with label propagation's per-time exclusivity (exclusivity ablation, reviewer R2.3).
-        Either way self.label_duplicates records the repeats of the labels before conversion.
+        Two independent choices (the exclusivity ablation, reviewer R2.3, crosses them):
+        labels_from: 'hard' (default, historical) uses HDBSCAN's labels, noise objects stay unlabelled; 'soft'
+            labels every object by its HDBSCAN soft membership (all_points_membership_vectors), above a 2% floor,
+            so objects HDBSCAN called noise can get a cluster.
+        exclusivity: None (default) lets a cluster repeat within a volume; 'hungarian' assigns each volume's objects
+            to clusters one-to-one on the soft membership with label propagation's own consensus step and 2% floor
+            (enforce_temporal_uniqueness_hungarian). With labels_from 'hard', only the objects HDBSCAN labelled
+            take part (noise rows are zeroed, so they stay unlabelled).
+        duplicate_rule: without exclusivity, which object of a repeated (volume, cluster) the track keeps: 'first'
+            (default, historical: first in feature order, cluster_obj2dataframe) or 'confidence' (the most
+            confident, as label propagation does when its final step is off).
+        self.label_duplicates records the repeats before they are resolved.
 
         Returns
         -------
@@ -543,27 +550,33 @@ class WormClusterTracker:
         db_svd = HDBSCAN(**opt_db).fit(X_umap)
         self.global_clusterer = db_svd
 
-        if exclusivity is None:
-            labels, probs = np.asarray(db_svd.labels_), np.asarray(db_svd.probabilities_)
-            self.label_duplicates = label_duplicate_stats(labels, probs, self.time_index_to_linear_feature_indices)
-            # Convert to dataframe
-            df_cluster = self.cluster_obj2dataframe(db_svd, start_volume=0, n_vols=self.num_frames,
-                                                    labels_are_in_feature_order=True)
-        elif exclusivity == 'hungarian':
+        if exclusivity not in (None, 'hungarian') or labels_from not in ('hard', 'soft') \
+                or duplicate_rule not in ('first', 'confidence'):
+            raise ValueError(f"exclusivity {exclusivity!r} (None | 'hungarian'), labels_from {labels_from!r} "
+                             f"('hard' | 'soft'), duplicate_rule {duplicate_rule!r} ('first' | 'confidence')")
+        t2l = self.time_index_to_linear_feature_indices
+        hard, hard_p = np.asarray(db_svd.labels_), np.asarray(db_svd.probabilities_)
+        if exclusivity is None and labels_from == 'hard':
+            labels, probs = hard, hard_p
+        else:
             import hdbscan
-            from barlow_track.utils.utils_spectral_relabeling import enforce_temporal_uniqueness_hungarian
-            membership = np.asarray(hdbscan.all_points_membership_vectors(db_svd))
+            from barlow_track.utils.utils_spectral_relabeling import (consensus_argmax,
+                                                                      enforce_temporal_uniqueness_hungarian)
+            membership = np.asarray(hdbscan.all_points_membership_vectors(db_svd), dtype=float)
             if membership.ndim == 1:  # a single cluster
                 membership = membership[:, None]
-            lab1, prob = enforce_temporal_uniqueness_hungarian(membership, self.time_index_to_linear_feature_indices,
-                                                               R=1)
-            labels = lab1[:, 0] - 1  # 1-based with -1 -> 0-based cluster ids with -1 (noise) as HDBSCAN's
-            labels[lab1[:, 0] == -1] = -1
-            self.label_duplicates = label_duplicate_stats(labels, prob[:, 0], self.time_index_to_linear_feature_indices)
-            df_cluster = self.cluster_obj2dataframe({'labels': labels, 'probabilities': prob[:, 0]}, start_volume=0,
-                                                    n_vols=self.num_frames, labels_are_in_feature_order=True)
-        else:
-            raise ValueError(f"exclusivity {exclusivity!r}; use None or 'hungarian'")
+            if labels_from == 'hard':
+                membership[hard < 0] = 0.0  # noise stays out: below the 2% floor, never assigned
+            step = enforce_temporal_uniqueness_hungarian if exclusivity == 'hungarian' else consensus_argmax
+            lab1, prob = step(membership, t2l, R=1)
+            labels = np.where(lab1[:, 0] > 0, lab1[:, 0] - 1, -1)  # 1-based -> HDBSCAN's 0-based, -1 = none
+            probs = prob[:, 0]
+        self.label_duplicates = label_duplicate_stats(labels, probs, t2l)
+        if exclusivity is None and duplicate_rule == 'confidence':
+            labels = keep_most_confident_per_label(labels, probs, t2l)
+        # first-wins (cluster_obj2dataframe) leaves nothing else to resolve after the two branches above
+        df_cluster = self.cluster_obj2dataframe({'labels': labels, 'probabilities': probs}, start_volume=0,
+                                                n_vols=self.num_frames, labels_are_in_feature_order=True)
 
         return df_cluster
     

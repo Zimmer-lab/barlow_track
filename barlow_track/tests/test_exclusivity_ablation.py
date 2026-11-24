@@ -75,20 +75,50 @@ def test_v2_has_no_repeated_labels():
     assert tr.label_duplicates['n_duplicate_objects'] == 0
 
 
-def _global(exclusivity):
+def _global(**kw):
     Xs, t2l, l2t = _drifting_blobs(n_times=40)
     tr = WormClusterTracker(Xs, dict(t2l), linear_ind_to_t_and_seg_id=l2t, seed=0, verbose=0,
                             opt_db=dict(min_cluster_size=0.3, min_samples=0.1))
-    df = tr.track_using_global_clusterer(umap_projection=False, exclusivity=exclusivity)
+    df = tr.track_using_global_clusterer(umap_projection=False, **kw)
     return tr, df
 
 
-def test_hdbscan_with_exclusivity_has_no_repeated_labels_and_plain_hdbscan_is_unchanged():
-    tr_plain, df_plain = _global(None)
-    np.testing.assert_array_equal(tr_plain.global_clusterer.labels_ >= -1, True)
-    assert tr_plain.label_duplicates['n_objects'] == len(tr_plain.X_svd)
-    tr_ex, df_ex = _global('hungarian')
-    assert tr_ex.label_duplicates['n_duplicate_objects'] == 0
-    assert tr_ex.label_duplicates['n_labelled'] > 0
-    with pytest.raises(ValueError):
-        _global('greedy')
+def _labelled_objects(tr, df):
+    """Linear indices of the objects the track dataframe holds."""
+    lin = {(t, int(r)): i for i, (t, r) in
+           ((i, (tr.dict_linear_index_to_time[i], tr.get_raw_neuron_ind_from_linear_ind(i))) for i in range(len(tr.X_svd)))}
+    cols = [c for c in df.columns if c[1] == 'raw_neuron_ind_in_list']
+    out = set()
+    for c in cols:
+        for t, v in df[c].dropna().items():
+            out.add(lin[(int(t), int(v))])
+    return out
+
+
+def test_plain_hdbscan_keeps_its_hard_labels():
+    tr, df = _global()
+    hard = tr.global_clusterer.labels_
+    assert _labelled_objects(tr, df) <= set(np.flatnonzero(hard >= 0))
+    assert tr.label_duplicates['n_labelled'] == int((hard >= 0).sum())
+
+
+@pytest.mark.parametrize('labels_from', ['hard', 'soft'])
+def test_hdbscan_with_exclusivity_has_no_repeats(labels_from):
+    tr, df = _global(exclusivity='hungarian', labels_from=labels_from)
+    assert tr.label_duplicates['n_duplicate_objects'] == 0
+    assert tr.label_duplicates['n_labelled'] > 0
+    if labels_from == 'hard':  # noise stays unlabelled: exclusivity only among the objects HDBSCAN labelled
+        assert _labelled_objects(tr, df) <= set(np.flatnonzero(tr.global_clusterer.labels_ >= 0))
+
+
+def test_soft_labels_reach_objects_hdbscan_called_noise():
+    tr, df = _global(labels_from='soft', duplicate_rule='confidence')
+    noise = set(np.flatnonzero(tr.global_clusterer.labels_ < 0))
+    assert noise, 'toy data should have noise objects'
+    assert _labelled_objects(tr, df) & noise
+
+
+def test_global_rejects_unknown_options():
+    for kw in (dict(exclusivity='greedy'), dict(labels_from='both'), dict(duplicate_rule='last')):
+        with pytest.raises(ValueError):
+            _global(**kw)

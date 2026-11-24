@@ -1,6 +1,6 @@
 """GT neuron positions per benchmark recording, cached, and the saved tracks' per-neuron / per-frame accuracy.
 
-Shared by deformation_table.py (TEST_PLAN T1) and modality_contribution.py (T2).
+Shared by t1_deformation_table.py (TEST_PLAN T1) and t2_modality_contribution.py (T2).
 
 Positions are (T, N, 3) in (z, x, y), z multiplied by the recording's ViSNet z_scale (the value its trial-59 network
 used: xy voxels per z voxel), so distances are in roughly isotropic xy-voxel units. Every analysis divides them by

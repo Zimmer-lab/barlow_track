@@ -3,7 +3,7 @@
 # no embedding: every cell re-tracks round_shared_v1/emb_cache). Run on the login node:
 #
 #   cd /lisc/data/scratch/neurobiology/zimmer/wbfm/code/barlow_track && git pull
-#   X=barlow_track/scripts/scratch/exclusivity_ablation/launch_t3.sh
+#   X=barlow_track/scripts/paper_scripts/revision/t3_launch.sh
 #   bash $X smoke         # one cell (samuel 153, trial 59 rep 0) of each new variant, in this process; ~10-20 min
 #   bash $X labelprop     # v2_noE2, v2_noE3, v2_noexcl on all 36 trial-59 cells (12 recordings + 24 replicates)
 #   bash $X hdbscan       # HDBSCAN at the defaults on all 36 (as global_mcs0.5_ms0.02: new records with duplicate
@@ -58,7 +58,7 @@ case ${1:-} in
     ;;
   excl_tuned)
     # one dispatcher per distinct tuned setting, restricted to the recordings that chose it
-    python barlow_track/scripts/scratch/exclusivity_ablation/t3_report.py --out $R/t3_table.tsv > /dev/null
+    python barlow_track/scripts/paper_scripts/revision/t3_report.py --out $R/t3_table.tsv > /dev/null
     python - "$R/t3_table.tsv" <<'EOF' | while read -r a b labs; do
 import sys, re, collections
 import pandas as pd
@@ -83,7 +83,7 @@ EOF
     squeue -u "$USER" -h -o '%i %j %T' | grep ' t3_' || echo "no t3 dispatchers in the queue"
     ;;
   report)
-    python barlow_track/scripts/scratch/exclusivity_ablation/t3_report.py --out $R/t3_table.tsv
+    python barlow_track/scripts/paper_scripts/revision/t3_report.py --out $R/t3_table.tsv
     ;;
   *)
     echo "usage: $0 smoke|labelprop|hdbscan|excl_tuned|status|report"; exit 1 ;;

@@ -10,7 +10,7 @@ trials sharing a seed (the control in loss_volume and again in crop_depth) are a
 2. t2_neurons_<lab>.tsv and t2_neuron_summary.tsv: per GT neuron, accuracy of each variant from the v2 tracks (mean
    over seeds), delta_pos = fused - position-only, delta_img = fused - image-only, and neuron features: median NN
    distance to other GT neurons and local GT density (GT neighbours within 2 NN) in units of the detection NN, the fraction of frames without GT (gaps), and the
-   non-rigid residual at lag 10 (deformation_table.py). Summary: the aggregate gap (frame-weighted, equals the
+   non-rigid residual at lag 10 (t1_deformation_table.py). Summary: the aggregate gap (frame-weighted, equals the
    accuracy difference), the share of it carried by the top 10% of neurons, and Spearman of delta with each feature.
 3. t2_frame_deciles.tsv: per-frame delta_pos by decile of T1's d_novel (needs t1_frames_<lab>.tsv), with each
    decile's error of both variants and their ratio (position-only / fused). A growing point gap alone can be a
@@ -19,8 +19,8 @@ trials sharing a seed (the control in loss_volume and again in crop_depth) are a
 
 Brightness is not among the features yet (needs the red channel).
 
-Usage (wbfm env, from the repo root; run deformation_table.py first for the deformation features):
-  PYTHONPATH=.:barlow_track/scripts/scratch/revision_t1_t2 python barlow_track/scripts/scratch/revision_t1_t2/modality_contribution.py \
+Usage (wbfm env, from the repo root; run t1_deformation_table.py first for the deformation features):
+  python barlow_track/scripts/paper_scripts/revision/t2_modality_contribution.py \
       --out /lisc/.../barlow_track_revisions/revision_analysis
 """
 import argparse
@@ -35,7 +35,7 @@ import pandas as pd
 import yaml
 from scipy.stats import spearmanr
 
-from gt_positions import ROUNDS, TUNING, aligned, detection_nn, load_positions, track_accuracy
+from barlow_track.scripts.paper_scripts.revision.gt_positions import ROUNDS, TUNING, aligned, detection_nn, load_positions, track_accuracy
 from barlow_track.scripts.sensitivity_report import BASE, variant_name
 
 VARIANTS = {'': 'fused', 'fusion=position_only': 'position_only', 'fusion=visual_only': 'image_only',
@@ -89,7 +89,7 @@ def modality_table(cells):
 def neuron_features(lab, valid, out_dir):
     """Per GT neuron (valid's columns): median NN distance and density in NN units, gap fraction, lag-10 deformation."""
     pos, names, index = load_positions(lab, os.path.join(out_dir, 'cache'))
-    nn = detection_nn(lab, os.path.join(out_dir, 'cache'))['nn_det']  # same unit as deformation_table.py
+    nn = detection_nn(lab, os.path.join(out_dir, 'cache'))['nn_det']  # same unit as t1_deformation_table.py
     p, coverage = aligned(pos, names, index, valid)
     nn_i, dens = [[] for _ in range(p.shape[1])], [[] for _ in range(p.shape[1])]
     for t in range(0, len(p), 5):

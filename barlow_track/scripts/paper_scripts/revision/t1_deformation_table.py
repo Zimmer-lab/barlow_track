@@ -20,10 +20,10 @@ distances and the GT's share of detections.
 3. Accuracy by decile of d_novel and d_lag1 (t1_deciles.tsv), the top-decile drop and the Spearman correlation.
 4. The 5 most deformed non-overlapping 20-frame segments per recording (t1_segments.tsv): candidates for the
    multi-frame figure and the supplementary videos.
-5. Per-neuron non-rigid residual / NN at lag 10 (neuron_deformation_<lab>.npz), used by modality_contribution.py.
+5. Per-neuron non-rigid residual / NN at lag 10 (neuron_deformation_<lab>.npz), used by t2_modality_contribution.py.
 
 Usage (wbfm env, from the repo root):
-  PYTHONPATH=.:barlow_track/scripts/scratch/revision_t1_t2 python barlow_track/scripts/scratch/revision_t1_t2/deformation_table.py \
+  python barlow_track/scripts/paper_scripts/revision/t1_deformation_table.py \
       --out /lisc/.../barlow_track_revisions/revision_analysis [--labs zimmer_1128 samuel_137]
 """
 import argparse
@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from gt_positions import GT_PATHS, ROUNDS, VPS, detection_nn, load_positions, nn_distance, similarity_fit, track_accuracy
+from barlow_track.scripts.paper_scripts.revision.gt_positions import GT_PATHS, ROUNDS, VPS, detection_nn, load_positions, nn_distance, similarity_fit, track_accuracy
 
 LAGS_S = (1, 10, 60)  # seconds; plus the 1-volume lag
 MIN_POINTS = 10

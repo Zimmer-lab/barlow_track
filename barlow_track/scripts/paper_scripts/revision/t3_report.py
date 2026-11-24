@@ -18,7 +18,7 @@ best grid setting by accuracy is reported next to it as an upper bound (GT-selec
 
 Prints one table (recording x variant, accuracy mean over replicates and duplicate fraction) and writes it as tsv.
 
-    python barlow_track/scripts/scratch/exclusivity_ablation/t3_report.py [--out t3_table.tsv]
+    python barlow_track/scripts/paper_scripts/revision/t3_report.py [--out t3_table.tsv]
 """
 import argparse
 import glob
@@ -119,7 +119,7 @@ def main():
             rows[lab]['hdbscan_tuned_setting'] = choice
             rows[lab]['hdbscan_tuned_acc'] = cands[choice]['accuracy']
             rows[lab]['hdbscan_tuned_dup'] = dup(cands[choice])
-            # HDBSCAN + exclusivity at the tuned setting (launch_t3.sh excl_tuned); the default is global_excl
+            # HDBSCAN + exclusivity at the tuned setting (t3_launch.sh excl_tuned); the default is global_excl
             excl = 'global_excl' if choice == DEFAULT else 'global_excl' + choice[len('global'):]
             ex = [r for r in trial59(latest(os.path.join(a.round_dir, f'exp_results_{excl}.jsonl')), True).values()
                   if r['lab'] == lab]

@@ -781,8 +781,12 @@ def run_eval(args):
             suffix += "_centered"
         if args.l2_per_volume:
             suffix += "_l2"
-        if getattr(args, 'crop_window', 'pad') == 'slide' and device.type == 'cuda':
-            suffix += "_slide"
+        slide_at = None  # where a GPU run's "_slide" sits in the name (see the CPU cache reuse below)
+        if getattr(args, 'crop_window', 'pad') == 'slide':
+            if device.type == 'cuda':
+                suffix += "_slide"
+            else:
+                slide_at = len(suffix)
         if _round_centers:
             suffix += "_round"
         if nwb_all:
@@ -796,6 +800,18 @@ def run_eval(args):
         tag_suffix = f"_{emb_tag}" if emb_tag else ""
         emb_path = os.path.join(emb_dir, f'emb_{args.lab}_{suffix}{tag_suffix}.npz')
         cache_key = _embedding_cache_key(args)
+        # A CPU run asked for the sliding crop window reads the GPU's "_slide" cache when it has none of its own:
+        # the CPU crop path is that same sliding window (CPU and GPU embeddings of one checkpoint agree row for
+        # row, median relative difference ~1e-4, 2026-11-16), but only GPU runs put "_slide" in the file name, so
+        # every CPU re-tracking job re-embedded the whole video (2026-11-11). The checkpoint / data key is checked
+        # as for any cache; a fresh CPU embedding is still saved under the CPU name.
+        emb_save_path = emb_path  # a new embedding is always saved under this run's own name
+        if slide_at is not None and args.skip_embed and not os.path.exists(emb_path):
+            gpu_path = os.path.join(emb_dir, f'emb_{args.lab}_{suffix[:slide_at]}_slide{suffix[slide_at:]}'
+                                             f'{tag_suffix}.npz')
+            if os.path.exists(gpu_path):
+                print(f"[{args.lab}/{mode}] CPU run: reading the GPU embedding cache {gpu_path}", flush=True)
+                emb_path = gpu_path
         if args.skip_embed and os.path.exists(emb_path):
             cached = _load_cached_embeddings(emb_path, expected_n_frames=n_frames, expected_key=cache_key)
             if cached is not None:
@@ -806,6 +822,7 @@ def run_eval(args):
         else:
             did_embed = True
         if did_embed:
+            emb_path = emb_save_path  # never overwrite the GPU cache that was read but rejected
             t1 = time.time()
             X_parts, time_to_lin, lin_to_t_seg = [], defaultdict(list), {}
             i_lin = 0

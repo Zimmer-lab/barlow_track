@@ -4,25 +4,30 @@
 #
 #   cd /lisc/data/scratch/neurobiology/zimmer/wbfm/code/barlow_track && git pull
 #   X=barlow_track/scripts/paper_scripts/revision/t3_launch.sh
-#   bash $X smoke         # one cell (samuel 153, trial 59 rep 0) of each new variant, in this process; ~20-30 min
-#   bash $X labelprop     # v2_noE2, v2_noE3, v2_noexcl on all 36 trial-59 cells (12 recordings + 24 replicates)
-#   bash $X hdbscan       # the HDBSCAN 2 x 2 at the defaults on all 36 (global, global_soft, global_excl_hard,
-#                         # global_excl), and the other 8 grid settings of plain global on the 12 rep-0 cells
-#   bash $X excl_tuned    # after hdbscan: the other three cells of the 2 x 2 at each recording's GT-free tuned setting
-#   bash $X status        # cells recorded per variant
-#   bash $X report        # t3_report.py -> $R/t3_table.tsv
-#   DRY=1 bash $X <stage> # print the commands instead of submitting
+#   bash $X smoke           # samuel 153 rep 0: the 3 recipes on this node's GPU, the 4 HDBSCAN cells on its CPU
+#   bash $X labelprop_here  # v2_noE2, v2_noE3, v2_noexcl on all 36 trial-59 cells on this node's GPUs (NGPU=2
+#                           # nohup processes, ~9 GPU-hours in all, so ~half a day); no Slurm jobs
+#   bash $X labelprop       # the same as Slurm GPU jobs instead (SHARDS per variant), if the login GPUs are busy
+#   bash $X hdbscan         # CPU Slurm jobs: the HDBSCAN 2 x 2 at the defaults on all 36 (global, global_soft,
+#                           # global_excl_hard, global_excl) and the other 8 grid settings of plain global on the
+#                           # 12 rep-0 cells
+#   bash $X excl_tuned      # after hdbscan (CPU jobs): the other three 2 x 2 cells at each recording's tuned setting
+#   bash $X status          # cells recorded per variant
+#   bash $X report          # t3_report.py -> $R/t3_table.tsv
+#   DRY=1 bash $X <stage>   # print the commands instead of submitting
 #
-# Every stage is a rescore_round.py dispatcher (sbatch_dispatcher.sbatch, submitit shard jobs with the sweeps'
-# GPU job parameters). GPU jobs even for HDBSCAN: the cached embeddings are keyed by the GPU crop window, and a
-# CPU job misses them and re-embeds every cell on CPU (happened with the first HDBSCAN run, 2026-11-11).
+# Every Slurm stage is a rescore_round.py dispatcher (sbatch_dispatcher.sbatch, submitit shard jobs with the
+# sweeps' job parameters). Label propagation runs on a GPU (~5 min a cell). HDBSCAN is CPU work (UMAP, HDBSCAN,
+# soft membership), so its cells run as CPU jobs (cpu_eval_job_params: 16 CPUs, 64G) with --track_device cpu;
+# they read the GPU-made embedding cache (eval_accuracy reuses a "_slide" cache on CPU), so nothing is re-embedded.
 # Finished cells skip on a rerun, so any stage can be relaunched after a failure.
 set -euo pipefail
 B=${B:-/lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/config_files}
 CODE=${CODE:-/lisc/data/scratch/neurobiology/zimmer/wbfm/code/barlow_track}
 R=$B/round_shared_v1
 P=barlow_track/scripts/scratch/gt_free_proxy/rescore_round.py
-SHARDS=${SHARDS:-4}
+SHARDS=${SHARDS:-4}          # GPU shards per label propagation variant (labelprop stage)
+CPU_SHARDS=${CPU_SHARDS:-12}  # CPU shards per 36-cell HDBSCAN variant; grid settings (12 cells) get half
 cd "$CODE"
 mkdir -p $R/t3_logs
 
@@ -41,7 +46,24 @@ case ${1:-} in
       run python $P --round_dir $R --trials 59 --labs samuel --no_replicates --labelprop $v 2>&1 | tail -3
     done
     for c in global global_soft global_excl_hard global_excl; do
-      run python $P --round_dir $R --trials 59 --labs samuel --no_replicates --cluster $c 2>&1 | tail -3
+      run env CUDA_VISIBLE_DEVICES= python $P --round_dir $R --trials 59 --labs samuel --no_replicates --cluster $c \
+          --track_device cpu 2>&1 | tail -3
+    done
+    ;;
+  labelprop_here)
+    # one nohup process per login-node GPU, each taking shard g of NGPU of every variant in turn (as
+    # round_week47/launch_week.sh's *_here stages); logs in $R/t3_logs/labelprop_here_gpu<g>.log
+    if pgrep -u "$USER" -f 'rescore_round\.py.*--shard' > /dev/null; then
+      echo "login-node rescores already running (one stage at a time):"; pgrep -u "$USER" -af 'rescore_round\.py.*--shard'
+      exit 1
+    fi
+    ngpu=${NGPU:-2}; th=${THREADS:-8}
+    for ((g = 0; g < ngpu; g++)); do
+      cmd="for v in v2_noE2 v2_noE3 v2_noexcl; do python -u $P --round_dir $R --trials 59 --labelprop \$v --shard $g --num_shards $ngpu; done"
+      if [ -n "${DRY:-}" ]; then echo "DRY: CUDA_VISIBLE_DEVICES=$g nohup bash -c '$cmd'"; continue; fi
+      CUDA_VISIBLE_DEVICES=$g OMP_NUM_THREADS=$th MKL_NUM_THREADS=$th NUMBA_NUM_THREADS=$th nohup bash -c "$cmd" \
+          > $R/t3_logs/labelprop_here_gpu$g.log 2>&1 < /dev/null &
+      echo "GPU $g: pid $!, log $R/t3_logs/labelprop_here_gpu$g.log"
     done
     ;;
   labelprop)
@@ -52,11 +74,12 @@ case ${1:-} in
   hdbscan)
     # outputs are named <cluster>_mcs<a>_ms<b> (rescore_round.variant_name), defaults spelled out
     for c in global_soft global_excl_hard global_excl; do
-      dispatch $c --cluster $c --slurm $SHARDS
+      dispatch $c --cluster $c --track_device cpu --slurm $CPU_SHARDS
     done
     for a in "${MCS[@]}"; do for b in "${MS[@]}"; do
-      if [ "$a" = 0.5 ] && [ "$b" = 0.02 ]; then reps=(--slurm $SHARDS); else reps=(--no_replicates --slurm 2); fi
-      dispatch global_mcs${a}_ms${b} --cluster global "${reps[@]}" \
+      if [ "$a" = 0.5 ] && [ "$b" = 0.02 ]; then reps=(--slurm $CPU_SHARDS)
+      else reps=(--no_replicates --slurm $((CPU_SHARDS / 2))); fi
+      dispatch global_mcs${a}_ms${b} --cluster global --track_device cpu "${reps[@]}" \
           --hdbscan_min_cluster_size $a --hdbscan_min_samples $b
     done; done
     ;;
@@ -77,7 +100,7 @@ for (a, b), labs in by.items():
     print(a, b, ' '.join(labs))
 EOF
       for c in global_soft global_excl_hard global_excl; do
-        dispatch ${c}_mcs${a}_ms${b} --cluster $c --no_replicates --slurm 1 \
+        dispatch ${c}_mcs${a}_ms${b} --cluster $c --track_device cpu --no_replicates --slurm 2 \
             --hdbscan_min_cluster_size $a --hdbscan_min_samples $b --labs $labs
       done
     done
@@ -93,5 +116,5 @@ EOF
     python barlow_track/scripts/paper_scripts/revision/t3_report.py --out $R/t3_table.tsv
     ;;
   *)
-    echo "usage: $0 smoke|labelprop|hdbscan|excl_tuned|status|report"; exit 1 ;;
+    echo "usage: $0 smoke|labelprop_here|labelprop|hdbscan|excl_tuned|status|report"; exit 1 ;;
 esac

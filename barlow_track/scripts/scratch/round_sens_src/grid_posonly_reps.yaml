@@ -1,0 +1,13 @@
+# Sensitivity tests around the frozen round_shared_v1 trial 59 recipe (base_train_config.yaml), one network per recording,
+# scored by full-video tracking accuracy in the training GPU job (objective: accuracy, set per recording by
+# make_per_recording_rounds.py).
+# Position-only replicates: the one-at-a-time round has a single fusion=position_only network per recording (recipe seed),
+# against ~5 controls, while different seeds span ~2 pt. These two add replicates 1 and 2 with the seeds the
+# loss_volume control replicates used (replicate_seed(769243397, 1) and (.., 2)), so sensitivity_report.py pairs them
+# with those controls by seed. The sweep samples `seed` itself, which overrides the replicate-seed policy.
+objective_minutes: 1440
+train_hours: 72
+
+hyperparameters:
+  - {name: fusion, type: choice, values: [position_only]}
+  - {name: seed, type: choice, values: [763277047, 3712540559]}

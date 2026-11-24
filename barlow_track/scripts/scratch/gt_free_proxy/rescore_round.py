@@ -60,7 +60,7 @@ def cell_kwargs(rec):
     return kw
 
 
-def select_cells(records, trials=None, labs=None):
+def select_cells(records, trials=None, labs=None, no_replicates=False):
     cells = []
     for tag in sorted(records):
         rec = records[tag]
@@ -69,15 +69,27 @@ def select_cells(records, trials=None, labs=None):
         m = re.search(r'_trial(\d+)(r\d+)?_', tag)
         if trials and (m is None or int(m.group(1)) not in trials):
             continue
+        if no_replicates and m is not None and m.group(2):
+            continue
         if labs and rec.get('lab') not in labs:
             continue
         cells.append(rec)
     return cells
 
 
+def variant_name(a):
+    """Output name of a rescore setting: the recipe for labelprop; global / global_excl plus any HDBSCAN override."""
+    if a.cluster == 'labelprop':
+        return a.labelprop
+    name = a.cluster
+    if a.hdbscan_min_cluster_size is not None or a.hdbscan_min_samples is not None:
+        name += f'_mcs{a.hdbscan_min_cluster_size}_ms{a.hdbscan_min_samples}'
+    return name
+
+
 def paths(a):
     rd = os.path.abspath(a.round_dir)
-    name = 'global' if a.cluster == 'global' else a.labelprop
+    name = variant_name(a)
     return (rd, name, a.out_jsonl or os.path.join(rd, f'exp_results_{name}.jsonl'),
             a.tracks_dir or os.path.join(rd, f'tracks_{name}'), a.emb_dir or os.path.join(rd, 'emb_cache'))
 
@@ -85,7 +97,7 @@ def paths(a):
 def run_shard(a, shard):
     """Score the cells of one shard in this process; returns the number of failed cells."""
     rd, name, out_jsonl, tracks_dir, emb_dir = paths(a)
-    cells = select_cells(latest_records(os.path.join(rd, 'exp_results.jsonl')), a.trials, a.labs)
+    cells = select_cells(latest_records(os.path.join(rd, 'exp_results.jsonl')), a.trials, a.labs, a.no_replicates)
     # by a hash of the tag, not the position in the list: shards start at different times and the round's
     # jsonl can grow meanwhile (held-out cells), which shifts positions and left cells in no shard
     mine = [c for c in cells if zlib.crc32(c['tag'].encode()) % a.num_shards == shard]
@@ -108,6 +120,7 @@ def run_shard(a, shard):
                 weights=c['weights'], project=c.get('project'), gt=c.get('gt'), tag=tag,
                 results_jsonl=out_jsonl, emb_dir=emb_dir, cluster=a.cluster, labelprop=a.labelprop,
                 track_device=a.track_device, save_tracks=tracks,
+                hdbscan_min_cluster_size=a.hdbscan_min_cluster_size, hdbscan_min_samples=a.hdbscan_min_samples,
                 extra_record=dict(rescore_of=os.path.join(rd, 'exp_results.jsonl'),
                                   recorded_accuracy=c['accuracy'], recorded_labelprop=c.get('labelprop') or 'legacy'),
                 **cell_kwargs(c))
@@ -165,10 +178,19 @@ def dispatch(a):
 
 
 def main():
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), *['..'] * 4)))  # repo root
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--round_dir', required=True)
-    ap.add_argument('--labelprop', choices=['legacy', 'v2'], default='v2')
-    ap.add_argument('--cluster', choices=['labelprop', 'global'], default='labelprop')
+    from barlow_track.utils.labelprop_recipes import LABELPROP_RECIPES
+    ap.add_argument('--labelprop', choices=sorted(LABELPROP_RECIPES), default='v2',
+                    help='label propagation recipe; v2_noE2 / v2_noE3 / v2_noexcl are the exclusivity ablations')
+    ap.add_argument('--cluster', choices=['labelprop', 'global', 'global_excl'], default='labelprop')
+    ap.add_argument('--hdbscan_min_cluster_size', type=float, default=None,
+                    help='global clustering: HDBSCAN min_cluster_size (fraction of frames if < 1); default 0.5')
+    ap.add_argument('--hdbscan_min_samples', type=float, default=None,
+                    help='global clustering: HDBSCAN min_samples (fraction of frames if < 1); default 0.02')
+    ap.add_argument('--no_replicates', action='store_true',
+                    help='skip replicate cells (tags _trial<N>r<k>_), e.g. for a parameter grid')
     ap.add_argument('--trials', nargs='+', type=int, default=None, help='only these trial numbers')
     ap.add_argument('--labs', nargs='+', default=None, help='only these recordings')
     ap.add_argument('--shard', type=int, default=0)
@@ -182,9 +204,9 @@ def main():
     ap.add_argument('--emb_dir', default=None)
     ap.add_argument('--list', action='store_true')
     a = ap.parse_args()
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), *['..'] * 4)))  # repo root
     if a.list:
-        for c in select_cells(latest_records(os.path.join(paths(a)[0], 'exp_results.jsonl')), a.trials, a.labs):
+        for c in select_cells(latest_records(os.path.join(paths(a)[0], 'exp_results.jsonl')), a.trials, a.labs,
+                              a.no_replicates):
             print(c['tag'], c['lab'], f"{c['accuracy']:.4f}")
         return
     sys.exit(1 if (dispatch(a) if a.slurm else run_shard(a, a.shard)) else 0)

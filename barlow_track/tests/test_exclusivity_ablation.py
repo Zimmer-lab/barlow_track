@@ -1,0 +1,94 @@
+"""Per-time exclusivity ablation (research TEST_PLAN T3, reviewer R2.3): the label propagation recipes that turn
+off the per-run (E2) and final (E3) one-object-per-label-per-volume steps, and HDBSCAN with that exclusivity added.
+
+The baselines must be untouched: v2 is the recorded recipe, and plain HDBSCAN keeps its historical labels."""
+import numpy as np
+import pytest
+
+from barlow_track.tests.test_labelprop_recipes import _drifting_blobs
+from barlow_track.utils.labelprop_recipes import LABELPROP_RECIPES
+from barlow_track.utils.utils_spectral_relabeling import (consensus_argmax, enforce_temporal_uniqueness_hungarian,
+                                                          spectral_sync_from_topk, top1_no_uniqueness)
+from barlow_track.utils.utils_tracking import (WormClusterTracker, keep_most_confident_per_label,
+                                               label_duplicate_stats)
+
+T2L = {0: [0, 1], 1: [2, 3]}
+
+
+def test_per_run_none_keeps_each_objects_top_label_even_when_repeated():
+    labels = np.array([[1, 2], [1, 2], [2, -1], [-1, -1]])
+    probs = np.array([[.9, .1], [.8, .2], [.7, 0], [0, 0]])
+    L, P = top1_no_uniqueness(labels, probs, T2L)
+    np.testing.assert_array_equal(L[:, 0], [1, 1, 2, -1])  # objects 0 and 1 share label 1 in volume 0
+    np.testing.assert_allclose(P[:, 0], [.9, .8, .7, 0])
+
+
+def test_consensus_argmax_allows_repeats_and_hungarian_does_not():
+    cons = np.array([[2., 1.], [1.5, 0.], [0., 2.], [0., 1.]])  # R = 2 runs
+    lab_a, prob_a = consensus_argmax(cons, T2L, R=2)
+    np.testing.assert_array_equal(lab_a[:, 0], [1, 1, 2, 2])
+    np.testing.assert_allclose(prob_a[:, 0], [1., .75, 1., .5])
+    lab_h, _ = enforce_temporal_uniqueness_hungarian(cons, T2L, R=2)
+    for idx in T2L.values():
+        got = lab_h[idx, 0][lab_h[idx, 0] > 0]
+        assert len(got) == len(set(got))
+
+
+def test_duplicate_stats_and_most_confident_resolution():
+    labels = np.array([3, 3, 5, -1])
+    conf = np.array([.4, .9, .5, 0])
+    stats = label_duplicate_stats(labels, conf, T2L)
+    assert stats == dict(n_objects=4, n_labelled=3, n_duplicate_objects=2, duplicate_fraction=2 / 3, n_clusters=2)
+    np.testing.assert_array_equal(keep_most_confident_per_label(labels, conf, T2L), [-1, 3, 5, -1])
+
+
+def test_spectral_sync_rejects_unknown_final_step():
+    with pytest.raises(ValueError):
+        spectral_sync_from_topk([np.ones((4, 1), int)], [np.ones((4, 1))], T2L, final_unique='greedy')
+
+
+def _track(recipe, seed=0):
+    Xs, t2l, l2t = _drifting_blobs()
+    tr = WormClusterTracker(Xs, dict(t2l), linear_ind_to_t_and_seg_id=l2t, seed=seed, verbose=0)
+    df = tr.track_using_label_propagation_clusterer(device='cpu', num_neighbors=8, recipe=recipe, num_seeds=8)
+    return tr, df
+
+
+@pytest.mark.parametrize('recipe', ['v2_noE2', 'v2_noE3', 'v2_noexcl'])
+def test_ablation_recipes_run_and_record_their_settings(recipe):
+    tr, df = _track(recipe)
+    s = tr.labelprop_runs['settings']
+    assert (s['per_run_unique'], s['final_unique']) == (LABELPROP_RECIPES[recipe]['per_run_unique'],
+                                                        LABELPROP_RECIPES[recipe]['final_unique'])
+    assert tr.label_duplicates['n_objects'] == len(tr.X_svd)
+    # whatever the consensus held, the track dataframe has one object per (volume, track)
+    final = tr.labelprop_runs['final_labels']
+    assert label_duplicate_stats(keep_most_confident_per_label(final, tr.labelprop_runs['confidence'],
+                                                               tr.time_index_to_linear_feature_indices),
+                                 tr.labelprop_runs['confidence'],
+                                 tr.time_index_to_linear_feature_indices)['n_duplicate_objects'] == 0
+    assert df.shape[0] > 0
+
+
+def test_v2_has_no_repeated_labels():
+    tr, _ = _track('v2')
+    assert tr.label_duplicates['n_duplicate_objects'] == 0
+
+
+def _global(exclusivity):
+    Xs, t2l, l2t = _drifting_blobs(n_times=40)
+    tr = WormClusterTracker(Xs, dict(t2l), linear_ind_to_t_and_seg_id=l2t, seed=0, verbose=0,
+                            opt_db=dict(min_cluster_size=0.3, min_samples=0.1))
+    df = tr.track_using_global_clusterer(umap_projection=False, exclusivity=exclusivity)
+    return tr, df
+
+
+def test_hdbscan_with_exclusivity_has_no_repeated_labels_and_plain_hdbscan_is_unchanged():
+    tr_plain, df_plain = _global(None)
+    np.testing.assert_array_equal(tr_plain.global_clusterer.labels_ >= -1, True)
+    assert tr_plain.label_duplicates['n_objects'] == len(tr_plain.X_svd)
+    tr_ex, df_ex = _global('hungarian')
+    assert tr_ex.label_duplicates['n_duplicate_objects'] == 0
+    assert tr_ex.label_duplicates['n_labelled'] > 0
+    with pytest.raises(ValueError):
+        _global('greedy')

@@ -39,6 +39,8 @@ os.environ.setdefault('WBFM_NWB_LAZY_SEGMENTATION', '1')
 import numpy as np
 import torch
 
+from barlow_track.utils.labelprop_recipes import LABELPROP_RECIPES
+
 RESULTS = '/tmp/claude/exp_results.jsonl'
 
 # CUDA torch.quantile rejects inputs above its internal size cap
@@ -511,16 +513,25 @@ def _parse_args(argv=None):
     ap.add_argument('--max_frames', type=int, default=None)
     ap.add_argument('--mode', choices=['image', 'position', 'posonly', 'attention', 'trained', 'both'], default='both')
     ap.add_argument('--weights', default=None, help='trained checkpoint for mode=trained (load_barlow_model)')
-    ap.add_argument('--cluster', choices=['global', 'labelprop'], default='labelprop')
+    ap.add_argument('--cluster', choices=['global', 'global_excl', 'labelprop'], default='labelprop',
+                    help="'labelprop' (default); 'global' = HDBSCAN on a UMAP of the SVD; 'global_excl' = the same "
+                         "HDBSCAN with label propagation's per-time Hungarian exclusivity on its soft membership")
+    ap.add_argument('--hdbscan_min_cluster_size', type=float, default=None,
+                    help='global clustering: HDBSCAN min_cluster_size, a fraction of the frames if < 1 '
+                         '(default: the tracker default, 0.5)')
+    ap.add_argument('--hdbscan_min_samples', type=float, default=None,
+                    help='global clustering: HDBSCAN min_samples, a fraction of the frames if < 1 '
+                         '(default: the tracker default, 0.02)')
     ap.add_argument('--num_seeds', type=int, default=None,
                     help='label propagation seed volumes (default: 25 with --labelprop legacy, as every '
                          'recorded score; the recipe\'s own number otherwise)')
-    ap.add_argument('--labelprop', choices=['legacy', 'v2'], default='legacy',
+    ap.add_argument('--labelprop', choices=sorted(LABELPROP_RECIPES), default='legacy',
                     help="label propagation recipe (utils/labelprop_recipes.py), with its SVD dimension: "
                          "'legacy' (default, every recorded score: 50 components, random seed volumes, "
                          "uniform kNN edges, greedy per-run uniqueness) or 'v2' (150 components, "
                          "stratified seed volumes, Gaussian kNN edges, Hungarian per-run uniqueness; the "
-                         "library tracker's default since 2026-11-07)")
+                         "library tracker's default since 2026-11-07); v2_noE2 / v2_noE3 / v2_noexcl are the "
+                         "per-time exclusivity ablations of v2")
     ap.add_argument('--seed', type=int, default=0,
                     help='single seed for every random step: head init, SVD, seed times, kNN graph')
     ap.add_argument('--skip_embed', action='store_true',
@@ -823,8 +834,10 @@ def run_eval(args):
         Xs = svd.fit_transform(X)
         if getattr(args, 'svd', 'scaled') == 'whiten':
             Xs = Xs / svd.singular_values_  # U, as production tracking on real videos
+        opt_db = {k: v for k, v in (('min_cluster_size', getattr(args, 'hdbscan_min_cluster_size', None)),
+                                     ('min_samples', getattr(args, 'hdbscan_min_samples', None))) if v is not None}
         tracker = WormClusterTracker(Xs, dict(time_to_lin), linear_ind_to_t_and_seg_id=lin_to_t_seg,
-                                     seed=args.seed)
+                                     seed=args.seed, opt_db=opt_db or None)
         t2 = time.time()
         # Label propagation is the paper's final clustering step (global mode
         # only for quick debugging).
@@ -833,7 +846,8 @@ def run_eval(args):
                 num_seeds=args.num_seeds, device=resolve_track_device(args, device),
                 recipe=getattr(args, 'labelprop', 'legacy'))
         else:
-            df_pred = tracker.track_using_global_clusterer()
+            df_pred = tracker.track_using_global_clusterer(
+                exclusivity='hungarian' if args.cluster == 'global_excl' else None)
         print(f"[{args.lab}/{mode}] tracked in {time.time()-t2:.0f}s; df {df_pred.shape}", flush=True)
         # GT-free self-consistency of the label-propagation run (agreement of the per-seed runs with
         # their consensus), recorded beside the accuracy; the shared sweep can optimize it
@@ -920,6 +934,8 @@ def run_eval(args):
                    tag=args.tag, weights=os.path.abspath(args.weights) if args.weights else None,
                    train_config=train_config,
                    cluster=args.cluster, num_seeds=args.num_seeds,
+                   label_duplicates=getattr(tracker, 'label_duplicates', None),
+                   hdbscan=(dict(tracker.opt_db, prediction_data=None) if args.cluster != 'labelprop' else None),
                    labelprop=getattr(args, 'labelprop', 'legacy'),
                    fuse_norm=bool(args.fuse_norm and mode == 'position'),
                    fusion=_fusion,
@@ -1108,7 +1124,8 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
                                 track_device='cpu', skip_embed=True, extra_record=None,
                                 crop_window='pad', round_crop_centers=False, nwb_objects='gt',
                                 svd='scaled', gt_matching='nandist', nwb_gt_mapping='centroid',
-                                save_tracks=None, visnet_z_scale=None):
+                                save_tracks=None, visnet_z_scale=None, hdbscan_min_cluster_size=None,
+                                hdbscan_min_samples=None):
     """Track one trained checkpoint on `project` and return its accuracy record.
 
     Programmatic entry point used by the hyperparameter sweep's in-job
@@ -1134,7 +1151,8 @@ def evaluate_trained_checkpoint(weights, project, tag, *, results_jsonl, emb_dir
         results_jsonl=results_jsonl, emb_dir=emb_dir, tag=tag, extra_record=extra_record,
         crop_window=crop_window, round_crop_centers=round_crop_centers, nwb_objects=nwb_objects,
         svd=svd, gt_matching=gt_matching, nwb_gt_mapping=nwb_gt_mapping, labelprop=labelprop,
-        save_tracks=save_tracks, visnet_z_scale=visnet_z_scale)
+        save_tracks=save_tracks, visnet_z_scale=visnet_z_scale,
+        hdbscan_min_cluster_size=hdbscan_min_cluster_size, hdbscan_min_samples=hdbscan_min_samples)
     _resolve_labelprop(args)
     _check_args(args)
     return run_eval(args)[-1]

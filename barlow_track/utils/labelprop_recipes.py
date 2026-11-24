@@ -15,9 +15,24 @@ bookkeeping without loading the tracker.
 #           +0.86 (Zimmer 1210) over 100 RNG seeds, with a much smaller spread over seeds
 #           (research tree: EVD - Confirmation of screened label propagation variants on held-out
 #           recordings; harness barlow_track/scripts/scratch/labelprop_opt, variant c_all_gh_s150_plain).
+#   v2_noE2 / v2_noE3 / v2_noexcl: per-time exclusivity ablations of v2 (research TEST_PLAN T3, reviewer R2.3).
+#           E2 = the one-label-per-volume step applied to each run before the sync (per_run_unique 'none' turns it
+#           off), E3 = the Hungarian one-object-per-label-per-volume assignment of the consensus (final_unique
+#           'argmax' turns it off). With E3 off, labels can repeat within a volume; the tracker keeps the most
+#           confident object of each repeated (volume, label) and records how many it dropped. The seed volumes'
+#           distinct labels (each seed volume's objects start as different labels) are built into label
+#           propagation and stay on in every variant.
 LABELPROP_RECIPES = dict(
-    legacy=dict(svd_dim=50, num_seeds=None, seed_select='random', edge_weight='uniform', per_run_unique='greedy'),
-    v2=dict(svd_dim=150, num_seeds=50, seed_select='stratified', edge_weight='gauss', per_run_unique='hungarian'),
+    legacy=dict(svd_dim=50, num_seeds=None, seed_select='random', edge_weight='uniform', per_run_unique='greedy',
+                final_unique='hungarian'),
+    v2=dict(svd_dim=150, num_seeds=50, seed_select='stratified', edge_weight='gauss', per_run_unique='hungarian',
+            final_unique='hungarian'),
+    v2_noE2=dict(svd_dim=150, num_seeds=50, seed_select='stratified', edge_weight='gauss', per_run_unique='none',
+                 final_unique='hungarian'),
+    v2_noE3=dict(svd_dim=150, num_seeds=50, seed_select='stratified', edge_weight='gauss',
+                 per_run_unique='hungarian', final_unique='argmax'),
+    v2_noexcl=dict(svd_dim=150, num_seeds=50, seed_select='stratified', edge_weight='gauss', per_run_unique='none',
+                   final_unique='argmax'),
 )
 DEFAULT_LABELPROP_RECIPE = 'v2'
 

@@ -65,7 +65,7 @@ def test_v2_recipe_gives_the_harness_variant_it_was_validated_as(seed):
     seeds, ref = _harness_labels(lp, Xs, t2l, variant, seed)
     runs = _tracker_labels(Xs, t2l, l2t, seed, recipe='v2', num_seeds=8)
     assert runs['settings'] == dict(recipe='v2', num_seeds=8, seed_select='stratified', edge_weight='gauss',
-                                    per_run_unique='hungarian')
+                                    per_run_unique='hungarian', final_unique='hungarian')
     np.testing.assert_array_equal(runs['final_labels'], ref)
 
 

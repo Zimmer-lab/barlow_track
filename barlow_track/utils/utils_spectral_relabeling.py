@@ -123,7 +123,20 @@ def hungarian_top1_timewise(labels_topk, probs_topk, time_index_to_linear_featur
     return labels_out, probs_out
 
 
-PER_RUN_UNIQUE = dict(greedy=greedy_top1_timewise, hungarian=hungarian_top1_timewise)
+def top1_no_uniqueness(labels_topk, probs_topk, time_index_to_linear_feature_indices):
+    """Each object keeps its own most probable label; no one-label-per-volume constraint (exclusivity ablation).
+
+    Same inputs and outputs as greedy_top1_timewise. The top-k columns from run_label_propagation are sorted by
+    probability, so column 0 is the argmax; two objects of one volume can end up with the same label.
+    """
+    labels_out = np.asarray(labels_topk)[:, :1].astype(np.int64).copy()
+    probs_out = np.asarray(probs_topk)[:, :1].copy()
+    probs_out[labels_out <= 0] = 0
+    labels_out[labels_out <= 0] = -1
+    return labels_out, probs_out
+
+
+PER_RUN_UNIQUE = dict(greedy=greedy_top1_timewise, hungarian=hungarian_top1_timewise, none=top1_no_uniqueness)
 
 
 def prepare_A_list_from_labelings_probs(labelings, probabilities, N, K, time_index_to_linear_feature_indices, 
@@ -412,6 +425,34 @@ def aggregate_consensus(A_list, perms, K, normalize_rows=True, doweight_runs=Non
     return cons
 
 
+def consensus_argmax(consensus_probs, time_index_to_linear_feature_indices, R, min_prob_threshold=None):
+    """Per-object argmax of the consensus, without one-object-per-label-per-time (exclusivity ablation).
+
+    Same outputs and threshold as enforce_temporal_uniqueness_hungarian: labels_out (N, 1) 1-based (-1 below
+    min_prob_threshold of the runs), probs_out (N, 1) as a fraction of the R runs.
+    """
+    if min_prob_threshold is None:
+        min_prob_threshold = 0.02
+    N = consensus_probs.shape[0]
+    probs_out = np.zeros((N, 1), dtype=float)
+    labels_out = np.full((N, 1), -1, dtype=int)
+    for _, object_indices in time_index_to_linear_feature_indices.items():
+        idx = np.asarray(list(object_indices))
+        if len(idx) == 0:
+            continue
+        block = np.asarray(consensus_probs[idx, :])
+        k = block.argmax(1)
+        probs_out[idx, 0] = block[np.arange(len(idx)), k] / R
+        labels_out[idx, 0] = k + 1
+    invalid = probs_out < min_prob_threshold
+    probs_out[invalid] = 0.0
+    labels_out[invalid] = -1
+    return labels_out, probs_out
+
+
+FINAL_UNIQUE = ('hungarian', 'argmax')
+
+
 def enforce_temporal_uniqueness_hungarian(consensus_probs, time_index_to_linear_feature_indices, 
                                           R, min_prob_threshold=None):
     """
@@ -548,7 +589,7 @@ def spectral_sync_from_topk(labels_list, probs_list,
                             use_matrix_free=False, svd_params=None,
                             null_cost=None, normalize_input_rows=True, input_probability_threshold=0.0, 
                             verbose=True, DEBUG=False, rounding=DEFAULT_ROUNDING,
-                            refine_iters=DEFAULT_REFINE_ITERS, per_run_unique='greedy'):
+                            refine_iters=DEFAULT_REFINE_ITERS, per_run_unique='greedy', final_unique='hungarian'):
     """
     runs_topk: list of run dicts mapping obj->[(label,prob), ...]
     K: number of labels; safe to overestimate
@@ -563,8 +604,14 @@ def spectral_sync_from_topk(labels_list, probs_list,
     refine_iters: > 0 (default 10) refines the rounded permutations by alternating Hungarian re-alignment
       of each run to the consensus of the others (refine_perms), at most this many sweeps; 0 = historical.
     per_run_unique: 'greedy' (historical) or 'hungarian', how each run's top-k labels are reduced to one
-      label per object and volume before the sync (prepare_A_list_from_labelings_probs).
+      label per object and volume before the sync (prepare_A_list_from_labelings_probs); 'none' keeps each
+      object's own top label (exclusivity ablation).
+    final_unique: 'hungarian' (default, every recorded score) assigns the consensus one object per label per
+      volume (enforce_temporal_uniqueness_hungarian); 'argmax' gives each object its most probable consensus
+      label (consensus_argmax), so labels can repeat within a volume (exclusivity ablation).
     """
+    if final_unique not in FINAL_UNIQUE:
+        raise ValueError(f"final_unique {final_unique!r}; use one of {FINAL_UNIQUE}")
     if svd_params is None:
         svd_params = dict(n_oversamples=20, n_iter=2)
     t0 = time.time()
@@ -652,9 +699,8 @@ def spectral_sync_from_topk(labels_list, probs_list,
     # labels_out[probs_out.sum(axis=1) == 0] = -1
 
     # 6) enforce temporal uniqueness
-    labels_out, probs_out = enforce_temporal_uniqueness_hungarian(
-        cons, time_index_to_linear_feature_indices, R=R
-    )
+    final = enforce_temporal_uniqueness_hungarian if final_unique == 'hungarian' else consensus_argmax
+    labels_out, probs_out = final(cons, time_index_to_linear_feature_indices, R=R)
 
     # Last - diagnostics (overlap histogram & simple pairwise agreement sample)
     # overlap: how many runs label each object

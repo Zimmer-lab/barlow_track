@@ -76,6 +76,9 @@ class WormClusterTracker:
     # (old pickled trackers lack the attribute; track_using_barlow treats those as 'legacy').
     labelprop_recipe: str = None
 
+    # Repeats of a label within a volume in the last tracking run (label_duplicate_stats), for the records
+    label_duplicates: dict = None
+
     # Saving info after the tracking is done
     df_global: pd.DataFrame = None
     streaming_clusterer: callable = None
@@ -498,11 +501,18 @@ class WormClusterTracker:
         self.df_final = df_combined
         return df_combined
 
-    def track_using_global_clusterer(self, umap_projection=True, opt_umap=None):
+    def track_using_global_clusterer(self, umap_projection=True, opt_umap=None, exclusivity=None):
         """
         Track using a single clustering pass over the entire dataset
 
         See also track_using_overlapping_windows
+
+        exclusivity: None (default, historical) uses HDBSCAN's hard labels; a label repeated within a volume keeps
+        the object first in feature order (cluster_obj2dataframe). 'hungarian' instead assigns each volume's
+        objects to clusters one-to-one by HDBSCAN soft membership (all_points_membership_vectors), with the same
+        Hungarian step and 2% floor as label propagation's consensus (enforce_temporal_uniqueness_hungarian):
+        HDBSCAN with label propagation's per-time exclusivity (exclusivity ablation, reviewer R2.3).
+        Either way self.label_duplicates records the repeats of the labels before conversion.
 
         Returns
         -------
@@ -533,16 +543,34 @@ class WormClusterTracker:
         db_svd = HDBSCAN(**opt_db).fit(X_umap)
         self.global_clusterer = db_svd
 
-        # Convert to dataframe
-        df_cluster = self.cluster_obj2dataframe(db_svd, start_volume=0, n_vols=self.num_frames,
-                                                labels_are_in_feature_order=True)
+        if exclusivity is None:
+            labels, probs = np.asarray(db_svd.labels_), np.asarray(db_svd.probabilities_)
+            self.label_duplicates = label_duplicate_stats(labels, probs, self.time_index_to_linear_feature_indices)
+            # Convert to dataframe
+            df_cluster = self.cluster_obj2dataframe(db_svd, start_volume=0, n_vols=self.num_frames,
+                                                    labels_are_in_feature_order=True)
+        elif exclusivity == 'hungarian':
+            import hdbscan
+            from barlow_track.utils.utils_spectral_relabeling import enforce_temporal_uniqueness_hungarian
+            membership = np.asarray(hdbscan.all_points_membership_vectors(db_svd))
+            if membership.ndim == 1:  # a single cluster
+                membership = membership[:, None]
+            lab1, prob = enforce_temporal_uniqueness_hungarian(membership, self.time_index_to_linear_feature_indices,
+                                                               R=1)
+            labels = lab1[:, 0] - 1  # 1-based with -1 -> 0-based cluster ids with -1 (noise) as HDBSCAN's
+            labels[lab1[:, 0] == -1] = -1
+            self.label_duplicates = label_duplicate_stats(labels, prob[:, 0], self.time_index_to_linear_feature_indices)
+            df_cluster = self.cluster_obj2dataframe({'labels': labels, 'probabilities': prob[:, 0]}, start_volume=0,
+                                                    n_vols=self.num_frames, labels_are_in_feature_order=True)
+        else:
+            raise ValueError(f"exclusivity {exclusivity!r}; use None or 'hungarian'")
 
         return df_cluster
     
     def track_using_label_propagation_clusterer(self, num_seeds=None, num_neighbors=20, umap_projection=False, use_spectral_relabeling=True,
                                                 return_top_k=2, num_layers=100, softmax=False, tau=0.02, device=None,
                                                 seed=None, recipe=None, seed_select=None, edge_weight=None,
-                                                per_run_unique=None):
+                                                per_run_unique=None, final_unique=None):
         """
         Tracks objects by generating clusters via label propagation, starting with detected objects at seed time points
 
@@ -567,6 +595,7 @@ class WormClusterTracker:
         seed_select = rec['seed_select'] if seed_select is None else seed_select
         edge_weight = rec['edge_weight'] if edge_weight is None else edge_weight
         per_run_unique = rec['per_run_unique'] if per_run_unique is None else per_run_unique
+        final_unique = rec.get('final_unique', 'hungarian') if final_unique is None else final_unique
         run_seed = self.seed if seed is None else seed
         # Per-seed labelings and their spectral-sync alignment, kept for GT-free consistency metrics
         # (utils_consistency.tracker_consistency); None unless spectral relabeling runs
@@ -599,17 +628,25 @@ class WormClusterTracker:
             perms, final_labels, confidence, diag = spectral_sync_from_topk(
                 labelings, probabilities, 
                 time_index_to_linear_feature_indices=self.time_index_to_linear_feature_indices, 
-                input_probability_threshold=0.1, verbose=True, per_run_unique=per_run_unique
+                input_probability_threshold=0.1, verbose=True, per_run_unique=per_run_unique,
+                final_unique=final_unique
             )
             final_labels = final_labels[:, 0]
             confidence = confidence[:, 0]
+            # Repeated labels within a volume (only without the final Hungarian step): record them, then keep the
+            # most confident object of each (volume, label), since a track holds one object per volume
+            self.label_duplicates = label_duplicate_stats(final_labels, confidence,
+                                                          self.time_index_to_linear_feature_indices)
+            if final_unique != 'hungarian':
+                final_labels = keep_most_confident_per_label(final_labels, confidence,
+                                                             self.time_index_to_linear_feature_indices)
             from barlow_track.utils.utils_spectral_relabeling import DEFAULT_ROUNDING, DEFAULT_REFINE_ITERS
             self.labelprop_runs = dict(labelings=labelings, perms=perms, final_labels=final_labels,
                                        confidence=confidence,
                                        sync=f'{DEFAULT_ROUNDING}_refine{DEFAULT_REFINE_ITERS}',
                                        settings=dict(recipe=recipe, num_seeds=num_seeds,
                                                      seed_select=seed_select, edge_weight=edge_weight,
-                                                     per_run_unique=per_run_unique))
+                                                     per_run_unique=per_run_unique, final_unique=final_unique))
         else:
             # Rolling reference
             all_aligned, final_labels, confidence = align_all(labelings, self.time_index_to_linear_feature_indices)
@@ -636,6 +673,38 @@ class WormClusterTracker:
         self.streaming_clusterer = all_clusters[0]
 
         return df_global
+
+
+def label_duplicate_stats(labels, confidence, time_index_to_linear_feature_indices):
+    """How often a label repeats within a volume: objects, labelled objects, objects that share their (volume, label)
+    with another object, and the clusters. Labels < 0 are unlabelled. Recorded in eval records (exclusivity ablation)."""
+    labels = np.asarray(labels)
+    n_dup = 0
+    for _, idx in time_index_to_linear_feature_indices.items():
+        lab = labels[np.asarray(list(idx), dtype=int)]
+        lab = lab[lab >= 0]
+        if len(lab):
+            _, counts = np.unique(lab, return_counts=True)
+            n_dup += int(counts[counts > 1].sum())
+    n_lab = int((labels >= 0).sum())
+    return dict(n_objects=int(len(labels)), n_labelled=n_lab, n_duplicate_objects=n_dup,
+                duplicate_fraction=float(n_dup / n_lab) if n_lab else 0.0,
+                n_clusters=int(len(np.unique(labels[labels >= 0]))))
+
+
+def keep_most_confident_per_label(labels, confidence, time_index_to_linear_feature_indices):
+    """Within each volume, a label held by several objects stays only on the most confident one (others -> -1)."""
+    labels = np.asarray(labels).copy()
+    confidence = np.asarray(confidence)
+    for _, idx in time_index_to_linear_feature_indices.items():
+        idx = np.asarray(list(idx), dtype=int)
+        lab = labels[idx]
+        for l in np.unique(lab[lab >= 0]):
+            rows = idx[lab == l]
+            if len(rows) > 1:
+                keep = rows[np.argmax(confidence[rows])]
+                labels[rows[rows != keep]] = -1
+    return labels
 
 
 def get_target_size_from_args(args):

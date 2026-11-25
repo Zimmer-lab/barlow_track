@@ -22,8 +22,17 @@ the per-template matches are also combined by wbfm's multi-template vote
 the first template's neurons via the first template's own fDNC match of the
 other template frame (so no GT is used for the combination).
 
+--nwb_objects all tracks every detection of the NWB's raw_segmentation (ids =
+mask labels) and maps the GT to mask labels exactly as eval_accuracy
+--nwb_objects all does (the revision's Flavell setting). --reuse_dir rescores
+cached <tag>_<variant>_df.pickle track tables with the current scoring code
+after checking each against the loaded detections (no tracking).
+
 Outputs (never inside the project): <out_dir>/<tag>_*.pickle and a record per
-variant appended to <out_dir>/fdnc_results.jsonl.
+variant appended to <out_dir>/fdnc_results.jsonl; per recording also
+<dataset>_detections.npz (per-frame detection ids / positions) and
+<dataset>_scored_gt.h5 (key gt: the GT matrix the score is computed against,
+same layout as eval_accuracy --save_tracks), for the pairing check.
 
 Run with:
   CUDA_VISIBLE_DEVICES="" PYTHONPATH=/home/charles/Current_work/repos/fDNC_Neuron_ID:<barlow_track repo> \
@@ -169,11 +178,20 @@ def load_frames(args):
     else:
         arrays = _load_nwb_arrays(src)
         gx, gy, gz, gr, gs = arrays['gx'], arrays['gy'], arrays['gz'], arrays['gr'], arrays['gs']
-        for t in range(n_frames):
-            fin = np.isfinite(gx[t]) & np.isfinite(gy[t]) & np.isfinite(gz[t]) \
-                & np.isfinite(gr[t]) & np.isfinite(gs[t])
-            js = np.flatnonzero(fin)
-            frames[t] = (np.stack([gz[t, js], gx[t, js], gy[t, js]], 1), gr[t, js].astype(int))
+        nwb_all = args.nwb_objects == 'all'
+        if nwb_all:
+            # Every detection of the NWB's raw_segmentation (eval_accuracy --nwb_objects all), ids = mask labels
+            from barlow_track.scripts.eval_accuracy import _nwb_all_objects
+            objects, gt_label = _nwb_all_objects(src, arrays, list(range(n_frames)), gt_mapping=args.nwb_gt_mapping)
+            for t in range(n_frames):
+                labels, cen = objects[t]
+                frames[t] = (np.asarray(cen, dtype=float).reshape(-1, 3), np.asarray(labels, dtype=int))
+        else:
+            for t in range(n_frames):
+                fin = np.isfinite(gx[t]) & np.isfinite(gy[t]) & np.isfinite(gz[t]) \
+                    & np.isfinite(gr[t]) & np.isfinite(gs[t])
+                js = np.flatnonzero(fin)
+                frames[t] = (np.stack([gz[t, js], gx[t, js], gy[t, js]], 1), gr[t, js].astype(int))
         df_gt = arrays['df_gt']
         info['gt_filter'] = 'full final_tracks'
         try:
@@ -183,6 +201,15 @@ def load_frames(args):
         if _df_fin is not None and not _df_fin.empty:
             df_gt = _ensure_ind_level(_df_fin)
             info['gt_filter'] = 'finished neurons'
+        if nwb_all:
+            # The GT in the predictions' ID space (mask labels), exactly as eval_accuracy.run_eval does
+            df_gt = df_gt.copy()
+            if len(df_gt) != len(gt_label):
+                raise ValueError(f"GT has {len(df_gt)} frames, the NWB arrays {len(gt_label)}")
+            for n in df_gt.columns.get_level_values(0).unique():
+                df_gt[(n, 'raw_neuron_ind_in_list')] = gt_label[:, arrays['neurons'].index(n)]
+            info['gt_filter'] += ', mapped to mask labels'
+        info.update(nwb_objects=args.nwb_objects, nwb_gt_mapping=args.nwb_gt_mapping if nwb_all else None)
         match_col = 'raw_neuron_ind_in_list'
         um_xy, um_z = args.um_xy, args.um_z
         if um_xy is None or um_z is None:
@@ -272,7 +299,7 @@ def combine_templates(per_template, frames, template_ids, n_frames):
 
 
 # ---------------------------------------------------------------- scoring
-def score_like_run_eval(df_pred, df_gt, match_col, src, gt_matching='nandist'):
+def score_like_run_eval(df_pred, df_gt, match_col, src, gt_matching='nandist', return_gt=False):
     """The scoring block of eval_accuracy.run_eval, verbatim in effect."""
     from barlow_track.utils.utils_ground_truth import (pad_with_nan_rows, align_gt_pred_time_index,
                                                        match_columns_to_gt, calculate_accuracy)
@@ -292,7 +319,48 @@ def score_like_run_eval(df_pred, df_gt, match_col, src, gt_matching='nandist'):
     # How many GT neurons got a predicted column at all
     n_gt = col_gt.shape[1]
     n_assigned = int(len(set(col_pr.columns) & set(col_gt.columns)))
+    if return_gt:
+        return stats, n_gt, n_assigned, col_gt
     return stats, n_gt, n_assigned
+
+
+def code_revision():
+    """git HEAD of this repo, whether the tree is dirty, and the sha1 of this script (for the records)."""
+    import hashlib
+    import subprocess
+    try:
+        head = subprocess.check_output(['git', '-C', REPO, 'rev-parse', '--short', 'HEAD'], text=True).strip()
+        dirty = bool(subprocess.check_output(['git', '-C', REPO, 'status', '--porcelain', '--',
+                                              os.path.abspath(__file__)], text=True).strip())
+    except Exception:
+        head, dirty = None, None
+    with open(os.path.abspath(__file__), 'rb') as f:
+        sha = hashlib.sha1(f.read()).hexdigest()[:12]
+    return dict(git_head=head, script_modified_vs_head=dirty, script_sha1=sha)
+
+
+def save_detections(path, frames):
+    """Per-frame detection ids and zxy positions, for the pairing check against the BarlowTrack embedding cache."""
+    ts = sorted(frames)
+    np.savez_compressed(path, t=np.concatenate([np.full(len(frames[t][1]), t) for t in ts]),
+                        ids=np.concatenate([np.asarray(frames[t][1], dtype=float) for t in ts]),
+                        zxy=np.concatenate([np.asarray(frames[t][0], dtype=float).reshape(-1, 3) for t in ts]))
+
+
+def check_reused_df(df_pred, frames, n_template, label):
+    """A cached track dataframe belongs to these detections: same template size, every id a detection of its frame."""
+    names = df_pred.columns.get_level_values(0).unique()
+    if len(names) != n_template:
+        raise RuntimeError(f"{label}: cached df has {len(names)} template neurons, the template frame now has {n_template}")
+    ind = df_pred.loc[:, (slice(None), 'raw_neuron_ind_in_list')].values
+    if len(ind) != len(frames):
+        raise RuntimeError(f"{label}: cached df has {len(ind)} frames, the loader {len(frames)}")
+    n_bad = 0
+    for t in range(len(ind)):
+        v = ind[t][np.isfinite(ind[t])]
+        n_bad += int((~np.isin(v, frames[t][1])).sum())
+    if n_bad:
+        raise RuntimeError(f"{label}: {n_bad} cached matches are not detections of their frame")
 
 
 def main():
@@ -302,13 +370,19 @@ def main():
     ap.add_argument('--project', default=None)
     ap.add_argument('--gt', default=None)
     ap.add_argument('--nwb', default=None)
+    ap.add_argument('--nwb_objects', choices=['gt', 'all'], default='gt',
+                    help="nwb source: 'gt' tracks the GT objects (oracle detections); 'all' every detection of "
+                         "the NWB's raw_segmentation with the GT mapped to mask labels (eval_accuracy --nwb_objects all)")
+    ap.add_argument('--nwb_gt_mapping', choices=['centroid', 'segmentation_id'], default='centroid',
+                    help='with --nwb_objects all: as eval_accuracy --nwb_gt_mapping')
     ap.add_argument('--um_xy', type=float, default=None)
     ap.add_argument('--um_z', type=float, default=None)
     ap.add_argument('--templates', type=int, nargs='+', default=[10])
     ap.add_argument('--n_spread', type=int, default=0,
                     help='add this many extra templates evenly spread over the video (after --templates)')
-    ap.add_argument('--orient', choices=ORIENTS, default='default',
-                    help='axis convention (default = wbfm zimmer2leifer)')
+    ap.add_argument('--orient', choices=ORIENTS, nargs='+', default=['default'],
+                    help='axis convention(s) (default = wbfm zimmer2leifer); several run one after another '
+                         'on the frames loaded once')
     ap.add_argument('--rescale', choices=['none', 'ref'], default='none',
                     help="ref: one factor per recording, rms(fDNC reference worms) / rms(first template "
                          "cloud), applied to every frame (GT-free size normalization)")
@@ -318,7 +392,12 @@ def main():
     ap.add_argument('--model_path', default=DEFAULT_MODEL)
     ap.add_argument('--threads', type=int, default=4)
     ap.add_argument('--out_dir', default=OUT_DIR)
-    ap.add_argument('--tag', default=None)
+    ap.add_argument('--tag', default=None, help='tag prefix; the orientation is appended')
+    ap.add_argument('--reuse_dir', default=None,
+                    help='rescore the <reuse_tag>_<variant>_df.pickle track tables in this directory instead of '
+                         'tracking (each is checked against the loaded detections first)')
+    ap.add_argument('--reuse_dataset', default=None,
+                    help='dataset label in the cached tags (default --dataset), e.g. leifer_stardist')
     ap.add_argument('--save_tracks', action='store_true',
                     help='project source: also write <tag>_<variant>_tracks.h5, key pred_all (one column per '
                          'template neuron, values = mask labels), for score_gt_variants.py')
@@ -340,17 +419,38 @@ def main():
             raise ValueError("out_dir must not be inside the data project")
     torch.set_num_threads(args.threads)
     os.makedirs(args.out_dir, exist_ok=True)
-    tag = args.tag or (f"fdnc_{args.dataset}_t{'-'.join(map(str, args.templates))}"
-                       f"{f'+{args.n_spread}spread' if args.n_spread else ''}_{args.orient}"
-                       f"{'_rescaled' if args.rescale == 'ref' else ''}")
+    templates_given = list(args.templates)
 
+    def make_tag(dataset, orient):
+        return (f"fdnc_{dataset}_t{'-'.join(map(str, templates_given))}"
+                f"{f'+{args.n_spread}spread' if args.n_spread else ''}_{orient}"
+                f"{'_rescaled' if args.rescale == 'ref' else ''}")
+
+    rev = code_revision()
     t_start = time.time()
     frames, df_gt, match_col, src, info = load_frames(args)
     n_frames = info['n_frames']
-    print(f"[{tag}] loaded {n_frames} frames, {info['objects_per_frame']:.1f} objects/frame, "
-          f"GT {df_gt.columns.get_level_values(0).nunique() if df_gt is not None else '-'} neurons ({time.time()-t_start:.0f}s)", flush=True)
+    print(f"[{args.dataset}] loaded {n_frames} frames, {info['objects_per_frame']:.1f} objects/frame, "
+          f"GT {df_gt.columns.get_level_values(0).nunique() if df_gt is not None else '-'} neurons "
+          f"({time.time()-t_start:.0f}s), code {rev}", flush=True)
+    save_detections(os.path.join(args.out_dir, f"{args.dataset}_detections.npz"), frames)
     if args.n_spread:
         extra = np.linspace(0, n_frames - 1, args.n_spread + 2)[1:-1].round().astype(int).tolist()
+        # A spread frame without detections (e.g. a gap in an NWB's GT objects) moves to the nearest frame
+        # with at least the median number of detections (earlier frame on a tie). Detection counts only, no GT
+        # accuracy; frames that already have >= 2 detections are never moved, so earlier runs are unchanged.
+        counts = np.array([len(frames[t][0]) for t in range(n_frames)])
+        med = np.median(counts)
+        subs = {}
+        for k, t in enumerate(extra):
+            if counts[t] < 2:
+                ok = np.flatnonzero(counts >= med)
+                new = int(ok[np.argmin(np.abs(ok - t) + 0.1 * (ok > t))])
+                subs[t] = new
+                extra[k] = new
+        if subs:
+            print(f"[{args.dataset}] spread template frames without detections moved: {subs}", flush=True)
+        info['template_substitutions'] = {str(k): v for k, v in subs.items()}
         args.templates = list(args.templates) + [t for t in extra if t not in args.templates]
     bad = [t for t in args.templates if t not in frames or len(frames[t][0]) < 2]
     if bad:
@@ -361,67 +461,93 @@ def main():
         scale = ref_rms / rms_radius(to_fdnc_units(frames[args.templates[0]][0], info['um_xy'], info['um_z']))
         info.update(ref_rms=ref_rms, n_ref_worms=n_ref)
     info['scale_factor'] = scale
-    print(f"[{tag}] templates {args.templates}, scale factor {scale:.3f}", flush=True)
-    model = load_fdnc_model(args.model_path)
-
-    per_template = []
-    records = []
+    print(f"[{args.dataset}] templates {args.templates}, scale factor {scale:.3f}", flush=True)
+    model = load_fdnc_model(args.model_path) if args.reuse_dir is None else None
     results_jsonl = os.path.join(args.out_dir, 'fdnc_results.jsonl')
+    gt_saved = [False]
 
-    def record(variant, all_matches, n_template, t_track, templates):
-        df_pred = matches_to_df(all_matches, frames, n_template, n_frames)
-        t1 = time.time()
-        if args.save_tracks:
-            from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind
-            lab = add_metadata_to_df_raw_ind(df_pred.copy(), src.segmentation_metadata)
-            pa = lab.loc[:, (slice(None), 'raw_segmentation_id')].droplevel(1, axis=1).astype(float)
-            pa.to_hdf(os.path.join(args.out_dir, f"{tag}_{variant}_tracks.h5"), key='pred_all', mode='w')
-        if args.no_score:
-            stats = stats_v = dict(accuracy=np.nan, total_misses=-1, total_mismatches=-1, total_ground_truth=-1)
-            n_gt = n_assigned = -1
-        else:
-            stats, n_gt, n_assigned = score_like_run_eval(df_pred, df_gt, match_col, src)
-            stats_v, _, _ = score_like_run_eval(df_pred, df_gt, match_col, src, gt_matching='gt_valid')
-        rec = dict(tag=f"{tag}_{variant}", dataset=args.dataset, method='fDNC', variant=variant,
-                   model=os.path.abspath(args.model_path), source=args.source,
-                   project=args.project, gt=args.gt or args.nwb, templates=templates,
-                   orient=args.orient, threshold=args.threshold,
-                   n_template_neurons=int(n_template), n_gt_neurons=int(n_gt),
-                   n_gt_neurons_assigned_a_track=n_assigned, match_col=match_col,
-                   gt_matching='nandist', accuracy=float(stats['accuracy']),
-                   misses=int(stats['total_misses']), mismatches=int(stats['total_mismatches']),
-                   total=int(stats['total_ground_truth']),
-                   accuracy_gt_valid_matching=float(stats_v['accuracy']),
-                   rescale=args.rescale,
-                   mean_match_prob=float(np.mean([m[2] for ms in all_matches.values() for m in ms])),
-                   track_seconds=t_track, score_seconds=time.time() - t1, **info)
-        with open(results_jsonl, 'a') as f:
-            f.write(json.dumps(rec) + '\n')
-        with open(os.path.join(args.out_dir, f"{tag}_{variant}_df.pickle"), 'wb') as f:
-            pickle.dump(df_pred, f)
-        print(json.dumps({k: rec[k] for k in ('tag', 'accuracy', 'accuracy_gt_valid_matching', 'misses',
-                                              'mismatches', 'total', 'n_template_neurons',
-                                              'n_gt_neurons_assigned_a_track', 'mean_match_prob',
-                                              'track_seconds')}), flush=True)
-        records.append(rec)
+    for orient in args.orient:
+        tag = (f"{args.tag}_{orient}" if args.tag else make_tag(args.dataset, orient))
+        reuse_tag = make_tag(args.reuse_dataset or args.dataset, orient) if args.reuse_dir else None
+        per_template = []
 
-    for i_tmp in args.templates:
-        t1 = time.time()
-        all_matches, n_template = track_with_template(model, frames, i_tmp, info['um_xy'], info['um_z'],
-                                                      orient=args.orient, threshold=args.threshold, scale=scale)
-        t_track = time.time() - t1
-        print(f"[{tag}] template {i_tmp}: {n_template} neurons, tracked {n_frames} frames in {t_track:.0f}s "
-              f"({t_track / n_frames * 1000:.0f} ms/frame)", flush=True)
-        with open(os.path.join(args.out_dir, f"{tag}_template{i_tmp}_matches.pickle"), 'wb') as f:
-            pickle.dump(all_matches, f)
-        per_template.append(all_matches)
-        record(f"single{i_tmp}", all_matches, n_template, t_track, [i_tmp])
+        def record(variant, all_matches, n_template, t_track, templates, df_pred=None, reused_from=None):
+            if df_pred is None:
+                df_pred = matches_to_df(all_matches, frames, n_template, n_frames)
+            t1 = time.time()
+            if args.save_tracks:
+                from wbfm.utils.projects.utils_redo_steps import add_metadata_to_df_raw_ind
+                lab = add_metadata_to_df_raw_ind(df_pred.copy(), src.segmentation_metadata)
+                pa = lab.loc[:, (slice(None), 'raw_segmentation_id')].droplevel(1, axis=1).astype(float)
+                pa.to_hdf(os.path.join(args.out_dir, f"{tag}_{variant}_tracks.h5"), key='pred_all', mode='w')
+            if args.no_score:
+                stats = stats_v = dict(accuracy=np.nan, total_misses=-1, total_mismatches=-1, total_ground_truth=-1)
+                n_gt = n_assigned = -1
+            else:
+                stats, n_gt, n_assigned, col_gt = score_like_run_eval(df_pred, df_gt, match_col, src,
+                                                                      return_gt=True)
+                stats_v, _, _ = score_like_run_eval(df_pred, df_gt, match_col, src, gt_matching='gt_valid')
+                if not gt_saved[0]:
+                    # the GT matrix the score is computed against, to compare with the BarlowTrack tracks' 'gt'
+                    col_gt.astype(float).to_hdf(os.path.join(args.out_dir, f"{args.dataset}_scored_gt.h5"),
+                                                key='gt', mode='w')
+                    gt_saved[0] = True
+            lik = df_pred.loc[:, (slice(None), 'likelihood')].values
+            rec = dict(tag=f"{tag}_{variant}", dataset=args.dataset, method='fDNC', variant=variant,
+                       model=os.path.abspath(args.model_path), source=args.source,
+                       project=args.project, gt=args.gt or args.nwb, templates=templates,
+                       orient=orient, threshold=args.threshold,
+                       n_template_neurons=int(n_template), n_gt_neurons=int(n_gt),
+                       n_gt_neurons_assigned_a_track=n_assigned, match_col=match_col,
+                       gt_matching='nandist', accuracy=float(stats['accuracy']),
+                       misses=int(stats['total_misses']), mismatches=int(stats['total_mismatches']),
+                       total=int(stats['total_ground_truth']),
+                       accuracy_gt_valid_matching=float(stats_v['accuracy']),
+                       rescale=args.rescale,
+                       mean_match_prob=float(np.nanmean(lik)) if np.isfinite(lik).any() else float('nan'),
+                       n_matches=int(np.isfinite(lik).sum()),
+                       track_seconds=t_track, score_seconds=time.time() - t1,
+                       reused_from=reused_from, code=rev, **info)
+            with open(results_jsonl, 'a') as f:
+                f.write(json.dumps(rec) + '\n')
+            if reused_from is None:
+                with open(os.path.join(args.out_dir, f"{tag}_{variant}_df.pickle"), 'wb') as f:
+                    pickle.dump(df_pred, f)
+            print(json.dumps({k: rec[k] for k in ('tag', 'accuracy', 'accuracy_gt_valid_matching', 'misses',
+                                                  'mismatches', 'total', 'n_template_neurons',
+                                                  'n_gt_neurons_assigned_a_track', 'mean_match_prob',
+                                                  'track_seconds')}), flush=True)
 
-    if len(args.templates) > 1:
-        t1 = time.time()
-        combined, n0 = combine_templates(per_template, frames, args.templates, n_frames)
-        record("multi", combined, n0, time.time() - t1, list(args.templates))
-    print(f"[{tag}] done in {(time.time() - t_start) / 60:.1f} min", flush=True)
+        variants = [(f"single{i}", [i]) for i in args.templates]
+        if len(args.templates) > 1:
+            variants.append(("multi", list(args.templates)))
+        if args.reuse_dir is not None:
+            for variant, templates in variants:
+                path = os.path.join(args.reuse_dir, f"{reuse_tag}_{variant}_df.pickle")
+                with open(path, 'rb') as f:
+                    df_pred = pickle.load(f)
+                n_template = len(frames[templates[0]][0])
+                check_reused_df(df_pred, frames, n_template, path)
+                record(variant, None, n_template, 0.0, templates, df_pred=df_pred, reused_from=path)
+            continue
+
+        for i_tmp in args.templates:
+            t1 = time.time()
+            all_matches, n_template = track_with_template(model, frames, i_tmp, info['um_xy'], info['um_z'],
+                                                          orient=orient, threshold=args.threshold, scale=scale)
+            t_track = time.time() - t1
+            print(f"[{tag}] template {i_tmp}: {n_template} neurons, tracked {n_frames} frames in {t_track:.0f}s "
+                  f"({t_track / n_frames * 1000:.0f} ms/frame)", flush=True)
+            with open(os.path.join(args.out_dir, f"{tag}_template{i_tmp}_matches.pickle"), 'wb') as f:
+                pickle.dump(all_matches, f)
+            per_template.append(all_matches)
+            record(f"single{i_tmp}", all_matches, n_template, t_track, [i_tmp])
+
+        if len(args.templates) > 1:
+            t1 = time.time()
+            combined, n0 = combine_templates(per_template, frames, args.templates, n_frames)
+            record("multi", combined, n0, time.time() - t1, list(args.templates))
+    print(f"[{args.dataset}] done in {(time.time() - t_start) / 60:.1f} min", flush=True)
 
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 """sensitivity_report.py: variants are the config's difference to the recipe; trials are paired by label and seed."""
 import json
 
+import numpy as np
 import pytest
 import yaml
 
@@ -53,3 +54,25 @@ def test_pairs_by_seed_and_label(tmp_path):
     assert labels == ['a'] and rows[0]['variant'] == 'control'
     assert by['control']['accuracy']['a'] == pytest.approx(0.91)
     assert by['num_frames=16']['paired_diff'] == pytest.approx(-0.08) and by['num_frames=16']['n_pairs'] == 2
+
+
+def test_v2_results_file_and_noise_floor(tmp_path):
+    # the report reads the v2 rescore when asked, counts cells it lacks, and measures the control's spread
+    d = tmp_path / 'round_sens_x_a'
+    d.mkdir()
+    own, v2 = [], []
+    for n, (extra, seed, acc) in enumerate([({}, 7, 0.90), ({}, 7, 0.91), ({}, 8, 0.95), ({'num_frames': 16}, 7, 0.80)]):
+        (d / f'trial_{n}').mkdir()
+        (d / f'trial_{n}' / 'train_config.yaml').write_text(yaml.safe_dump(dict(BASE, seed=seed, **extra)))
+        own.append(dict(tag=f'round_sens_x_a_trial{n}_a', accuracy=acc))
+        if n < 3:
+            v2.append(dict(tag=f'round_sens_x_a_trial{n}_a', accuracy=acc + 0.02))
+    (d / 'exp_results.jsonl').write_text('\n'.join(json.dumps(r) for r in own))
+    (d / 'exp_results_v2.jsonl').write_text('\n'.join(json.dumps(r) for r in v2))
+    missing = []
+    rows = sr.collect(str(tmp_path), 'round_sens_*', BASE, 'exp_results_v2.jsonl', missing)
+    assert sorted(a for *_, a in rows) == pytest.approx([0.92, 0.93, 0.97])
+    assert missing == ['round_sens_x_a_trial3_a']
+    nf = sr.noise_floor(rows)
+    assert nf['rerun_abs_diff'] == pytest.approx([0.01])
+    assert nf['seed_sd'] == pytest.approx([float(np.std([0.925, 0.97], ddof=1))])

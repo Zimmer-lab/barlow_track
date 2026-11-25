@@ -2,10 +2,16 @@
 
 A trial's variant is how its train_config.yaml differs from the frozen recipe (scratch/round_sens_src/
 base_train_config.yaml; per-recording keys ignored), e.g. "lambd_obj=0.0, num_frames=16"; the control is the
-empty difference. Trials that share a seed are paired. Records come from each round's exp_results.jsonl
-(latest per tag), as in sweep_param_effect.py.
+empty difference. Trials that share a seed are paired. Records come from each round's exp_results_v2.jsonl
+(label propagation v2, the paper's tracker: rescore_round.py), latest per tag; --results exp_results.jsonl reads
+the scores of the trial jobs themselves (legacy label propagation). Cells without a record in the chosen file are
+counted and left out.
 
-    python barlow_track/scripts/sensitivity_report.py [--rounds 'round_sens_*'] [--out summary.tsv]
+The noise floor comes from the control: 'control rerun' pairs two control trials of the same recording and seed
+(crop_depth repeats the control at the recording's own depth), so only GPU numerics differ; 'control seeds' is
+the spread over the loss_volume replicate seeds.
+
+    python barlow_track/scripts/sensitivity_report.py [--rounds 'round_sens_*'] [--results exp_results_v2.jsonl] [--out summary.tsv]
 """
 import argparse
 import glob
@@ -68,11 +74,18 @@ def variant_name(cfg, base, label=None):
     return ', '.join(sorted(diffs))
 
 
-def collect(rounds_dir, pattern, base):
-    """[(label, variant, seed, accuracy)] over all records of the matching rounds."""
+def collect(rounds_dir, pattern, base, results='exp_results.jsonl', missing=None):
+    """[(label, variant, seed, accuracy)] over all records of the matching rounds.
+
+    missing: a list that gets the tags recorded in exp_results.jsonl but absent from results.
+    """
     rows = []
     for d in sorted(glob.glob(os.path.join(rounds_dir, pattern))):
-        path = os.path.join(d, 'exp_results.jsonl')
+        path = os.path.join(d, results)
+        if missing is not None and results != 'exp_results.jsonl':
+            own = _latest(os.path.join(d, 'exp_results.jsonl'))
+            got = _latest(path)
+            missing.extend(t for t, r in own.items() if r.get('accuracy') is not None and t not in got)
         if not os.path.exists(path):
             continue
         latest = {}
@@ -91,6 +104,33 @@ def collect(rounds_dir, pattern, base):
             cfg = yaml.safe_load(open(cfg_path))
             rows.append((m.group(2), variant_name(cfg, base, m.group(2)), int(cfg['seed']), float(r['accuracy'])))
     return rows
+
+
+def _latest(path):
+    out = {}
+    if os.path.exists(path):
+        for line in open(path):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get('tag'):
+                out[r['tag']] = r
+    return out
+
+
+def noise_floor(rows):
+    """Control-only spread: |difference| of same-seed reruns, and the SD over seeds of one recording."""
+    cells = defaultdict(list)
+    for label, var, seed, a in rows:
+        if var == '':
+            cells[(label, seed)].append(a)
+    rerun = [abs(v[i] - v[j]) for v in cells.values() for i in range(len(v)) for j in range(i + 1, len(v))]
+    per_label = defaultdict(list)
+    for (label, seed), v in cells.items():
+        per_label[label].append(float(np.mean(v)))
+    seed_sd = [float(np.std(v, ddof=1)) for v in per_label.values() if len(v) > 1]
+    return dict(rerun_abs_diff=rerun, seed_sd=seed_sd)
 
 
 def summarize(rows):
@@ -121,15 +161,27 @@ def main():
     ap.add_argument('--rounds_dir', default=ROUNDS)
     ap.add_argument('--rounds', default='round_sens_*')
     ap.add_argument('--base', default=BASE)
+    ap.add_argument('--results', default='exp_results_v2.jsonl',
+                    help='records file in each round (default v2 rescore; exp_results.jsonl = legacy, the trial jobs)')
     ap.add_argument('--out', default=None, help='also write the table here (tsv)')
     a = ap.parse_args()
     base = yaml.safe_load(open(a.base))
-    labels, rows = summarize(collect(a.rounds_dir, a.rounds, base))
+    missing = []
+    raw = collect(a.rounds_dir, a.rounds, base, a.results, missing)
+    labels, rows = summarize(raw)
     fmt = lambda x: 'NA' if x is None else f'{x:.4f}'
     lines = ['\t'.join(['variant', 'n'] + labels + ['paired_diff', 'paired_sd', 'n_pairs'])]
     for r in rows:
         lines.append('\t'.join([r['variant'], str(r['n'])] + [fmt(r['accuracy'][l]) for l in labels]
                                + [fmt(r['paired_diff']), fmt(r['paired_sd']), str(r['n_pairs'])]))
+    nf = noise_floor(raw)
+    r, sd = nf['rerun_abs_diff'], nf['seed_sd']
+    lines.append(f"# results: {a.results}; {len(raw)} cells" + (f"; {len(missing)} recorded cells not in it "
+                 f"(e.g. {missing[0]})" if missing else ''))
+    lines.append(f"# noise floor: control same-seed reruns |diff| mean {np.mean(r):.4f} max {np.max(r):.4f} "
+                 f"(n={len(r)})" if r else '# noise floor: no same-seed control reruns')
+    lines.append(f"# noise floor: control SD over seeds, mean over recordings {np.mean(sd):.4f} (n={len(sd)})"
+                 if sd else '# noise floor: no control replicate seeds')
     print('\n'.join(lines))
     if a.out:
         with open(a.out, 'w') as f:

@@ -3937,3 +3937,87 @@ run r261125-2.2 · pids 2 · host charles-Precision-7820-Tower · logs /tmp/barl
 ## 2026-11-25 14:26
 
 r261125-2.2 finished. Published both movie sets, the per-volume accuracy table and the updated captions, manifest, assignments and exporter. Checked the shared file checksums after reviewing both variants at the start, peak motion and end of each clip. The debug arrows use the scored identity's same-volume reference centroid.
+
+## 2026-11-25 15:09 — run
+
+Re-extracting both channels for every scored volume of Zimmer 1128, Leifer StarDist worm 1, Samuel 153 and the primary Flavell GFP recording. One mask-intensity lookup serves both identities and all trial 59 v2 replicates.
+
+run r261125-5.2 · pids 5 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/extract.log
+
+## 2026-11-25 15:18 — run
+
+Trial 59 trace fidelity: score both ratios on shared observed masks, preserving mismatches, restore gaps after filtering, rank examples in the original replicate, and plot one median per training replicate.
+
+run r261125-3.3 · pids 3 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/panels.log
+
+## 2026-11-25 15:20 — run
+
+Regenerating final panels after checking layout, with an explicit frame/mask lookup assertion for every track in all 20 files.
+
+run r261125-4.4 · pids 4 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/final.log
+
+## 2026-11-25 15:22
+
+r261125-5.2 extraction and r261125-3.3 / r261125-4.4 analyses completed. All assigned masks joined; all 20 saved identity-accuracy scores reproduced. Verified 2,355 per-neuron rows, eight quantile-selected examples, the processed and raw summaries and vector-only SVG output. Numerical results and limits recorded in [[EVD - Trial 59 preserves the median calcium trace across five training replicates in three recordings]].
+
+## 2026-11-25 15:34 — run
+
+Render stacked reviewer trace overlays with reference-SNR examples, Zimmer manual neuron IDs and independently aligned Zimmer and Leifer reversal epochs. Reuse the trial 59 v2 extraction.
+
+run r261125-7.2 · pids 7 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/stacked.log
+
+## 2026-11-25 15:40 — run
+
+Regenerate stacked overlays with position-verified Samuel anatomical IDs and the published recording 153 ventral-contact ethogram. Rank illustrative high-SNR cells by a spike-resistant reference-only SNR, keeping the original correlation-selected examples.
+
+run r261125-4.5 · pids 4 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/identified.log
+
+## 2026-11-25 15:41
+
+r261125-7.2 and r261125-4.5 finished. The revised publication panel has 15 stacked trace pairs. All 2,355 earlier neuron/replicate agreement records and all 20 replicate summaries were checked against the previous output. Added display metadata, per-recording behavior sources and Samuel viewer-position and contact-interval source tables; see docs/paper/trace_fidelity/caption.md. Updated figure script SHA-256 615329f61240273831cde182b85428db4d9661832f8cf4ede6b382e0297c5a7d.
+
+## 2026-11-25 16:08 — run
+
+Regenerate the reviewer panels on raw integrated green/red, assert equality at all shared same-mask samples, select quantile examples on the raw metric, and plot the same 120 s of acquired time in each recording.
+
+run r261125-4.6 · pids 4 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/raw.log
+
+## 2026-11-25 16:10 — run
+
+Render the final raw-ratio panels with shorter percentile labels for clearance at the y axes.
+
+run r261125-4.7 · pids 4 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/raw_finish.log
+
+## 2026-11-25 16:22 — run
+
+Make matched BarlowTrack and fDNC fluorescence figures using the confidence-selected five-template vote and verify recovered mask assignments against the benchmark.
+
+run r261125-7.3 · pids 7 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/paired.log
+
+## 2026-11-25 16:24 — run
+
+Regenerate all four lettered figures and tables after moving the mask-accuracy legend inside the fDNC figure.
+
+run r261125-4.8 · pids 4 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/paired_final.log
+
+## 2026-11-25 16:28 — run
+
+Regenerate trace overlays with per-neuron accuracy and coverage on the shared denominator of observed reference masks. Count wrong masks and missing predictions as errors.
+
+run r261125-3.4 · pids 3 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/per_neuron_accuracy.log
+
+## 2026-11-25 16:30 — run
+
+Apply final spacing to the accuracy and coverage columns in both overlays.
+
+run r261125-4.9 · pids 4 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/accuracy_layout.log
+
+## 2026-11-25 16:31 — decision
+
+R3.W6 refers to R3.Q2, which asks for calcium traces compared to manually tracked ground truth. Park et al. (2024) Fig. 2d shows six paired traces and marks discrepancies. The raw-ratio overlays and population distributions address that request. For Zimmer BAGL, the verified correct-mask counts are 1,628/1,648 for trial 59 and 723/1,648 for fDNC, at coverage of 99.7% and 97.3%, respectively. The full-recording counts and fractions are now in both per-neuron tables.
+
+## 2026-11-25 16:31 — run
+
+Render the final column spacing from the verified tables and the corresponding example masks after the layout-only repeat was interrupted.
+
+run r261125-4.10 · pids 4 · host charles-Precision-7820-Tower · logs /tmp/r3trace-calc/accuracy_render.log

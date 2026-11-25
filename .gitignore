@@ -161,6 +161,7 @@ cython_debug/
 
 # Neural network outputs
 *.png
+!docs/paper/trace_fidelity/figure_*.png
 *.wandb
 barlow_track/scripts/wandb/
 *.json
@@ -192,3 +193,6 @@ AGENTS.md
 CLAUDE.md
 # ASC/VSC compute proposal drafts (local only)
 docs/asc_proposal/
+
+*.svg
+*.png

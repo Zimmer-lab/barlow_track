@@ -36,7 +36,7 @@ mkdir -p $R/week47_logs
 
 # jobs per (round, recording), as in launch_sensitivity.sh
 declare -A EXPECTED=([loss_volume]=54 [oat]=31 [matched_steps]=1 [attention2]=1 [crop_depth]=2
-                     [only_affine]=1 [only_elastic]=1 [only_noise]=1 [aug_none]=1)
+                     [only_affine]=1 [only_elastic]=1 [only_noise]=1 [aug_none]=1 [posonly_reps]=2 [affine_reps]=2)
 
 run() { if [ -n "${DRY:-}" ]; then echo "DRY: $*"; else "$@"; fi; }
 queue() { squeue -u "$USER" -h -o '%i %j'; }
@@ -55,7 +55,7 @@ status() {
   for D in $B/round_sens_*/; do
     D=${D%/}; local name; name=$(basename $D); split_round $name
     local alive=no; in_queue "sens_${RN}_$L" "$q" && alive=yes
-    printf '%-48s %4s/%-4s %10s %7s %8s\n' $name $(recorded $D) ${EXPECTED[$RN]} $alive $(inflight $D "$q") $(rescored $D)
+    printf '%-48s %4s/%-4s %10s %7s %8s\n' $name $(recorded $D) ${EXPECTED[$RN]:-?} $alive $(inflight $D "$q") $(rescored $D)
   done
   for f in exp_results_transfer_v2.jsonl; do
     [ -f $R/$f ] && echo "$f: $(grep -o '"tag": "[^"]*"' $R/$f | sort -u | wc -l) of 132" || echo "$f: not yet"
@@ -67,8 +67,12 @@ resume() {
   for D in $B/round_sens_*/; do
     D=${D%/}; local name; name=$(basename $D); split_round $name
     local n; n=$(recorded $D)
-    [ "$n" -ge "${EXPECTED[$RN]}" ] && continue
+    [ "$n" -ge "${EXPECTED[$RN]:-0}" ] && continue
     in_queue "sens_${RN}_$L" "$q" && continue  # dispatcher alive
+    if ! ls $D/dispatcher_*.log > /dev/null 2>&1; then  # staged, never launched: launching is not resume's call
+      echo "$name: never launched (launch_sensitivity.sh launch), left alone"
+      continue
+    fi
     local k; k=$(inflight $D "$q")
     if [ "$k" -gt 0 ] && [ -z "${FORCE:-}" ]; then
       echo "$name: dispatcher gone, $n/${EXPECTED[$RN]} recorded, $k trial job(s) still queued or running: wait (FORCE=1 relaunches now and retrains those)"

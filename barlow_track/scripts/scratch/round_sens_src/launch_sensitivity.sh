@@ -13,6 +13,8 @@
 #   bash $S/launch_sensitivity.sh launch loss_volume oat   # or name rounds
 #   bash $S/launch_sensitivity.sh stage posonly_reps && bash $S/launch_sensitivity.sh launch posonly_reps   # 2 more
 #       position-only replicates per recording (12 jobs; not part of core / ablations)
+#   bash $S/launch_sensitivity.sh stage affine_reps && bash $S/launch_sensitivity.sh launch affine_reps   # 2 more
+#       p_global_affine 0 replicates per recording (12 jobs; not part of core / ablations)
 #
 # Rounds (jobs per recording): loss_volume 18 combinations x 3 repetitions = 54, oat 31, attention2 1, crop_depth 2, only_affine / only_elastic /
 # only_noise / aug_none / matched_steps 1 each. core = loss_volume + oat + matched_steps + attention2 + crop_depth; ablations = the four
@@ -29,12 +31,12 @@ NUM_PARALLEL=${NUM_PARALLEL:-6}
 declare -A GRID=([loss_volume]=grid_loss_volume.yaml [oat]=grid_one_at_a_time.yaml [matched_steps]=grid_matched_steps.yaml
                  [only_affine]=grid_only_affine.yaml [only_elastic]=grid_only_elastic.yaml [only_noise]=grid_only_noise.yaml
                  [aug_none]=grid_aug_none.yaml [attention2]=grid_attention2.yaml [crop_depth]=grid_crop_depth.yaml
-                 [posonly_reps]=grid_posonly_reps.yaml)
+                 [posonly_reps]=grid_posonly_reps.yaml [affine_reps]=grid_affine_reps.yaml)
 declare -A FLAG=([loss_volume]=--direct_parameter_sweep [oat]=--one_at_a_time_sweep [matched_steps]=--direct_parameter_sweep
                  [only_affine]=--direct_parameter_sweep [only_elastic]=--direct_parameter_sweep [only_noise]=--direct_parameter_sweep
                  [aug_none]=--direct_parameter_sweep [attention2]=--direct_parameter_sweep [crop_depth]=--direct_parameter_sweep
-                 [posonly_reps]=--direct_parameter_sweep)
-declare -A REP=([loss_volume]=3 [oat]=1 [matched_steps]=1 [only_affine]=1 [only_elastic]=1 [only_noise]=1 [aug_none]=1 [attention2]=1 [crop_depth]=1 [posonly_reps]=1)
+                 [posonly_reps]=--direct_parameter_sweep [affine_reps]=--direct_parameter_sweep)
+declare -A REP=([loss_volume]=3 [oat]=1 [matched_steps]=1 [only_affine]=1 [only_elastic]=1 [only_noise]=1 [aug_none]=1 [attention2]=1 [crop_depth]=1 [posonly_reps]=1 [affine_reps]=1)
 
 cmd=${1:?stage or launch}; shift || true
 rounds=("$@")

@@ -122,17 +122,20 @@ def run_shard(a, shard):
     return n_fail
 
 
-def dispatch(a):
+def dispatch(a, shard_fn=None, report_fn=None, paths_fn=None, job_prefix='transfer'):
+    """Submit a.slurm shard jobs (shard_fn(a, shard), default run_shard) and wait; then report_fn(a).
+    The hooks let sibling scripts (score_pooled_round.py) reuse this dispatcher."""
     from submitit import AutoExecutor
     from barlow_track.scripts import optimize_hyperparameters as oh
-    rd, out_jsonl, _ = paths(a)
+    shard_fn, report_fn, paths_fn = shard_fn or run_shard, report_fn or report, paths_fn or paths
+    rd, out_jsonl, _ = paths_fn(a)
     a.num_shards = a.slurm
     executor = AutoExecutor(folder=os.path.join(rd, 'slurm'), cluster='slurm')
     executor.update_parameters(timeout_min=a.minutes + 60,
-                               **oh.train_job_params({}, f'transfer_{os.path.basename(rd)}'))
+                               **oh.train_job_params({}, f'{job_prefix}_{os.path.basename(rd)}'))
     for v in oh._DISPATCH_THREAD_VARS:
         os.environ.pop(v, None)
-    jobs = {s: executor.submit(run_shard, a, s) for s in range(a.slurm)}
+    jobs = {s: executor.submit(shard_fn, a, s) for s in range(a.slurm)}
     for v in oh._DISPATCH_THREAD_VARS:
         os.environ[v] = '1'
     print(f"Submitted {len(jobs)} shard jobs ({oh.slurm_duration(a.minutes + 60)} each): "
@@ -153,7 +156,7 @@ def dispatch(a):
                   f"{len(latest_records(out_jsonl))} cells recorded", flush=True)
             time.sleep(600)
     print(f"all shards finished; {n_fail} failed cells or jobs", flush=True)
-    report(a)
+    report_fn(a)
     return n_fail
 
 

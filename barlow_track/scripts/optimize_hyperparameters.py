@@ -25,8 +25,10 @@ from ax.service.utils.report_utils import exp_to_df
 import yaml  # We are only using this for reading
 from ruamel.yaml import YAML
 from submitit import AutoExecutor, LocalJob, DebugJob
+from submitit.core.utils import UncompletedJobError
 from itertools import product
-from barlow_track.scripts.train_barlow_clusterer import train_barlow_network
+from barlow_track.scripts.train_barlow_clusterer import (CHECKPOINT_NAME, HEARTBEAT_NAME, resumable_epoch,
+                                                         train_barlow_network)
 from barlow_track.scripts.eval_accuracy import evaluate_trained_checkpoint, preflight_trained_eval
 try:
     from barlow_track.utils.barlow import PretrainedArchitectureMismatchError
@@ -97,6 +99,34 @@ class ConsecutiveFailureGuard:
         """Count one finished trial; True if the sweep should stop now."""
         self.streak = self.streak + 1 if failed else 0
         return 0 < self.max_failures <= self.streak
+
+
+# Times the live dispatcher resubmits one trial whose training job ended unfinished (walltime,
+# preemption, node failure) into its own folder, where training resumes from the checkpoint
+DEFAULT_MAX_RESUMES = 3
+# A relaunched dispatcher leaves out an unfinished trial whose folder changed this recently: its
+# job (of a dispatcher that died) may still be running there
+DEFAULT_RESUME_STALE_MINUTES = 60
+
+
+def job_interrupted(job_died, result):
+    """True if a trial's job ended without finishing on its own: the job produced no result
+    (submitit raised: killed, node failure), or training reported submitit's walltime /
+    preemption signal (evaluate's 'interrupted'). A crash inside training is not one: rerun
+    from its checkpoint, a deterministic crash would only repeat."""
+    return bool(job_died) or (isinstance(result, dict) and bool(result.get('interrupted')))
+
+
+def trial_activity_age_minutes(trial_dir):
+    """Minutes since a trial's training last showed activity (its heartbeat, checkpoint or log
+    files), or None if there is none. Training touches the heartbeat about once a minute; runs
+    of code without it still write the checkpoint each epoch and plots into log/."""
+    paths = [os.path.join(trial_dir, HEARTBEAT_NAME), os.path.join(trial_dir, CHECKPOINT_NAME)]
+    log_dir = os.path.join(trial_dir, 'log')
+    if os.path.isdir(log_dir):
+        paths += [os.path.join(log_dir, f) for f in os.listdir(log_dir)]
+    mtimes = [os.path.getmtime(p) for p in paths if os.path.isfile(p)]
+    return (time.time() - max(mtimes)) / 60 if mtimes else None
 
 
 def job_budget_minutes(epochs, objective_minutes=0, train_hours=None):
@@ -308,6 +338,35 @@ def resolve_objective(hyperparameter_args):
                         f"measured on that many frames only. Fine for smoke tests, NOT comparable "
                         f"to a full-video evaluation.")
     return objective, dataset_label, eval_kwargs
+
+
+def check_pooled_baseline(baseline_params, accuracy_objective, hyperparameter_args=None):
+    """Validate a pooled (multi-recording, `project_paths`) baseline before any job is submitted.
+
+    The entries are checked as each trial's training will check them (resolve_recordings), so a
+    malformed list fails here once instead of in every trial. Pooled rounds run under
+    objective: loss and are scored afterwards on every benchmark recording
+    (scratch/transfer/score_pooled_round.py): the accuracy objective scores a trial on ITS OWN
+    training project, which a pooled network does not have. Returns the resolved recordings
+    ([] for a single-project baseline).
+    """
+    from barlow_track.scripts.train_barlow_clusterer import is_pooled, resolve_recordings
+    cfg = SimpleNamespace(**baseline_params)
+    if not is_pooled(cfg):
+        return []
+    if accuracy_objective:
+        raise ValueError("train_config.yaml sets project_paths (pooled training on several recordings), which "
+                         "objective: accuracy does not support: that objective scores each trial on its own single "
+                         "training project. Use objective: loss and score the trials afterwards with "
+                         "barlow_track/scripts/scratch/transfer/score_pooled_round.py.")
+    recordings = resolve_recordings(cfg, int(baseline_params.get('seed', 43)))
+    print(f"Pooled training on {len(recordings)} recordings: "
+          + ", ".join(f"{r['label']} (z_scale {r['visnet_z_scale']})" for r in recordings), flush=True)
+    if not (hyperparameter_args or {}).get('train_hours'):
+        logging.warning(f"Pooled training over {len(recordings)} recordings: an epoch takes about the sum of the "
+                        f"recordings' single-project epochs, but the default walltime assumes one recording. "
+                        f"Set train_hours in the template.")
+    return recordings
 
 
 def objective_record_settings(eval_kwargs, baseline_params):
@@ -522,27 +581,61 @@ def _lookup_dotted(config, key):
     return node
 
 
-def completed_grid_jobs(planned, planned_seeds, prior_configs, base_seed):
-    """Indices of planned grid jobs that a finished prior trial already ran.
+def match_grid_jobs(planned, planned_seeds, prior_configs, base_seed):
+    """{planned job index: index into prior_configs} of the jobs a prior trial ran.
 
-    A job is covered when a prior trial has the same value for every swept
-    parameter and the same seed (a prior without a seed ran with base_seed).
-    Each prior covers at most one job, so a grid with --repetitions keeps
-    the replicates the folder does not have yet.
+    A job matches a prior trial with the same value for every swept parameter and
+    the same seed (a prior without a seed ran with base_seed). Each prior matches
+    at most one job, earlier priors first.
     """
-    unused = list(prior_configs)
-    covered = set()
+    unused = list(range(len(prior_configs)))
+    matched = {}
     for i, (params, seed) in enumerate(zip(planned, planned_seeds)):
         want = dict(params)
         want.setdefault('seed', seed)
-        for j, prior in enumerate(unused):
-            have = dict(prior)
+        for pos, j in enumerate(unused):
+            have = dict(prior_configs[j])
             have.setdefault('seed', base_seed)
             if all(_has_same(have, k, v) for k, v in want.items()):
-                covered.add(i)
-                del unused[j]
+                matched[i] = j
+                del unused[pos]
                 break
-    return covered
+    return matched
+
+
+def completed_grid_jobs(planned, planned_seeds, prior_configs, base_seed):
+    """Indices of planned grid jobs that a finished prior trial already ran.
+
+    See match_grid_jobs. Each prior covers at most one job, so a grid with
+    --repetitions keeps the replicates the folder does not have yet.
+    """
+    return set(match_grid_jobs(planned, planned_seeds, prior_configs, base_seed))
+
+
+def unfinished_grid_resumes(planned, planned_seeds, unfinished_priors, base_seed,
+                            stale_minutes=DEFAULT_RESUME_STALE_MINUTES):
+    """Which planned grid jobs a relaunched dispatcher reruns in an unfinished prior trial's folder.
+
+    unfinished_priors: (trial_dir, config) of trials whose training did not finish. Returns
+    (resumes, busy): resumes maps a job index to (trial_dir, config, resumable epoch or None),
+    busy maps a job index to (trial_dir, minutes since its last activity) for folders that
+    changed within stale_minutes, whose job (of an earlier dispatcher) may still be running;
+    those are left out rather than written to twice. Among several unfinished folders of one
+    job the furthest trained one is used.
+    """
+    epochs = [resumable_epoch(d, c.get('epochs')) for d, c in unfinished_priors]
+    order = sorted(range(len(unfinished_priors)), key=lambda j: -1 if epochs[j] is None else -epochs[j])
+    matched = match_grid_jobs(planned, planned_seeds, [unfinished_priors[j][1] for j in order], base_seed)
+    resumes, busy = {}, {}
+    for i, k in matched.items():
+        j = order[k]
+        trial_dir, config = unfinished_priors[j]
+        age = trial_activity_age_minutes(trial_dir)
+        if age is not None and age < float(stale_minutes):
+            busy[i] = (trial_dir, age)
+        else:
+            resumes[i] = (trial_dir, config, epochs[j])
+    return resumes, busy
 
 
 def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_parallel_jobs=None,
@@ -607,6 +700,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     # (objective_gt can only name another GT file of that same recording).
     objective, dataset_label, objective_kwargs = resolve_objective(hyperparameter_args)
     accuracy_objective = objective == 'accuracy'
+    check_pooled_baseline(baseline_params, accuracy_objective, hyperparameter_args)
     if accuracy_objective and not baseline_params.get('project_path'):
         raise ValueError("objective: accuracy needs the trial's project_path: the objective is "
                          "tracking accuracy on the trial's own training project "
@@ -648,6 +742,12 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
             # Systematic config error affecting every trial; fail fast instead of
             # failing every trial in turn.
             raise
+        except UncompletedJobError as e:
+            # submitit raises this inside the job on its walltime / preemption signal. Reported
+            # as such, so the dispatcher can resubmit the trial to resume from its checkpoint
+            # (a crash, below, is not resubmitted).
+            logging.warning(f"Trial job interrupted: {e}")
+            return {"result": None, "interrupted": str(e)}
         except Exception as e:
             logging.exception(f"Encountered error with trial; quitting gracefully: {e}")
             score = None
@@ -681,9 +781,22 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     # checkpoint survives, so only the tracking eval has to run again (the
     # embedding cache in emb_cache makes that cheap). Keyed by Ax trial index.
     pending_evals = {}
+    # Trials to (re)submit as training jobs into their existing folder, where training resumes
+    # from the checkpoint: a job that ended unfinished while this dispatcher runs (at most
+    # max_resumes times per trial), or, on a relaunched grid, an unfinished prior trial.
+    # Keyed by Ax trial index; the value is the trial's full config.
+    pending_resumes = {}
+    resume_counts = {}  # trial index -> resubmissions so far (live ones only)
+    max_resumes = hyperparameter_args.get('max_resumes')
+    max_resumes = DEFAULT_MAX_RESUMES if max_resumes is None else int(max_resumes)
+    resume_stale_minutes = hyperparameter_args.get('resume_stale_minutes')
+    resume_stale_minutes = DEFAULT_RESUME_STALE_MINUTES if resume_stale_minutes is None else float(resume_stale_minutes)
     # Configs of prior trials whose training finished (scored or not); a
     # resumed grid sweep uses them to leave out the jobs that already ran.
     finished_prior_configs = []
+    # (trial folder, config) of prior trials whose training did not finish; a grid relaunched
+    # with --skip_completed_grid_jobs reruns their jobs in these folders (resuming training)
+    unfinished_priors = []
     if len(prior_trials) > 0:
         logging.info(f"Discovered {len(prior_trials)} prior trials, loading...")
         # Only records measured as this sweep measures (its project GT, settings, full
@@ -702,6 +815,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
 
                 if not check_training_finished(trial_path, int(config['epochs']) - 1):
                     print(f"Prior trial {trial_name}: training was not finished; skipping")
+                    unfinished_priors.append((trial_path, config))
                     continue
                 finished_prior_configs.append(config)
                 if accuracy_objective:
@@ -840,7 +954,27 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                   f"{experiment_parent_folder}; leaving them out", flush=True)
             all_combinations = [c for i, c in enumerate(all_combinations) if i not in covered]
             job_seeds = [s for i, s in enumerate(job_seeds) if i not in covered]
-        elif covered:
+        if skip_completed_grid_jobs and unfinished_priors:
+            # A grid job whose trial folder holds an unfinished training runs again IN that folder,
+            # where training continues from its checkpoint (or restarts, if it has none usable),
+            # instead of as a new trial next to it
+            resumes, busy = unfinished_grid_resumes(all_combinations, job_seeds, unfinished_priors, base_seed,
+                                                    resume_stale_minutes)
+            for i, (trial_dir, age) in sorted(busy.items()):
+                logging.warning(f"Grid job {all_combinations[i]} has an unfinished trial in {trial_dir} whose "
+                                f"files changed {age:.0f} min ago: its job may still be running, so it is left "
+                                f"out of this run. Relaunch once it has ended (resume_stale_minutes="
+                                f"{resume_stale_minutes}).")
+            for i, (trial_dir, config, epoch) in sorted(resumes.items()):
+                trial_index = ax_client.experiment.new_trial().index
+                pending_resumes[trial_index] = {**config, 'project_dir': trial_dir}
+                how = (f"resumes training at epoch {epoch} of {config.get('epochs')}" if epoch is not None
+                       else "has no resumable checkpoint, so training restarts there from scratch")
+                print(f"Grid job {all_combinations[i]}: unfinished trial {trial_dir} {how}", flush=True)
+            gone = set(resumes) | set(busy)
+            all_combinations = [c for i, c in enumerate(all_combinations) if i not in gone]
+            job_seeds = [s for i, s in enumerate(job_seeds) if i not in gone]
+        if covered and not skip_completed_grid_jobs:
             logging.warning(f"{len(covered)} of {len(all_combinations)} grid jobs match a finished prior "
                             f"trial (same parameters and seed) and will be trained again into new "
                             f"folders. Pass --skip_completed_grid_jobs to resume the grid instead.")
@@ -879,7 +1013,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
     stop_reason = None
 
     # Run until all the jobs have finished and our budget is used up.
-    while submitted_jobs < total_budget or jobs or pending_evals:
+    while submitted_jobs < total_budget or jobs or pending_evals or pending_resumes:
         for job, trial_index, kind in jobs[:]:
             # Poll if any jobs completed
             # Local and debug jobs don't run until .result() is called.
@@ -890,6 +1024,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 # Whether the TRIAL failed is decided by its job alone; Ax
                 # bookkeeping errors below (expected for grid sweeps) are not
                 # trial failures and must not trip the failure guard.
+                job_died = False
                 try:
                     result = job.result()
                 except RuntimeError as e:
@@ -897,6 +1032,27 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                     # crashed or was killed (e.g. walltime) without a result.
                     print(f"Encountered Error, trial {trial_index} may need to be rerun: {e}")
                     result = None
+                    job_died = True
+                if kind == 'train' and job_interrupted(job_died, result):
+                    # Walltime / preemption / node failure: resubmit the trial into its own folder,
+                    # where training continues from its last epoch checkpoint
+                    params = trial_params[trial_index]
+                    epoch = resumable_epoch(params['project_dir'], params.get('epochs'))
+                    n_resumed = resume_counts.get(trial_index, 0)
+                    if epoch is not None and n_resumed < max_resumes:
+                        resume_counts[trial_index] = n_resumed + 1
+                        jobs.remove((job, trial_index, kind))
+                        pending_resumes[trial_index] = params
+                        print(f"Trial {trial_index}: its job ended before training finished; the checkpoint in "
+                              f"{params['project_dir']} is at epoch {epoch} of {params.get('epochs')}. "
+                              f"Resubmitting it into the same folder to resume "
+                              f"(resume {n_resumed + 1} of max_resumes={max_resumes})", flush=True)
+                        continue
+                    if epoch is not None:
+                        print(f"Trial {trial_index}: its job ended before training finished again (epoch {epoch} "
+                              f"of {params.get('epochs')}), but it was resubmitted {n_resumed} times already "
+                              f"(max_resumes={max_resumes}); marking it FAILED. A relaunch with "
+                              f"--skip_completed_grid_jobs resumes a grid trial in place.", flush=True)
                 if cpu_eval_job and kind == 'train' and isinstance(result, dict) and result.get('needs_eval'):
                     # Trained: score it in a CPU-only job (scheduled below with the other evals)
                     jobs.remove((job, trial_index, kind))
@@ -939,6 +1095,7 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         # Resumed evals go first: they are cheap (checkpoint + cached
         # embeddings already exist) and a fresh sweep must not start scoring
         # new trials while an older trial's score is still missing.
+        # Then resumed trainings, which take training slots like new trials and come before them.
         if cpu_eval_job:
             n_gpu = sum(1 for _, _, k in jobs if k != 'cpu_eval')
             n_pending = min(len(pending_evals), max(0, cpu_parallel_jobs - (len(jobs) - n_gpu)))
@@ -946,6 +1103,8 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
         else:
             n_pending = min(len(pending_evals), max(0, num_parallel_jobs - len(jobs)))
             free_slots = max(0, num_parallel_jobs - len(jobs)) - n_pending
+        n_resume = min(len(pending_resumes), free_slots)
+        free_slots -= n_resume
         trial_seeds = {}
         if direct_parameter_sweep or one_at_a_time_sweep:
             # Get a new trial manually, without using the AxClient's internal logic (it can't do a grid search)
@@ -970,15 +1129,18 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
 
         # Eval-only jobs first; their trial folders and configs already exist,
         # so they are submitted with the saved config verbatim and train=False.
-        submissions = [(trial_index, params, True)
+        submissions = [(trial_index, params, 'eval')
                        for trial_index, params in list(pending_evals.items())[:n_pending]]
-        for trial_index, _, _ in submissions:
-            del pending_evals[trial_index]
-        submissions += [(trial_index, params, False)
+        submissions += [(trial_index, params, 'resume')
+                        for trial_index, params in list(pending_resumes.items())[:n_resume]]
+        for trial_index, _, mode in submissions:
+            del (pending_evals if mode == 'eval' else pending_resumes)[trial_index]
+        submissions += [(trial_index, params, 'new')
                         for trial_index, params in trial_index_to_param.items()]
 
-        for trial_index, parameters, eval_only in submissions:
-            if not eval_only:
+        for trial_index, parameters, mode in submissions:
+            eval_only = mode == 'eval'
+            if mode == 'new':
                 # Make a new folder in the parent folder
                 # Find a unique folder name by incrementing trial_offset if needed
                 while True:
@@ -1016,11 +1178,12 @@ def optimize_hyperparameters(hyperparameter_path, run_locally=False, num_paralle
                 kind = 'train'
             for _v in _DISPATCH_THREAD_VARS:
                 os.environ[_v] = "1"
-            if not eval_only:
+            if mode == 'new':
                 submitted_jobs += 1
             trial_params[trial_index] = parameters
             jobs.append((job, trial_index, kind))
             what = (("CPU-only " if cpu_eval_job else "") + "eval-only job") if eval_only \
+                else f"training resumes in {parameters['project_dir']}" if mode == 'resume' \
                 else f"{submitted_jobs}/{total_budget} submitted"
             print(f"Submitted trial {trial_index} ({type(job).__name__}): {what}", flush=True)
             time.sleep(1)

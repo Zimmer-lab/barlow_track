@@ -56,6 +56,12 @@ num_workers: 0
 # 2026-11-05). false repeats one fixed view pair per frame for all epochs, as every
 # position run from 2026-10-05 to 2026-11-05 did; set it only to reproduce those.
 reaugment_each_epoch: true
+# Continue an unfinished run: every epoch ends with checkpoints/checkpoint.pth (weights, optimizer,
+# RNG states, stats so far). Rerunning in the same folder with the same config (all keys but
+# bookkeeping: project_dir, wandb_*, DEBUG, dryrun, timing_log, epochs, epoch_snapshots) and no
+# final resnet50.pth continues from it; anything else moves the old outputs to superseded/ and
+# starts fresh. On CPU a resumed run reproduces the uninterrupted one exactly.
+resume_from_checkpoint: true
 
 # Hyperparameters for the new (transposed) BarlowTrack loss
 lambd_obj: 0.67  # Set to 1 to only use the transposed loss; 0 means only original BarlowTwins loss

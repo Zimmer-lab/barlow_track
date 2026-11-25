@@ -64,6 +64,22 @@ objective: loss
 # The sweep stops (cancelling running jobs) after this many failed trials in a
 # row; 0 disables the stop.
 # max_consecutive_failures: 3
+#
+# RESUMED TRIALS: a training job that ends before training finished without
+# crashing (walltime, preemption, node failure) is resubmitted into its own
+# trial folder (same parameters and seed), where training continues from its
+# last epoch checkpoint (train_config resume_from_checkpoint). Up to this many
+# times per trial while the dispatcher runs (all sweep modes); then it is
+# marked FAILED. A crash inside training (e.g. a non-finite loss) is never
+# resubmitted. Resubmissions do not count toward the budget or the failure stop.
+# max_resumes: 3
+# A grid / one-at-a-time sweep relaunched with --skip_completed_grid_jobs also
+# reruns each grid job whose trial folder holds an unfinished training IN that
+# folder (resuming it) instead of as a new trial, unless the folder changed in
+# the last resume_stale_minutes (its job may still run: training touches
+# checkpoints/heartbeat every minute); such a job is left out of that relaunch.
+# Ax (Bayesian) relaunches still skip unfinished prior trials.
+# resume_stale_minutes: 60
 
 # ---- objective: accuracy settings (ignored when objective: loss) ----------
 # Benchmark-dataset label for this (training project == evaluated project)

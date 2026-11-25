@@ -694,6 +694,12 @@ def run_eval(args):
         _, tmodel, targs = load_barlow_model(args.weights)
         tmodel = tmodel.to(device).eval()
         t_target_sz = np.array(getattr(targs, 'target_sz', [targs.target_sz_z, targs.target_sz_xy, targs.target_sz_xy]))
+        if (getattr(targs, 'pooled_recordings', None) and getattr(targs, 'position_encoder', None) == 'visnet'
+                and getattr(args, 'visnet_z_scale', None) is None):
+            # A pooled network trained with each recording's own z_scale and saved none (None =
+            # voxel units), so without the target's value every recording would embed wrongly
+            raise ValueError(f"{args.weights} was trained on several recordings (pooled), each with its own "
+                             f"ViSNet z_scale: pass the evaluated recording's --visnet_z_scale")
         if getattr(args, 'visnet_z_scale', None) is not None:
             from barlow_track.utils.barlow_superglue import set_visnet_z_scale
             n_enc = set_visnet_z_scale(tmodel, args.visnet_z_scale)

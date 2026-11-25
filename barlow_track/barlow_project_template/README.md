@@ -55,6 +55,10 @@ This will produce output in the log/ and checkpoints/ folders, as well as the fo
 1. resnet50.pth - the final trained weights (this will be used when tracking)
 2. args.pickle  - the hyperparameters for training; also needed for reading the network
 
+checkpoints/checkpoint.pth is rewritten after every epoch. If a run is killed (e.g. at the Slurm walltime),
+running the same command again with the same train_config.yaml continues from that checkpoint instead of
+starting over (set `resume_from_checkpoint: false` to start over).
+
 ## Zimmer lab specifics
 
 If you are in the zimmer lab, you can add your trained network folder here:

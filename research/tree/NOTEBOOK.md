@@ -3841,3 +3841,99 @@ T3 HDBSCAN cells split into a 2 x 2 before launch (side-agent note): global_excl
 ## 2026-11-24 19:00 — result
 
 fDNC (published model) on all 12 round_shared_v1 trial-59 benchmark recordings, run r261124 (local CPU; barlow_track@bcbcf5e + uncommitted fdnc_track_and_score.py / fdnc_paired_table.py; ~/.cache/barlow_scratch/fdnc/r1m2_trial59/run_all.sh). Same protocol everywhere: templates 10 + 4 spread, GT-free reference-RMS rescale, 4 axis conventions, 5-template vote, convention picked by fDNC's mean vote match probability. Identical detections, frames, GT matrix and denominators to the trial-59 tracks (checked per recording). BarlowTrack higher on 12 of 12, no ties, gap 0.10-0.40. Recorded in [[EVD - Published trackers run on the shared NWB benchmark]]. Zimmer 1128 closes here: the rescaled 5-template vote (finished in the 10-29 cache but never written up) is 0.627 with swap (15,695 misses, 61,476 mismatches of 206,701), rescored today from the cached tracks with an identical result; the 0.615 quoted so far is the single template-10 score. BarlowTrack trial 59: 0.986 (r0-r4 0.987, 0.985-0.989).
+
+## 2026-11-25 13:32 — decision
+
+Review videos: rank T1 candidates by d_novel_mean within each lab; inspect raw fixed projections, including a depth view on Zimmer. Keep every volume and join pred_all columns to that frame’s detections.
+
+## 2026-11-25 13:36 — decision
+
+Selected top within-lab windows for Zimmer 1123, Leifer StarDist and Samuel 153. On Flavell chose 2022-03-16-03 (third-highest mean novelty): the two higher windows on 03-31 lose part of the head at the image edge. Use both XY and YZ views on Zimmer; use original red NRRD spacing for Flavell after verifying NWB t equals NRRD t+1.
+
+## 2026-11-25 13:38 — run
+
+Render four trial-59 movies, verify every predicted assignment against the embedding map, and check source volumes and masks on selected frames.
+
+run r261125-5 · pids 5 · host charles-Precision-7820-Tower · logs /tmp/barlow-sv-render.log
+
+## 2026-11-25 13:39 — decision
+
+r261125-5 stopped during frame QA: project metadata use reference-intensity-weighted mask centroids. Recomputing those from independent segmentation masks and red volumes reproduces the saved positions exactly for Zimmer and Leifer.
+
+## 2026-11-25 13:40 — run
+
+Render and verify selected trial-59 movies using the same centroid convention as training and scoring.
+
+run r261125-3 · pids 3 · host charles-Precision-7820-Tower · logs /tmp/barlow-sv-render-2.log
+
+## 2026-11-25 13:42 — decision
+
+For Flavell 2022-03-16-03, red NRRD t0313 equals NWB volume 312 voxel-for-voxel. The source NRRD records 0.54 along each axis while the converted NWB reports 0.3. The movie uses source spacing. The nominal T1 clock is distinct from the converter’s default 1 Hz.
+
+## 2026-11-25 13:43 — run
+
+r261125-3 was interrupted mid-encode after the first two clips. Export the four movies in parallel and verify sampled decoded RGB frames against each original composition.
+
+run r261125-2 · pids 2 · host charles-Precision-7820-Tower · logs /tmp/barlow-sv-checked.log
+
+## 2026-11-25 13:43 — issue
+
+The cropped red NRRD for Flavell 2022-03-16-03 specifies 0.54 on all three axes and is voxel-identical to the evaluated NWB. The reported 0.33 µm in the dataset note and 0.3 in the NWB do not describe that source image grid. The 2022-03-31-01 red NRRD checked here also specifies 0.54. This matters for physical scale bars and cross-lab distances; the videos use the original NRRD spacing. Other recordings were not audited.
+
+- [ ] issue i261125-1 · affects [[DATA - Flavell lab benchmark recordings]]
+
+## 2026-11-25 13:44 — run
+
+r261125-2 verified the first three encodes; Samuel frame 744 has a valid subvoxel centroid inside the last z voxel, beyond its centre. Preserve its exact coordinate and verify against the voxel boundary. Rendering the final set.
+
+run r261125-3.2 · pids 3 · host charles-Precision-7820-Tower · logs /tmp/barlow-sv-verified.log
+
+## 2026-11-25 13:46
+
+r261125-3.2 finished. Four 20-second H.264 movies, captions, manifest, exact exporter and assignment audit are in /lisc/data/scratch/neurobiology/zimmer/fieseler/barlow_track_revisions/revision_analysis/supplementary_videos/. Beginning, both volumes of the peak d_lag1 transition and final encoded frames visually inspected for each recording; decoded sample checks are in manifest.json. The per-mark audit pivots back to pred_all cell for cell. Shared files match the inspected copies by SHA-256. Exporter is new and uncommitted; exact source is archived beside the videos.
+
+## 2026-11-25 13:52 — run
+
+Export one 20-second example per T1 recording. Image previews favor the second-ranked windows in Zimmer 1128, Samuel 137 and Flavell 2022-03-31-01 for visible lead-in and follow-through. Show a native pixel scale on Samuel 184-004 because lateral calibration is uncertain.
+
+run r261125-4 · pids 4 · host charles-Precision-7820-Tower · logs /tmp/barlow-sv-all12.log
+
+## 2026-11-25 13:54 — run
+
+r261125-4 encountered genuine empty prediction frames. Preserve those blank overlays and choose the sparse label examples at the first available assignment frame. Render the complete set.
+
+run r261125-7 · pids 7 · host charles-Precision-7820-Tower · logs /tmp/barlow-sv-delivery12.log
+
+## 2026-11-25 13:57
+
+r261125-7 finished. Published and checksum-verified all twelve 20-second MP4s in revision_analysis/supplementary_videos with the all-recording manifest, captions, assignment audit and exact exporter. All twelve clips decoded at the beginning, peak transition and end. The first four MP4s are byte-identical to their previous exports. Blank overlays preserve the actual gaps on Samuel 137 and Flavell 2022-03-30-02.
+
+## 2026-11-25 14:06 — run
+
+Re-export all twelve fixed windows in XY only, one output frame per source volume at 2 fps. Determine marker shapes from the saved full-recording matching and per-volume GT, preserving pred_all identities and detection coordinates.
+
+run r261125-4.2 · pids 4 · host charles-Precision-7820-Tower · logs /tmp/barlow-sv-xy-status.log
+
+## 2026-11-25 14:08
+
+r261125-4.2 finished. All twelve shared MP4s are XY only and play at 2 source volumes/s. Circle/cross/dot mark correctness from pred_matched and gt; color and coordinates come from the original prediction. Decoded beginning, peak motion and end reviewed, pointwise statuses independently checked against the scoring cells, and shared file checksums verified. The updated manifest, captions, per-mark audit and exact exporter are beside the movies.
+
+## 2026-11-25 14:18 — run
+
+Export standard and debug MP4s for all twelve recordings. Show the saved scorer's per-volume correct / annotated counts including misses; debug arrows connect a cross to the same-frame centroid of its known expected detection.
+
+run r261125-4.3 · pids 4 · host charles-Precision-7820-Tower · logs /tmp/barlow-sv-accuracy-vectors.log
+
+## 2026-11-25 14:22 — decision
+
+The initial vector preview exposed a header collision on unscored frames. Shorten that label and paint debug arrows above the markers to show short displacements; retry the interrupted render with two workers.
+
+## 2026-11-25 14:22 — run
+
+Render and verify final 12 standard plus 12 vector-debug movies, with per-volume benchmark accuracy.
+
+run r261125-2.2 · pids 2 · host charles-Precision-7820-Tower · logs /tmp/barlow-sv-vector-final.log
+
+## 2026-11-25 14:26
+
+r261125-2.2 finished. Published both movie sets, the per-volume accuracy table and the updated captions, manifest, assignments and exporter. Checked the shared file checksums after reviewing both variants at the start, peak motion and end of each clip. The debug arrows use the scored identity's same-volume reference centroid.

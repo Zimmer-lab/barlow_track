@@ -43,6 +43,8 @@ See [docs/accuracy_evaluation.md](docs/accuracy_evaluation.md) for the full hand
 datasets, weights, eval script (`barlow_track/scripts/eval_accuracy.py`,
 with `--source nwb` covering leifer), results, and environment gotchas.
 
+The manuscript's supplementary videos show how predicted neuron identities hold up through brain deformation in all 12 benchmark recordings. The [video guide](barlow_track/scripts/paper_scripts/revision/SUPPLEMENTARY_VIDEOS.md) gives the file location, explains the markers and per-volume accuracy, and includes the export command.
+
 ## Training a network
 
 See instructions in the [project folder](barlow_track/barlow_project_template/README.md)

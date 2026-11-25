@@ -34,8 +34,10 @@ LABELS = ['zimmer_1210', 'zimmer_1123', 'flavell_2022033002', 'flavell_202203240
 NUM_FRAMES = [16, 64, 128, 371]
 SEEDS = [769243397, 763277047, 3712540559]  # recipe seed, replicate_seed(.., 1), replicate_seed(.., 2)
 # A 371-per-recording epoch is about the sum of six single-recording epochs (~24 h for 30 epochs on a fast
-# node, several times that on a slow one), and training does not resume after a walltime kill. 120 h has
-# run before (round_fused_fix_zimmer, --time=7500).
+# node, 7-10x that on a busy one, as trials ran in week 47). 120 h has scheduled before (round_fused_fix_zimmer,
+# --time=7500), and a job killed at the walltime resumes from its last epoch in the same trial folder
+# (resume_from_checkpoint; the dispatcher resubmits it up to max_resumes = 3 times), so a longer walltime (the
+# cluster default is about a week) would only make the jobs harder to schedule.
 TRAIN_HOURS = 120
 BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'round_sens_src', 'base_train_config.yaml')
 
